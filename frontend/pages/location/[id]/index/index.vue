@@ -6,6 +6,7 @@
   import type { ItemAttachment } from "~~/lib/api/types/data-contracts";
   import { useLabelPrintQueue, type PrintQueueEntry } from "~~/stores/labels";
   import MdiPackageVariant from "~icons/mdi/package-variant";
+  import MdiPackageVariantClosed from "~icons/mdi/package-variant-closed";
   import MdiPlus from "~icons/mdi/plus";
   import MdiPencil from "~icons/mdi/pencil";
   import MdiDelete from "~icons/mdi/delete";
@@ -218,6 +219,34 @@
     }
   );
 
+  const { data: containersHere } = useAsyncData(
+    () => locationId.value + "_containers_here",
+    async () => {
+      if (!locationId.value) {
+        return [];
+      }
+
+      const { data } = await api.items.getContainers({ parentIds: [locationId.value], filterChildren: false });
+      return data;
+    },
+    {
+      watch: [locationId],
+    }
+  );
+
+  // Wrapped in a computed (rather than referencing the useAsyncData ref directly in the template) to
+  // avoid vue-tsc's ref-unwrap quirk with bare async-data refs in v-if/v-for guards.
+  const containersHereList = computed(() => containersHere.value ?? []);
+
+  // Child locations that aren't already shown in the "Containers here" section, to avoid double-rendering.
+  const childLocations = computed(() => {
+    if (!location.value?.children) {
+      return [];
+    }
+    const containerIds = new Set(containersHereList.value.map(c => c.id));
+    return location.value.children.filter(child => !containerIds.has(child.id));
+  });
+
   const printQueue = useLabelPrintQueue();
   const printIncludeItems = ref(false);
 
@@ -395,11 +424,34 @@
         <ItemViewSelectable :items="items" @refresh="refreshItemList" />
       </section>
 
+      <!-- Containers here -->
+      <section v-if="containersHereList.length > 0" class="mt-6 space-y-2">
+        <BaseSectionHeader class="mb-5">
+          {{ $t("pages.location.containers_here", { count: containersHereList.length }) }}
+        </BaseSectionHeader>
+        <div class="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          <NuxtLink
+            v-for="c in containersHereList"
+            :key="c.id"
+            :to="`/location/${c.id}`"
+            class="flex items-center justify-between rounded-md border p-3 hover:bg-accent"
+          >
+            <span class="flex items-center gap-2">
+              <MdiPackageVariantClosed class="size-4" />
+              {{ c.name }}
+            </span>
+            <Badge v-if="c.itemCount != null" variant="secondary">
+              {{ $t("pages.location.container_item_count", { count: c.itemCount }) }}
+            </Badge>
+          </NuxtLink>
+        </div>
+      </section>
+
       <!-- Child locations -->
-      <section v-if="location && location.children && location.children.length > 0" class="mt-6">
+      <section v-if="location && childLocations.length > 0" class="mt-6">
         <BaseSectionHeader class="mb-5"> {{ $t("locations.child_locations") }} </BaseSectionHeader>
         <div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
-          <LocationCard v-for="child in location.children" :key="child.id" :location="child" />
+          <LocationCard v-for="child in childLocations" :key="child.id" :location="child" />
         </div>
       </section>
     </div>

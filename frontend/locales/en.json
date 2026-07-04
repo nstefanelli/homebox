@@ -797,6 +797,10 @@
         "templates": "Templates"
     },
     "pages": {
+        "location": {
+            "container_item_count": "{count} items",
+            "containers_here": "Containers here ({count})"
+        },
         "templates": {
             "import_catalog": "Import container catalog",
             "import_done": "Catalog imported: {created} created, {skipped} already existed",
