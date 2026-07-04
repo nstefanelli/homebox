@@ -137,3 +137,72 @@ func TestEntityRepository_CreateFromTemplate_CopiesPhoto(t *testing.T) {
 	assert.Equal(t, "grp/documents/deadbeef", out.Attachments[0].Path)
 	assert.True(t, out.Attachments[0].Primary)
 }
+
+func TestEntityRepository_CreateFromTemplateBatch(t *testing.T) {
+	tote := useToteEntityType(t)
+
+	cf := containerFactory()
+	cf.EntityTypeID = tote.ID
+	shelf, err := tRepos.Entities.Create(context.Background(), tGroup.ID, cf)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tRepos.Entities.Delete(context.Background(), shelf.ID) })
+
+	outs, err := tRepos.Entities.CreateFromTemplateBatch(context.Background(), tGroup.ID, EntityBatchCreateFromTemplate{
+		Template: EntityCreateFromTemplate{
+			Quantity:     1,
+			ParentID:     shelf.ID,
+			EntityTypeID: tote.ID,
+		},
+		Count:      3,
+		NamePrefix: "HDX 27-gal Tote",
+	})
+	require.NoError(t, err)
+	require.Len(t, outs, 3)
+	t.Cleanup(func() {
+		for _, o := range outs {
+			_ = tRepos.Entities.Delete(context.Background(), o.ID)
+		}
+	})
+
+	assert.Equal(t, "HDX 27-gal Tote 01", outs[0].Name)
+	assert.Equal(t, "HDX 27-gal Tote 02", outs[1].Name)
+	assert.Equal(t, "HDX 27-gal Tote 03", outs[2].Name)
+	// Distinct asset IDs
+	assert.NotEqual(t, outs[0].AssetID, outs[1].AssetID)
+
+	// A second batch continues the numbering automatically.
+	outs2, err := tRepos.Entities.CreateFromTemplateBatch(context.Background(), tGroup.ID, EntityBatchCreateFromTemplate{
+		Template: EntityCreateFromTemplate{
+			Quantity:     1,
+			ParentID:     shelf.ID,
+			EntityTypeID: tote.ID,
+		},
+		Count:      2,
+		NamePrefix: "HDX 27-gal Tote",
+	})
+	require.NoError(t, err)
+	require.Len(t, outs2, 2)
+	t.Cleanup(func() {
+		for _, o := range outs2 {
+			_ = tRepos.Entities.Delete(context.Background(), o.ID)
+		}
+	})
+	assert.Equal(t, "HDX 27-gal Tote 04", outs2[0].Name)
+	assert.Equal(t, "HDX 27-gal Tote 05", outs2[1].Name)
+}
+
+func TestEntityRepository_CreateFromTemplateBatch_CountBounds(t *testing.T) {
+	_, err := tRepos.Entities.CreateFromTemplateBatch(context.Background(), tGroup.ID, EntityBatchCreateFromTemplate{
+		Template:   EntityCreateFromTemplate{Quantity: 1},
+		Count:      0,
+		NamePrefix: "X",
+	})
+	require.Error(t, err)
+
+	_, err = tRepos.Entities.CreateFromTemplateBatch(context.Background(), tGroup.ID, EntityBatchCreateFromTemplate{
+		Template:   EntityCreateFromTemplate{Quantity: 1},
+		Count:      101,
+		NamePrefix: "X",
+	})
+	require.Error(t, err)
+}

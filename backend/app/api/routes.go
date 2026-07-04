@@ -205,6 +205,7 @@ func (a *app) mountRoutes(r *chi.Mux, chain *errchain.ErrChain, repos *repo.AllR
 		r.Put("/templates/{id}", chain.ToHandlerFunc(v1Ctrl.HandleEntityTemplatesUpdate(), userMW...))
 		r.Delete("/templates/{id}", chain.ToHandlerFunc(v1Ctrl.HandleEntityTemplatesDelete(), userMW...))
 		r.Post("/templates/{id}/create-item", chain.ToHandlerFunc(v1Ctrl.HandleEntityTemplatesCreateItem(), userMW...))
+		r.Post("/templates/{id}/batch-create", chain.ToHandlerFunc(v1Ctrl.HandleEntityTemplatesBatchCreate(), userMW...))
 		r.Post("/templates/{id}/photo", chain.ToHandlerFunc(v1Ctrl.HandleEntityTemplatePhotoUpload(), userMW...))
 		r.Get("/templates/{id}/photo", chain.ToHandlerFunc(v1Ctrl.HandleEntityTemplatePhotoGet(), userMW...))
 		r.Delete("/templates/{id}/photo", chain.ToHandlerFunc(v1Ctrl.HandleEntityTemplatePhotoDelete(), userMW...))

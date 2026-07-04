@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1105,6 +1107,15 @@ type EntityCreateFromTemplate struct {
 	PhotoMimeType string `json:"photoMimeType,omitempty"`
 }
 
+// EntityBatchCreateFromTemplate contains the data needed to create Count numbered
+// entities from a single template in one transaction.
+type EntityBatchCreateFromTemplate struct {
+	Template    EntityCreateFromTemplate `json:"template"`
+	Count       int                      `json:"count"`
+	NamePrefix  string                   `json:"namePrefix"`
+	StartNumber int                      `json:"startNumber"` // 0 = infer from existing names
+}
+
 // CreateFromTemplate creates an entity with all template data in a single transaction.
 func (r *EntityRepository) CreateFromTemplate(ctx context.Context, gid uuid.UUID, data EntityCreateFromTemplate) (EntityOut, error) {
 	ctx, span := entityTracer().Start(ctx, "repo.EntityRepository.CreateFromTemplate",
@@ -1174,18 +1185,49 @@ func (r *EntityRepository) CreateFromTemplate(ctx context.Context, gid uuid.UUID
 	nextAssetID++
 	span.SetAttributes(attribute.Int64("entity.asset_id", int64(nextAssetID)))
 
-	// Create entity with all template data
-	newEntityID := uuid.New()
+	newEntityID, err := r.createFromTemplateTx(ctx, tx, gid, data, nextAssetID)
+	if err != nil {
+		recordSpanError(span, err)
+		return EntityOut{}, err
+	}
 	span.SetAttributes(attribute.String("entity.id", newEntityID.String()))
 
-	entityCtx, entitySpan := entityTracer().Start(ctx, "repo.EntityRepository.CreateFromTemplate.entity")
+	_, commitSpan := entityTracer().Start(ctx, "repo.EntityRepository.CreateFromTemplate.commit")
+	if err = tx.Commit(); err != nil {
+		recordSpanError(commitSpan, err)
+		commitSpan.End()
+		recordSpanError(span, err)
+		return EntityOut{}, err
+	}
+	commitSpan.End()
+	committed = true
+
+	r.publishMutationEvent(gid)
+	out, err := r.GetOne(ctx, newEntityID)
+	recordSpanError(span, err)
+	return out, err
+}
+
+// createFromTemplateTx creates one entity from template data inside an existing
+// transaction and returns the new entity's ID. assetID must be pre-assigned by
+// the caller (e.g. via GetHighestAssetIDTx), since callers that create multiple
+// entities in one transaction (see CreateFromTemplateBatch) need to increment it
+// themselves between calls.
+func (r *EntityRepository) createFromTemplateTx(ctx context.Context, tx *ent.Tx, gid uuid.UUID, data EntityCreateFromTemplate, assetID AssetID) (uuid.UUID, error) {
+	newEntityID := uuid.New()
+
+	entityCtx, entitySpan := entityTracer().Start(ctx, "repo.EntityRepository.createFromTemplateTx.entity",
+		trace.WithAttributes(
+			attribute.String("entity.id", newEntityID.String()),
+			attribute.Int64("entity.asset_id", int64(assetID)),
+		))
 	entityBuilder := tx.Entity.Create().
 		SetID(newEntityID).
 		SetName(data.Name).
 		SetDescription(data.Description).
 		SetQuantity(data.Quantity).
 		SetGroupID(gid).
-		SetAssetID(int64(nextAssetID)).
+		SetAssetID(int64(assetID)).
 		SetInsured(data.Insured).
 		SetManufacturer(data.Manufacturer).
 		SetModelNumber(data.ModelNumber).
@@ -1205,8 +1247,7 @@ func (r *EntityRepository) CreateFromTemplate(ctx context.Context, gid uuid.UUID
 	if cerr != nil {
 		recordSpanError(entitySpan, cerr)
 		entitySpan.End()
-		recordSpanError(span, cerr)
-		return EntityOut{}, cerr
+		return uuid.Nil, cerr
 	}
 	if isContainer {
 		entityBuilder.SetSyncChildEntityLocations(true)
@@ -1216,17 +1257,16 @@ func (r *EntityRepository) CreateFromTemplate(ctx context.Context, gid uuid.UUID
 		entityBuilder.AddTagIDs(data.TagIDs...)
 	}
 
-	_, err = entityBuilder.Save(entityCtx)
+	_, err := entityBuilder.Save(entityCtx)
 	if err != nil {
 		recordSpanError(entitySpan, err)
 		entitySpan.End()
-		recordSpanError(span, err)
-		return EntityOut{}, err
+		return uuid.Nil, err
 	}
 	entitySpan.End()
 
 	if len(data.Fields) > 0 {
-		fieldsCtx, fieldsSpan := entityTracer().Start(ctx, "repo.EntityRepository.CreateFromTemplate.fields",
+		fieldsCtx, fieldsSpan := entityTracer().Start(ctx, "repo.EntityRepository.createFromTemplateTx.fields",
 			trace.WithAttributes(attribute.Int("fields.count", len(data.Fields))))
 		for _, field := range data.Fields {
 			_, err = tx.EntityField.Create().
@@ -1239,8 +1279,7 @@ func (r *EntityRepository) CreateFromTemplate(ctx context.Context, gid uuid.UUID
 				wrapped := fmt.Errorf("failed to create field %s: %w", field.Name, err)
 				recordSpanError(fieldsSpan, wrapped)
 				fieldsSpan.End()
-				recordSpanError(span, wrapped)
-				return EntityOut{}, wrapped
+				return uuid.Nil, wrapped
 			}
 		}
 		fieldsSpan.End()
@@ -1258,25 +1297,123 @@ func (r *EntityRepository) CreateFromTemplate(ctx context.Context, gid uuid.UUID
 			SetPrimary(true).
 			Save(ctx)
 		if err != nil {
-			recordSpanError(span, err)
-			return EntityOut{}, err
+			return uuid.Nil, err
 		}
 	}
 
-	_, commitSpan := entityTracer().Start(ctx, "repo.EntityRepository.CreateFromTemplate.commit")
-	if err = tx.Commit(); err != nil {
-		recordSpanError(commitSpan, err)
-		commitSpan.End()
-		recordSpanError(span, err)
-		return EntityOut{}, err
-	}
-	commitSpan.End()
-	committed = true
+	return newEntityID, nil
+}
 
+// nextBatchStartNumber returns 1 + the highest numeric suffix among entities in
+// the group named "<prefix> <number>".
+func (r *EntityRepository) nextBatchStartNumber(ctx context.Context, gid uuid.UUID, prefix string) (int, error) {
+	names, err := r.db.Entity.Query().
+		Where(
+			entity.HasGroupWith(group.ID(gid)),
+			entity.NameHasPrefix(prefix+" "),
+		).
+		Select(entity.FieldName).
+		Strings(ctx)
+	if err != nil {
+		return 0, err
+	}
+	re := regexp.MustCompile(`^` + regexp.QuoteMeta(prefix) + ` (\d+)$`)
+	maxN := 0
+	for _, n := range names {
+		if m := re.FindStringSubmatch(n); m != nil {
+			if v, aerr := strconv.Atoi(m[1]); aerr == nil && v > maxN {
+				maxN = v
+			}
+		}
+	}
+	return maxN + 1, nil
+}
+
+// CreateFromTemplateBatch creates Count numbered entities from template data in a
+// single transaction. Names are "<NamePrefix> NN" (zero-padded to 2). If
+// StartNumber is unset (< 1), the numbering continues from the highest existing
+// "<NamePrefix> NN"-named entity in the group.
+func (r *EntityRepository) CreateFromTemplateBatch(ctx context.Context, gid uuid.UUID, data EntityBatchCreateFromTemplate) ([]EntityOut, error) {
+	ctx, span := entityTracer().Start(ctx, "repo.EntityRepository.CreateFromTemplateBatch",
+		trace.WithAttributes(
+			attribute.String("group.id", gid.String()),
+			attribute.Int("batch.count", data.Count),
+			attribute.String("batch.name_prefix", data.NamePrefix),
+		))
+	defer span.End()
+
+	if data.Count < 1 || data.Count > 100 {
+		err := fmt.Errorf("count must be between 1 and 100, got %d", data.Count)
+		recordSpanError(span, err)
+		return nil, err
+	}
+	if data.NamePrefix == "" {
+		err := fmt.Errorf("namePrefix is required")
+		recordSpanError(span, err)
+		return nil, err
+	}
+
+	start := data.StartNumber
+	if start < 1 {
+		var err error
+		start, err = r.nextBatchStartNumber(ctx, gid, data.NamePrefix)
+		if err != nil {
+			recordSpanError(span, err)
+			return nil, err
+		}
+	}
+
+	tx, err := r.db.Tx(ctx)
+	if err != nil {
+		recordSpanError(span, err)
+		return nil, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			if rerr := tx.Rollback(); rerr != nil {
+				log.Warn().Err(rerr).Msg("failed to rollback batch create transaction")
+			}
+		}
+	}()
+
+	nextAssetID, err := r.GetHighestAssetIDTx(ctx, tx, gid)
+	if err != nil {
+		recordSpanError(span, err)
+		return nil, err
+	}
+
+	ids := make([]uuid.UUID, 0, data.Count)
+	for i := 0; i < data.Count; i++ {
+		one := data.Template
+		one.Name = fmt.Sprintf("%s %02d", data.NamePrefix, start+i)
+		nextAssetID++
+
+		id, err := r.createFromTemplateTx(ctx, tx, gid, one, nextAssetID)
+		if err != nil {
+			recordSpanError(span, err)
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+
+	if err = tx.Commit(); err != nil {
+		recordSpanError(span, err)
+		return nil, err
+	}
+	committed = true
 	r.publishMutationEvent(gid)
-	out, err := r.GetOne(ctx, newEntityID)
-	recordSpanError(span, err)
-	return out, err
+
+	outs := make([]EntityOut, 0, len(ids))
+	for _, id := range ids {
+		out, err := r.GetOne(ctx, id)
+		if err != nil {
+			recordSpanError(span, err)
+			return nil, err
+		}
+		outs = append(outs, out)
+	}
+	return outs, nil
 }
 
 func (r *EntityRepository) Delete(ctx context.Context, id uuid.UUID) error {

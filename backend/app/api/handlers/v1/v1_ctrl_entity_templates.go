@@ -182,6 +182,78 @@ func (ctrl *V1Controller) HandleEntityTemplatesCreateItem() errchain.HandlerFunc
 	return adapters.ActionID("id", fn, http.StatusCreated)
 }
 
+type EntityTemplateBatchCreateRequest struct {
+	Count        int         `json:"count"        validate:"required,min=1,max=100"`
+	NamePrefix   string      `json:"namePrefix"   validate:"omitempty,max=240"`
+	StartNumber  int         `json:"startNumber"  validate:"omitempty,min=1"`
+	ParentID     uuid.UUID   `json:"parentId"`
+	EntityTypeID uuid.UUID   `json:"entityTypeId"`
+	TagIDs       []uuid.UUID `json:"tagIds"`
+}
+
+// HandleEntityTemplatesBatchCreate godoc
+//
+//	@Summary	Batch Create Entities from Template
+//	@Tags		Entity Templates
+//	@Produce	json
+//	@Param		id		path		string								true	"Template ID"
+//	@Param		payload	body		EntityTemplateBatchCreateRequest	true	"Batch options"
+//	@Success	201		{object}	[]repo.EntityOut
+//	@Failure	400		{object}	validate.ErrorResponse
+//	@Router		/v1/templates/{id}/batch-create [POST]
+//	@Security	Bearer
+func (ctrl *V1Controller) HandleEntityTemplatesBatchCreate() errchain.HandlerFunc {
+	fn := func(r *http.Request, templateID uuid.UUID, body EntityTemplateBatchCreateRequest) ([]repo.EntityOut, error) {
+		auth := services.NewContext(r.Context())
+
+		template, err := ctrl.repo.EntityTemplates.GetOne(r.Context(), auth.GID, templateID)
+		if err != nil {
+			return nil, err
+		}
+
+		prefix := body.NamePrefix
+		if prefix == "" {
+			prefix = template.DefaultName
+		}
+		if prefix == "" {
+			prefix = template.Name
+		}
+
+		// Build custom fields from template
+		fields := lo.Map(template.Fields, func(f repo.TemplateField, _ int) repo.EntityFieldData {
+			return repo.EntityFieldData{
+				Type:         f.Type,
+				Name:         f.Name,
+				TextValue:    f.TextValue,
+				NumberValue:  f.NumberValue,
+				BooleanValue: f.BooleanValue,
+			}
+		})
+
+		return ctrl.repo.Entities.CreateFromTemplateBatch(r.Context(), auth.GID, repo.EntityBatchCreateFromTemplate{
+			Template: repo.EntityCreateFromTemplate{
+				Quantity:         template.DefaultQuantity,
+				ParentID:         body.ParentID,
+				EntityTypeID:     body.EntityTypeID,
+				TagIDs:           body.TagIDs,
+				Insured:          template.DefaultInsured,
+				Manufacturer:     template.DefaultManufacturer,
+				ModelNumber:      template.DefaultModelNumber,
+				LifetimeWarranty: template.DefaultLifetimeWarranty,
+				WarrantyDetails:  template.DefaultWarrantyDetails,
+				Fields:           fields,
+				PhotoPath:        template.PhotoPath,
+				PhotoMimeType:    template.PhotoMimeType,
+			},
+			Count:       body.Count,
+			NamePrefix:  prefix,
+			StartNumber: body.StartNumber,
+		})
+	}
+
+	return adapters.ActionID("id", fn, http.StatusCreated)
+}
+
 // HandleEntityTemplatePhotoUpload godoc
 //
 //	@Summary	Upload Template Photo
