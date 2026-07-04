@@ -174,6 +174,8 @@ func (ctrl *V1Controller) HandleEntityTemplatesCreateItem() errchain.HandlerFunc
 			LifetimeWarranty: template.DefaultLifetimeWarranty,
 			WarrantyDetails:  template.DefaultWarrantyDetails,
 			Fields:           fields,
+			PhotoPath:        template.PhotoPath,
+			PhotoMimeType:    template.PhotoMimeType,
 		})
 	}
 

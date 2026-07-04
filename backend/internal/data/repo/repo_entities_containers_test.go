@@ -109,3 +109,31 @@ func TestEntityRepository_Query_IsContainerFilter(t *testing.T) {
 	assert.Contains(t, ids, toteEntity.ID.String())
 	assert.NotContains(t, ids, shelf.ID.String())
 }
+
+// TestEntityRepository_CreateFromTemplate_CopiesPhoto verifies that creating
+// an entity from a template that has a stored photo copies that photo onto
+// the new entity as a primary photo attachment sharing the same blob path.
+func TestEntityRepository_CreateFromTemplate_CopiesPhoto(t *testing.T) {
+	tote := useToteEntityType(t)
+
+	cf := containerFactory()
+	cf.EntityTypeID = tote.ID
+	parent, err := tRepos.Entities.Create(context.Background(), tGroup.ID, cf)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tRepos.Entities.Delete(context.Background(), parent.ID) })
+
+	out, err := tRepos.Entities.CreateFromTemplate(context.Background(), tGroup.ID, EntityCreateFromTemplate{
+		Name:          "Tote 01",
+		Quantity:      1,
+		ParentID:      parent.ID,
+		EntityTypeID:  tote.ID,
+		PhotoPath:     "grp/documents/deadbeef",
+		PhotoMimeType: "image/jpeg",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tRepos.Entities.Delete(context.Background(), out.ID) })
+
+	require.NotEmpty(t, out.Attachments, "created entity must carry the template photo attachment")
+	assert.Equal(t, "grp/documents/deadbeef", out.Attachments[0].Path)
+	assert.True(t, out.Attachments[0].Primary)
+}

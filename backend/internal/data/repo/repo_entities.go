@@ -1099,6 +1099,10 @@ type EntityCreateFromTemplate struct {
 	LifetimeWarranty bool
 	WarrantyDetails  string
 	Fields           []EntityFieldData
+
+	// Template photo to copy onto the created entity (blob is shared, row per entity)
+	PhotoPath     string `json:"photoPath,omitempty"`
+	PhotoMimeType string `json:"photoMimeType,omitempty"`
 }
 
 // CreateFromTemplate creates an entity with all template data in a single transaction.
@@ -1240,6 +1244,23 @@ func (r *EntityRepository) CreateFromTemplate(ctx context.Context, gid uuid.UUID
 			}
 		}
 		fieldsSpan.End()
+	}
+
+	// Copy the template photo as the entity's primary photo. Row-level copy with a
+	// shared content-addressed blob path — same pattern as Duplicate's attachment copy.
+	if data.PhotoPath != "" {
+		_, err = tx.Attachment.Create().
+			SetEntityID(newEntityID).
+			SetType(attachment.TypePhoto).
+			SetTitle("photo").
+			SetPath(data.PhotoPath).
+			SetMimeType(data.PhotoMimeType).
+			SetPrimary(true).
+			Save(ctx)
+		if err != nil {
+			recordSpanError(span, err)
+			return EntityOut{}, err
+		}
 	}
 
 	_, commitSpan := entityTracer().Start(ctx, "repo.EntityRepository.CreateFromTemplate.commit")
