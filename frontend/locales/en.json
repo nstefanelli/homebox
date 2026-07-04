@@ -800,6 +800,8 @@
         "location": {
             "container_item_count": "{count} items",
             "containers_here": "Containers here ({count})",
+            "empty_container": "Empty container",
+            "empty_success": "Contents moved",
             "move": "Move",
             "move_success": "Moved"
         },

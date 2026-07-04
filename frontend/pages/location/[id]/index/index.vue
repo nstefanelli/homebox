@@ -7,6 +7,7 @@
   import { useLabelPrintQueue, type PrintQueueEntry } from "~~/stores/labels";
   import MdiPackageVariant from "~icons/mdi/package-variant";
   import MdiPackageVariantClosed from "~icons/mdi/package-variant-closed";
+  import MdiPackageVariantClosedRemove from "~icons/mdi/package-variant-closed-remove";
   import MdiPlus from "~icons/mdi/plus";
   import MdiPencil from "~icons/mdi/pencil";
   import MdiDelete from "~icons/mdi/delete";
@@ -102,6 +103,21 @@
         if (result) {
           toast.success(t("pages.location.move_success"));
           refreshLocation();
+        }
+      },
+    });
+  }
+
+  function openEmpty() {
+    if (!location.value || !emptyableChildren.value.length) return;
+    openDialog(DialogID.ItemChangeDetails, {
+      params: { items: emptyableChildren.value, changeLocation: true, currentLocation: location.value },
+      onClose: result => {
+        if (result) {
+          toast.success(t("pages.location.empty_success"));
+          refreshItemList();
+          refreshLocation();
+          refreshContainersHere();
         }
       },
     });
@@ -233,7 +249,7 @@
     }
   );
 
-  const { data: containersHere } = useAsyncData(
+  const { data: containersHere, refresh: refreshContainersHere } = useAsyncData(
     () => locationId.value + "_containers_here",
     async () => {
       if (!locationId.value) {
@@ -260,6 +276,23 @@
     const containerIds = new Set(containersHereList.value.map(c => c.id));
     return location.value.children.filter(child => !containerIds.has(child.id));
   });
+
+  // All direct children eligible to be moved by "Empty container": child items, plus the complete
+  // deduped set of direct location-type children. `containersHereList` and `childLocations` were split
+  // above purely to avoid double-rendering the "Containers here" vs "Child locations" sections — recombining
+  // them here (rather than reusing `location.children`) recovers the full direct-children set with no
+  // double-counting, since `childLocations` already excludes anything present in `containersHereList`.
+  const emptyableChildren = computed(() => [
+    ...(items.value ?? []),
+    ...containersHereList.value,
+    ...childLocations.value,
+  ]);
+
+  // Wrapped in a computed (rather than referencing `location.entityType` directly in the template) to
+  // avoid vue-tsc's ref-unwrap quirk with bare async-data refs — same reasoning as containersHereList above.
+  const canEmptyContainer = computed(
+    () => !!location.value?.entityType?.isContainer && emptyableChildren.value.length > 0
+  );
 
   const printQueue = useLabelPrintQueue();
   const printIncludeItems = ref(false);
@@ -391,6 +424,12 @@
                 <MdiArrowRight name="mdi-arrow-right" />
                 <span class="hidden md:inline">
                   {{ $t("pages.location.move") }}
+                </span>
+              </Button>
+              <Button v-if="canEmptyContainer" class="w-9 md:w-auto" variant="outline" @click="openEmpty">
+                <MdiPackageVariantClosedRemove name="mdi-package-variant-closed-remove" />
+                <span class="hidden md:inline">
+                  {{ $t("pages.location.empty_container") }}
                 </span>
               </Button>
               <Button variant="destructive" class="w-9 md:w-auto" @click="confirmDelete()">
