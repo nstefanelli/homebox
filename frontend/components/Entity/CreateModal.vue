@@ -334,8 +334,10 @@
 
     // A template the user picked explicitly takes precedence over the entity
     // type's default template, so don't overwrite it when the type changes.
-    // (Locations don't use templates, so they still clear it below.)
-    if (templateUserSelected.value && !et?.isLocation) {
+    // Containers can use templates too, so a user-selected template also
+    // survives a switch into a container type. Plain (non-container)
+    // locations don't use templates, so they still clear it below.
+    if (templateUserSelected.value && (!et?.isLocation || et?.isContainer)) {
       return;
     }
 
@@ -624,7 +626,7 @@
       const { data: created, error } = await api.templates.batchCreate(templateData.value.id, {
         count: form.count ?? 1,
         namePrefix: form.name,
-        startNumber: 1,
+        startNumber: 0, // 0 = backend infers next number from existing "<prefix> NN" names
         parentId: form.location?.id ?? "",
         entityTypeId: selectedEntityType.value?.id || "",
         tagIds: form.tags,
