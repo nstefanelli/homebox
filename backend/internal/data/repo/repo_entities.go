@@ -66,6 +66,7 @@ type (
 		SortBy           string       `json:"sortBy"`
 		IncludeArchived  bool         `json:"includeArchived"`
 		IsLocation       *bool        `json:"isLocation"`     // nil=all, true=locations only, false=items only
+		IsContainer      *bool        `json:"isContainer"`    // nil=any, true=container types only, false=non-containers
 		FilterChildren   bool         `json:"filterChildren"` // when true, only return root entities (no parent)
 		Fields           []FieldQuery `json:"fields"`
 		OrderBy          string       `json:"orderBy"`
@@ -521,6 +522,11 @@ func entityQuerySpanAttrs(gid uuid.UUID, q EntityQuery) []attribute.KeyValue {
 	if isLocSet {
 		isLocValue = *q.IsLocation
 	}
+	isContSet := q.IsContainer != nil
+	isContValue := false
+	if isContSet {
+		isContValue = *q.IsContainer
+	}
 	return []attribute.KeyValue{
 		attribute.String("group.id", gid.String()),
 		attribute.Int("query.page", q.Page),
@@ -538,6 +544,8 @@ func entityQuerySpanAttrs(gid uuid.UUID, q EntityQuery) []attribute.KeyValue {
 		attribute.String("query.order_by", q.OrderBy),
 		attribute.Bool("query.is_location.set", isLocSet),
 		attribute.Bool("query.is_location.value", isLocValue),
+		attribute.Bool("query.is_container.set", isContSet),
+		attribute.Bool("query.is_container.value", isContValue),
 		attribute.Bool("query.asset_id.set", !q.AssetID.Nil()),
 	}
 }
@@ -565,6 +573,11 @@ func (r *EntityRepository) QueryByGroup(ctx context.Context, gid uuid.UUID, q En
 				entity.HasEntityTypeWith(entitytype.IsLocation(false)),
 			),
 		)
+	}
+
+	// Filter by container flag when specified (composes with IsLocation above).
+	if q.IsContainer != nil {
+		qb = qb.Where(entity.HasEntityTypeWith(entitytype.IsContainer(*q.IsContainer)))
 	}
 
 	if q.FilterChildren {
@@ -1024,6 +1037,17 @@ func (r *EntityRepository) Create(ctx context.Context, gid uuid.UUID, data Entit
 
 	if data.EntityTypeID != uuid.Nil {
 		q.SetEntityTypeID(data.EntityTypeID)
+
+		// Container-type entities default to carrying their contents when moved.
+		isContainer, cerr := r.db.EntityType.Query().
+			Where(entitytype.ID(data.EntityTypeID), entitytype.IsContainer(true)).
+			Exist(ctx)
+		if cerr != nil {
+			return EntityOut{}, cerr
+		}
+		if isContainer {
+			q.SetSyncChildEntityLocations(true)
+		}
 	} else {
 		// Auto-resolve default "Item" entity type for the group
 		etID, err := r.resolveDefaultEntityType(ctx, gid, false)
@@ -1159,6 +1183,20 @@ func (r *EntityRepository) CreateFromTemplate(ctx context.Context, gid uuid.UUID
 	}
 
 	entityBuilder.SetEntityTypeID(data.EntityTypeID)
+
+	// Container-type entities default to carrying their contents when moved.
+	isContainer, cerr := tx.EntityType.Query().
+		Where(entitytype.ID(data.EntityTypeID), entitytype.IsContainer(true)).
+		Exist(entityCtx)
+	if cerr != nil {
+		recordSpanError(entitySpan, cerr)
+		entitySpan.End()
+		recordSpanError(span, cerr)
+		return EntityOut{}, cerr
+	}
+	if isContainer {
+		entityBuilder.SetSyncChildEntityLocations(true)
+	}
 
 	if len(data.TagIDs) > 0 {
 		entityBuilder.AddTagIDs(data.TagIDs...)
