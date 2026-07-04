@@ -3,6 +3,9 @@
   import DOMPurify from "dompurify";
   import { route } from "../../lib/api/base";
   import { calculateGrid } from "../../lib/labels/grid";
+  import type { AcceptableValue } from "reka-ui";
+  import { LABEL_PRESETS, CUSTOM_PRESET_ID } from "~~/lib/labels/presets";
+  import { useLabelPrintQueue } from "~~/stores/labels";
   import { Toaster, toast } from "@/components/ui/sonner";
   import { Separator } from "@/components/ui/separator";
   import { Button } from "@/components/ui/button";
@@ -55,6 +58,59 @@
     pageRightPadding: 0.1,
   });
 
+  // Print queue (Task 9 stores): when non-empty, the page renders the queued
+  // entries (containers/locations/items picked elsewhere) instead of the
+  // legacy asset-range labels.
+  const printQueue = useLabelPrintQueue();
+  const queueMode = computed(() => printQueue.entries.length > 0);
+
+  // Sheet presets (Task 8 module): last choice persisted to localStorage.
+  // "measure" is bundled with the other dimension fields since presets fix it too.
+  const PRESET_STORAGE_KEY = "homebox:labelPreset";
+  const selectedPresetId = ref<string>(localStorage.getItem(PRESET_STORAGE_KEY) ?? "avery-5160");
+  const DIMENSION_REFS = new Set<keyof typeof displayProperties>([
+    "measure",
+    "cardHeight",
+    "cardWidth",
+    "pageWidth",
+    "pageHeight",
+    "pageTopPadding",
+    "pageBottomPadding",
+    "pageLeftPadding",
+    "pageRightPadding",
+  ]);
+  const currentPreset = computed(() =>
+    selectedPresetId.value === CUSTOM_PRESET_ID ? undefined : LABEL_PRESETS.find(p => p.id === selectedPresetId.value)
+  );
+
+  function applyPreset(id: string) {
+    selectedPresetId.value = id;
+    localStorage.setItem(PRESET_STORAGE_KEY, id);
+    const p = currentPreset.value;
+    if (p) {
+      displayProperties.measure = p.measure;
+      displayProperties.cardWidth = p.labelWidth;
+      displayProperties.cardHeight = p.labelHeight;
+      displayProperties.pageWidth = p.pageWidth;
+      displayProperties.pageHeight = p.pageHeight;
+      displayProperties.pageTopPadding = p.pagePaddingTop;
+      displayProperties.pageBottomPadding = p.pagePaddingBottom;
+      displayProperties.pageLeftPadding = p.pagePaddingLeft;
+      displayProperties.pageRightPadding = p.pagePaddingRight;
+    }
+    // Custom keeps whatever dims are currently set (just unlocks the inputs),
+    // but pages are always recalculated on a preset switch.
+    calcPages();
+  }
+
+  // Select's update:model-value emits the broader AcceptableValue type; narrow
+  // to string (preset/custom ids are always strings) before calling applyPreset.
+  function onPresetSelect(value: AcceptableValue) {
+    if (typeof value === "string") {
+      applyPreset(value);
+    }
+  }
+
   interface InputDef {
     label: string;
     ref: keyof typeof displayProperties;
@@ -64,7 +120,7 @@
   }
 
   const propertyInputs = computed<InputDef[]>(() => {
-    return [
+    const defs: InputDef[] = [
       {
         label: t("reports.label_generator.asset_start"),
         ref: "assetRange",
@@ -122,13 +178,18 @@
         type: "text",
       },
     ];
+    // In queue mode the labels come from the print queue, not the asset range.
+    return queueMode.value ? defs.filter(d => d.ref !== "assetRange" && d.ref !== "assetRangeMax") : defs;
   });
 
   type LabelData = {
     url: string;
-    name: string;
-    assetID: string;
-    location: string;
+    /** asset id (items) or name (locations/containers) */
+    topLine: string;
+    /** item name; empty for locations/containers */
+    nameLine: string;
+    /** existing location row / parentPath */
+    locationLine: string;
   };
 
   function fmtAssetID(aid: number | string) {
@@ -152,15 +213,21 @@
     return route(`/qrcode`, { data: encodeURIComponent(data) });
   }
 
+  // Generalized QR helper for the print queue: entries already carry an
+  // absolute deep-link URL, so no origin/`/a/` composition is needed.
+  function getQRCodeUrlFor(payload: string): string {
+    return route("/qrcode", { data: encodeURIComponent(payload) });
+  }
+
   function getItem(n: number, item: { assetId: string; name: string; location: { name: string } } | null): LabelData {
     // format n into - seperated string with leading zeros
     const assetID = fmtAssetID(item?.assetId ?? n + 1);
 
     return {
       url: getQRCodeUrl(assetID),
-      assetID: item?.assetId ?? assetID,
-      name: item?.name ?? labelBlankLine,
-      location: item?.location?.name ?? labelBlankLine,
+      topLine: item?.assetId ?? assetID,
+      nameLine: item?.name ?? labelBlankLine,
+      locationLine: item?.location?.name ?? labelBlankLine,
     };
   }
 
@@ -199,6 +266,17 @@
     return items;
   });
 
+  // Print-queue labels, fed through the SAME calcPages pagination path as the
+  // asset-range items below (see calcPages' sourceItems selection).
+  const queueLabels = computed<LabelData[]>(() =>
+    printQueue.entries.map(e => ({
+      url: getQRCodeUrlFor(e.url),
+      topLine: e.kind === "item" ? (e.assetId ?? e.name) : e.name,
+      nameLine: e.kind === "item" ? e.name : "",
+      locationLine: e.parentPath ?? "",
+    }))
+  );
+
   const getHomeBoxLineText = computed(() => {
     return (item: LabelData): string | null => {
       if (replaceHomeboxBehavior.value === BEHAVIOR_SHOW) {
@@ -209,27 +287,25 @@
       }
       if (
         replaceHomeboxBehavior.value === BEHAVIOR_ITEM_NO_NAME_NO_LOCATION &&
-        item.name === labelBlankLine &&
-        item.location === labelBlankLine
+        item.nameLine === labelBlankLine &&
+        item.locationLine === labelBlankLine
       ) {
         return replaceHomeboxText.value;
       }
-      if (replaceHomeboxBehavior.value === BEHAVIOR_ITEM_NO_NAME && item.name === labelBlankLine) {
+      if (replaceHomeboxBehavior.value === BEHAVIOR_ITEM_NO_NAME && item.nameLine === labelBlankLine) {
         return replaceHomeboxText.value;
       }
-      if (replaceHomeboxBehavior.value === BEHAVIOR_ITEM_NO_LOCATION && item.location === labelBlankLine) {
+      if (replaceHomeboxBehavior.value === BEHAVIOR_ITEM_NO_LOCATION && item.locationLine === labelBlankLine) {
         return replaceHomeboxText.value;
       }
       return null;
     };
   });
 
-  type Row = {
-    items: Array<LabelData | null>;
-  };
-
+  // Flat per-page label array (rendered via CSS grid — see template), sized
+  // implicitly to `perPage` items with the final page possibly shorter.
   type Page = {
-    rows: Row[];
+    items: Array<LabelData | null>;
   };
 
   const pages = ref<Page[]>([]);
@@ -268,6 +344,7 @@
       toast.error(t("reports.label_generator.toast.page_too_small_card"));
       // Keep the previous out.value (matches prior behavior of calculateGridData).
     } else {
+      const preset = currentPreset.value;
       const grid = calculateGrid({
         pageWidth: displayProperties.pageWidth,
         pageHeight: displayProperties.pageHeight,
@@ -277,7 +354,9 @@
         pagePaddingBottom: displayProperties.pageBottomPadding,
         pagePaddingLeft: displayProperties.pageLeftPadding,
         pagePaddingRight: displayProperties.pageRightPadding,
-        // No gutterX/gutterY passed => derived mode.
+        // Preset selected => explicit-gutter mode (fixed physical gaps).
+        // Custom => no gutterX/gutterY passed, preserves derived-gap behavior.
+        ...(preset ? { gutterX: preset.gutterX, gutterY: preset.gutterY } : {}),
       });
 
       out.value = {
@@ -314,7 +393,10 @@
       displayProperties.skipLabels = skipLabels;
     }
 
-    const sourceItems = items.value;
+    // Queue mode feeds queuedLabels through this exact same pagination path
+    // (skip-padding then chunk into pages) — not a separate code path — so
+    // skipLabels behaves identically in both modes.
+    const sourceItems = queueMode.value ? queueLabels.value : items.value;
     if (sourceItems.length === 0) {
       pages.value = [];
       return;
@@ -327,7 +409,7 @@
 
     while (itemsCopy.length > 0) {
       const page: Page = {
-        rows: [],
+        items: [],
       };
 
       for (let i = 0; i < perPage; i++) {
@@ -336,13 +418,7 @@
           break;
         }
 
-        if (i % out.value.cols === 0) {
-          page.rows.push({
-            items: [],
-          });
-        }
-
-        page.rows[page.rows.length - 1]!.items.push(item ?? null);
+        page.items.push(item ?? null);
       }
 
       calc.push(page);
@@ -351,9 +427,7 @@
     pages.value = calc;
   }
 
-  onMounted(() => {
-    calcPages();
-  });
+  onMounted(() => applyPreset(selectedPresetId.value));
 </script>
 
 <template>
@@ -381,6 +455,41 @@
     </div>
     <Separator class="mx-auto max-w-4xl" />
     <div class="container mx-auto max-w-4xl p-4">
+      <div v-if="queueMode" class="mb-4 flex w-full max-w-xs items-center gap-4">
+        <p>{{ $t("reports.label_generator.queue_count", { count: printQueue.entries.length }) }}</p>
+        <Button
+          variant="outline"
+          @click="
+            printQueue.clear();
+            calcPages();
+          "
+        >
+          {{ $t("reports.label_generator.clear_queue") }}
+        </Button>
+      </div>
+      <div class="mb-4 flex w-full max-w-xs flex-col">
+        <Label for="select-labelPreset">
+          {{ $t("reports.label_generator.presets.title") }}
+        </Label>
+        <Select
+          id="select-labelPreset"
+          :model-value="selectedPresetId"
+          class="w-full max-w-xs"
+          @update:model-value="onPresetSelect"
+        >
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem v-for="preset in LABEL_PRESETS" :key="preset.id" :value="preset.id">
+              {{ $t(`reports.label_generator.presets.${preset.nameKey}`) }}
+            </SelectItem>
+            <SelectItem :value="CUSTOM_PRESET_ID">
+              {{ $t("reports.label_generator.presets.custom") }}
+            </SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
       <div class="mx-auto grid grid-cols-2 gap-3">
         <div v-for="(prop, i) in propertyInputs" :key="i" class="flex w-full max-w-xs flex-col">
           <Label :for="`input-${prop.ref}`">
@@ -393,6 +502,7 @@
             :min="prop.min"
             :max="prop.ref === 'skipLabels' ? Math.max(0, out.rows * out.cols - 1) : undefined"
             :step="prop.type === 'text' ? undefined : (prop.step ?? 0.01)"
+            :disabled="DIMENSION_REFS.has(prop.ref) && selectedPresetId !== CUSTOM_PRESET_ID"
             :placeholder="$t('reports.label_generator.input_placeholder')"
             class="w-full max-w-xs"
           />
@@ -471,57 +581,52 @@
         paddingLeft: `${out.page.pl}${out.measure}`,
         paddingRight: `${out.page.pr}${out.measure}`,
         width: `${out.page.width}${out.measure}`,
+        display: 'grid',
+        gridTemplateColumns: `repeat(${out.cols}, ${out.card.width}${out.measure})`,
+        gridAutoRows: `${out.card.height}${out.measure}`,
+        columnGap: `${out.gapX}${out.measure}`,
+        rowGap: `${out.gapY}${out.measure}`,
         background: `white`,
         color: `black`,
       }"
     >
       <div
-        v-for="(row, ri) in page.rows"
-        :key="ri"
-        class="flex break-inside-avoid"
+        v-for="(item, idx) in page.items"
+        :key="idx"
+        class="flex break-inside-avoid border-2"
+        :class="{
+          'border-black': bordered && !!item,
+          'border-transparent': !bordered || !item,
+        }"
         :style="{
-          columnGap: `${out.gapX}${out.measure}`,
-          rowGap: `${out.gapY}${out.measure}`,
+          height: `${out.card.height}${out.measure}`,
+          width: `${out.card.width}${out.measure}`,
         }"
       >
-        <div
-          v-for="(item, idx) in row.items"
-          :key="idx"
-          class="flex border-2"
-          :class="{
-            'border-black': bordered && !!item,
-            'border-transparent': !bordered || !item,
-          }"
-          :style="{
-            height: `${out.card.height}${out.measure}`,
-            width: `${out.card.width}${out.measure}`,
-          }"
-        >
-          <template v-if="item">
-            <div class="flex items-center">
-              <img
-                :src="item.url"
-                :style="{
-                  minWidth: `${out.card.height * 0.9}${out.measure}`,
-                  width: `${out.card.height * 0.9}${out.measure}`,
-                  height: `${out.card.height * 0.9}${out.measure}`,
-                }"
-              />
+        <template v-if="item">
+          <div class="flex items-center">
+            <img
+              :src="item.url"
+              :style="{
+                minWidth: `${out.card.height * 0.9}${out.measure}`,
+                width: `${out.card.height * 0.9}${out.measure}`,
+                height: `${out.card.height * 0.9}${out.measure}`,
+              }"
+            />
+          </div>
+          <div class="ml-2 flex flex-col justify-center">
+            <div class="font-bold">{{ item.topLine }}</div>
+            <div
+              v-if="getHomeBoxLineText(item)"
+              class="text-xs"
+              :class="{ 'font-light italic': getHomeBoxLineText(item) !== labelBlankLine }"
+            >
+              {{ getHomeBoxLineText(item) }}
             </div>
-            <div class="ml-2 flex flex-col justify-center">
-              <div class="font-bold">{{ item.assetID }}</div>
-              <div
-                v-if="getHomeBoxLineText(item)"
-                class="text-xs"
-                :class="{ 'font-light italic': getHomeBoxLineText(item) !== labelBlankLine }"
-              >
-                {{ getHomeBoxLineText(item) }}
-              </div>
-              <div class="overflow-hidden text-wrap text-xs">{{ item.name }}</div>
-              <div v-if="printLocationRow" class="text-xs">{{ item.location }}</div>
-            </div>
-          </template>
-        </div>
+            <div class="overflow-hidden text-wrap text-xs">{{ item.nameLine }}</div>
+            <div v-if="printLocationRow" class="text-xs">{{ item.locationLine }}</div>
+          </div>
+        </template>
       </div>
     </section>
   </div>
