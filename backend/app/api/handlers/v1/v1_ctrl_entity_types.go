@@ -36,6 +36,7 @@ func (ctrl *V1Controller) HandleEntityTypeGetAll() errchain.HandlerFunc {
 //	@Produce	json
 //	@Param		payload	body		repo.EntityTypeCreate	true	"Entity Type Data"
 //	@Success	201		{object}	repo.EntityTypeSummary
+//	@Failure	400	{object}	validate.ErrorResponse
 //	@Router		/v1/entity-types [POST]
 //	@Security	Bearer
 func (ctrl *V1Controller) HandleEntityTypeCreate() errchain.HandlerFunc {
@@ -60,6 +61,7 @@ func (ctrl *V1Controller) HandleEntityTypeCreate() errchain.HandlerFunc {
 //	@Param		id		path		string					true	"Entity Type ID"
 //	@Param		payload	body		repo.EntityTypeUpdate	true	"Entity Type Data"
 //	@Success	200		{object}	repo.EntityTypeSummary
+//	@Failure	400	{object}	validate.ErrorResponse
 //	@Router		/v1/entity-types/{id} [PUT]
 //	@Security	Bearer
 func (ctrl *V1Controller) HandleEntityTypeUpdate() errchain.HandlerFunc {
