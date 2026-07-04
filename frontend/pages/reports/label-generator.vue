@@ -2,6 +2,7 @@
   import { useI18n } from "vue-i18n";
   import DOMPurify from "dompurify";
   import { route } from "../../lib/api/base";
+  import { calculateGrid } from "../../lib/labels/grid";
   import { Toaster, toast } from "@/components/ui/sonner";
   import { Separator } from "@/components/ui/separator";
   import { Button } from "@/components/ui/button";
@@ -53,80 +54,6 @@
     pageLeftPadding: 0.25,
     pageRightPadding: 0.1,
   });
-
-  type LabelOptionInput = {
-    measure: string;
-    page: {
-      height: number;
-      width: number;
-      pageTopPadding: number;
-      pageBottomPadding: number;
-      pageLeftPadding: number;
-      pageRightPadding: number;
-    };
-    cardHeight: number;
-    cardWidth: number;
-  };
-
-  type Output = {
-    measure: string;
-    cols: number;
-    rows: number;
-    gapY: number;
-    gapX: number;
-    card: {
-      width: number;
-      height: number;
-    };
-    page: {
-      width: number;
-      height: number;
-      pt: number;
-      pb: number;
-      pl: number;
-      pr: number;
-    };
-  };
-
-  function calculateGridData(input: LabelOptionInput): Output {
-    const { page, cardHeight, cardWidth } = input;
-
-    const measureRegex = /in|cm|mm/;
-    const measure = measureRegex.test(input.measure) ? input.measure : "in";
-
-    const availablePageWidth = page.width - page.pageLeftPadding - page.pageRightPadding;
-    const availablePageHeight = page.height - page.pageTopPadding - page.pageBottomPadding;
-
-    if (availablePageWidth < cardWidth || availablePageHeight < cardHeight) {
-      toast.error(t("reports.label_generator.toast.page_too_small_card"));
-      return out.value;
-    }
-
-    const cols = Math.floor(availablePageWidth / cardWidth);
-    const rows = Math.floor(availablePageHeight / cardHeight);
-    const gapX = (availablePageWidth - cols * cardWidth) / (cols - 1);
-    const gapY = (page.height - rows * cardHeight) / (rows - 1);
-
-    return {
-      measure,
-      cols,
-      rows,
-      gapX,
-      gapY,
-      card: {
-        width: cardWidth,
-        height: cardHeight,
-      },
-      page: {
-        width: page.width,
-        height: page.height,
-        pt: page.pageTopPadding,
-        pb: page.pageBottomPadding,
-        pl: page.pageLeftPadding,
-        pr: page.pageRightPadding,
-      },
-    };
-  }
 
   interface InputDef {
     label: string;
@@ -329,19 +256,50 @@
 
   function calcPages() {
     // Set Out Dimensions
-    out.value = calculateGridData({
-      measure: displayProperties.measure,
-      page: {
-        height: displayProperties.pageHeight,
-        width: displayProperties.pageWidth,
-        pageTopPadding: displayProperties.pageTopPadding,
-        pageBottomPadding: displayProperties.pageBottomPadding,
-        pageLeftPadding: displayProperties.pageLeftPadding,
-        pageRightPadding: displayProperties.pageRightPadding,
-      },
-      cardHeight: displayProperties.cardHeight,
-      cardWidth: displayProperties.cardWidth,
-    });
+    const measureRegex = /in|cm|mm/;
+    const measure = measureRegex.test(displayProperties.measure) ? displayProperties.measure : "in";
+
+    const availablePageWidth =
+      displayProperties.pageWidth - displayProperties.pageLeftPadding - displayProperties.pageRightPadding;
+    const availablePageHeight =
+      displayProperties.pageHeight - displayProperties.pageTopPadding - displayProperties.pageBottomPadding;
+
+    if (availablePageWidth < displayProperties.cardWidth || availablePageHeight < displayProperties.cardHeight) {
+      toast.error(t("reports.label_generator.toast.page_too_small_card"));
+      // Keep the previous out.value (matches prior behavior of calculateGridData).
+    } else {
+      const grid = calculateGrid({
+        pageWidth: displayProperties.pageWidth,
+        pageHeight: displayProperties.pageHeight,
+        cardWidth: displayProperties.cardWidth,
+        cardHeight: displayProperties.cardHeight,
+        pagePaddingTop: displayProperties.pageTopPadding,
+        pagePaddingBottom: displayProperties.pageBottomPadding,
+        pagePaddingLeft: displayProperties.pageLeftPadding,
+        pagePaddingRight: displayProperties.pageRightPadding,
+        // No gutterX/gutterY passed => derived mode.
+      });
+
+      out.value = {
+        measure,
+        cols: grid.cols,
+        rows: grid.rows,
+        gapX: grid.gapX,
+        gapY: grid.gapY,
+        card: {
+          width: displayProperties.cardWidth,
+          height: displayProperties.cardHeight,
+        },
+        page: {
+          width: displayProperties.pageWidth,
+          height: displayProperties.pageHeight,
+          pt: displayProperties.pageTopPadding,
+          pb: displayProperties.pageBottomPadding,
+          pl: displayProperties.pageLeftPadding,
+          pr: displayProperties.pageRightPadding,
+        },
+      };
+    }
 
     const calc: Page[] = [];
 
