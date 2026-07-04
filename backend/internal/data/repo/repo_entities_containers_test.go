@@ -59,6 +59,30 @@ func TestEntityRepository_Create_ContainerDefaultsSync(t *testing.T) {
 		"entities of a container type must default to syncing child locations")
 }
 
+// TestEntityRepository_CreateFromTemplate_ContainerDefaultsSync verifies that
+// creating an entity from a template with a container-flagged entity type
+// defaults SyncChildEntityLocations to true, mirroring the same behavior
+// already covered for Create() in TestEntityRepository_Create_ContainerDefaultsSync.
+func TestEntityRepository_CreateFromTemplate_ContainerDefaultsSync(t *testing.T) {
+	tote := useToteEntityType(t)
+
+	parent, err := tRepos.Entities.Create(context.Background(), tGroup.ID, containerFactory())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tRepos.Entities.Delete(context.Background(), parent.ID) })
+
+	out, err := tRepos.Entities.CreateFromTemplate(context.Background(), tGroup.ID, EntityCreateFromTemplate{
+		Name:         fk.Str(10),
+		Quantity:     1,
+		ParentID:     parent.ID,
+		EntityTypeID: tote.ID,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tRepos.Entities.Delete(context.Background(), out.ID) })
+
+	assert.True(t, out.SyncChildEntityLocations,
+		"entities created from a template with a container type must default to syncing child locations")
+}
+
 func TestEntityRepository_Query_IsContainerFilter(t *testing.T) {
 	tote := useToteEntityType(t)
 	plainLocation := usePlainLocationEntityType(t) // dedicated location type, NOT a container

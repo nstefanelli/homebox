@@ -577,7 +577,17 @@ func (r *EntityRepository) QueryByGroup(ctx context.Context, gid uuid.UUID, q En
 
 	// Filter by container flag when specified (composes with IsLocation above).
 	if q.IsContainer != nil {
-		qb = qb.Where(entity.HasEntityTypeWith(entitytype.IsContainer(*q.IsContainer)))
+		if *q.IsContainer {
+			qb = qb.Where(entity.HasEntityTypeWith(entitytype.IsContainer(true)))
+		} else {
+			// Entities with no entity type are trivially not containers.
+			qb = qb.Where(
+				entity.Or(
+					entity.Not(entity.HasEntityType()),
+					entity.HasEntityTypeWith(entitytype.IsContainer(false)),
+				),
+			)
+		}
 	}
 
 	if q.FilterChildren {
