@@ -585,7 +585,10 @@
         gridTemplateColumns: `repeat(${out.cols}, ${out.card.width}${out.measure})`,
         gridAutoRows: `${out.card.height}${out.measure}`,
         columnGap: `${out.gapX}${out.measure}`,
-        rowGap: `${out.gapY}${out.measure}`,
+        // Derived gapY was never rendered pre-preset-feature (old flex rows made rowGap
+        // visually inert); rendering it in Custom mode overflows the page since the
+        // formula spans the full unpadded pageHeight. Only presets carry a real gutter.
+        rowGap: `${currentPreset ? out.gapY : 0}${out.measure}`,
         background: `white`,
         color: `black`,
       }"
