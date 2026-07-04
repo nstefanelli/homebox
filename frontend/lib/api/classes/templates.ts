@@ -58,6 +58,6 @@ export class TemplatesApi extends BaseAPI {
   }
 
   photoUrl(templateId: string): string {
-    return route(`/templates/${templateId}/photo`);
+    return this.authURL(`/templates/${templateId}/photo`);
   }
 }
