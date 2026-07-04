@@ -1353,6 +1353,42 @@ func (r *EntityRepository) CreateFromTemplateBatch(ctx context.Context, gid uuid
 		return nil, err
 	}
 
+	if err := validateQuantity("create entity from template batch", data.Template.Quantity); err != nil {
+		recordSpanError(span, err)
+		return nil, err
+	}
+
+	// Same group-ownership checks as CreateFromTemplate, run once up front for
+	// the whole batch (every entity in the batch shares the same template, so a
+	// per-item check would be redundant). Done before opening the tx so a
+	// rejected request doesn't leave a dangling transaction.
+	if err := assertEntityInGroup(ctx, r.db.Entity, gid, data.Template.ParentID); err != nil {
+		recordSpanError(span, err)
+		return nil, err
+	}
+	if err := assertEntityTypeInGroup(ctx, r.db.EntityType, gid, data.Template.EntityTypeID); err != nil {
+		recordSpanError(span, err)
+		return nil, err
+	}
+	if err := assertTagsInGroup(ctx, r.db.Tag, gid, data.Template.TagIDs); err != nil {
+		recordSpanError(span, err)
+		return nil, err
+	}
+
+	// entity_type is a required edge. The user-selected type takes precedence;
+	// fall back to the group's default item type when none was provided so
+	// creation from a template doesn't fail the required-edge validation. This
+	// mirrors CreateFromTemplate; the resolved ID is copied into every entity
+	// created for this batch below.
+	if data.Template.EntityTypeID == uuid.Nil {
+		etID, err := r.resolveDefaultEntityType(ctx, gid, false)
+		if err != nil {
+			recordSpanError(span, err)
+			return nil, err
+		}
+		data.Template.EntityTypeID = etID
+	}
+
 	start := data.StartNumber
 	if start < 1 {
 		var err error

@@ -4,9 +4,11 @@ import (
 	"context"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/sysadminsmedia/homebox/backend/internal/data/ent"
 )
 
 // useToteEntityType creates a dedicated container-flagged entity type for tests.
@@ -205,4 +207,73 @@ func TestEntityRepository_CreateFromTemplateBatch_CountBounds(t *testing.T) {
 		NamePrefix: "X",
 	})
 	require.Error(t, err)
+}
+
+// TestEntityRepository_CreateFromTemplateBatch_RejectsCrossGroupParent verifies
+// that CreateFromTemplateBatch performs the same group-ownership check as
+// CreateFromTemplate/Create: a ParentID belonging to another tenant group must
+// be rejected before any entity is written, not just when the single-entity
+// path is used. Regression test for the batch path silently nesting entities
+// under another group's tree.
+func TestEntityRepository_CreateFromTemplateBatch_RejectsCrossGroupParent(t *testing.T) {
+	itemET := useItemEntityType(t)
+
+	foreignGID, _, _ := makeForeignGroup(t)
+	foreignContainerType, err := tRepos.EntityTypes.GetDefault(context.Background(), foreignGID, true)
+	require.NoError(t, err)
+	foreignLoc, err := tRepos.Entities.Create(context.Background(), foreignGID, EntityCreate{
+		Name:         "foreign-loc",
+		EntityTypeID: foreignContainerType.ID,
+	})
+	require.NoError(t, err)
+
+	_, err = tRepos.Entities.CreateFromTemplateBatch(context.Background(), tGroup.ID, EntityBatchCreateFromTemplate{
+		Template: EntityCreateFromTemplate{
+			Quantity:     1,
+			ParentID:     foreignLoc.ID,
+			EntityTypeID: itemET.ID,
+		},
+		Count:      2,
+		NamePrefix: "Cross Group Batch " + fk.Str(6),
+	})
+	require.Error(t, err)
+	assert.True(t, ent.IsNotFound(err), "expected NotFound for cross-group ParentID in batch, got %T: %v", err, err)
+}
+
+// TestEntityRepository_CreateFromTemplateBatch_DefaultsEntityType verifies that
+// batch-creating entities from a template without an explicit entity type
+// still succeeds and resolves the group's default item type for every entity
+// in the batch, mirroring TestEntityRepository_CreateFromTemplate_DefaultsEntityType
+// for the single-entity path (regression test for #1548 parity in the batch path).
+func TestEntityRepository_CreateFromTemplateBatch_DefaultsEntityType(t *testing.T) {
+	containerET := useContainerEntityType(t)
+
+	cf := containerFactory()
+	cf.EntityTypeID = containerET.ID
+	container, err := tRepos.Entities.Create(context.Background(), tGroup.ID, cf)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tRepos.Entities.Delete(context.Background(), container.ID) })
+
+	outs, err := tRepos.Entities.CreateFromTemplateBatch(context.Background(), tGroup.ID, EntityBatchCreateFromTemplate{
+		Template: EntityCreateFromTemplate{
+			Quantity: 1,
+			ParentID: container.ID,
+			// EntityTypeID intentionally left zero to exercise the fallback.
+		},
+		Count:      2,
+		NamePrefix: "Batch Default Type " + fk.Str(6),
+	})
+	require.NoError(t, err)
+	require.Len(t, outs, 2)
+	t.Cleanup(func() {
+		for _, o := range outs {
+			_ = tRepos.Entities.Delete(context.Background(), o.ID)
+		}
+	})
+
+	for _, out := range outs {
+		require.NotNil(t, out.EntityType)
+		assert.False(t, out.EntityType.IsLocation)
+		assert.NotEqual(t, uuid.Nil, out.EntityType.ID)
+	}
 }
