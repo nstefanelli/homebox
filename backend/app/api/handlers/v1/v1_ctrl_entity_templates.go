@@ -2,8 +2,9 @@ package v1
 
 import (
 	"errors"
-	"io"
+	"mime"
 	"net/http"
+	"net/url"
 
 	"github.com/google/uuid"
 	"github.com/hay-kot/httpkit/errchain"
@@ -273,9 +274,24 @@ func (ctrl *V1Controller) HandleEntityTemplatePhotoGet() errchain.HandlerFunc {
 		}
 		defer func() { _ = fileReader.Close() }()
 
-		w.Header().Set("Content-Type", tmpl.PhotoMimeType)
-		_, err = io.Copy(w, fileReader)
-		return err
+		filename := "photo"
+		if exts, extErr := mime.ExtensionsByType(tmpl.PhotoMimeType); extErr == nil && len(exts) > 0 {
+			filename += exts[0]
+		}
+
+		disposition := "attachment"
+		if isSafeInlineType(tmpl.PhotoMimeType) {
+			disposition = "inline"
+		}
+		disposition += "; filename*=UTF-8''" + url.QueryEscape(filename)
+		w.Header().Set("Content-Disposition", disposition)
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("X-Download-Options", "noopen")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox;")
+
+		http.ServeContent(w, r, filename, tmpl.UpdatedAt, fileReader)
+		return nil
 	}
 }
 
