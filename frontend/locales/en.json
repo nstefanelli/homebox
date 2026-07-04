@@ -368,6 +368,13 @@
                 "template_name": "Template Name"
             },
             "hide_defaults": "Hide defaults",
+            "photo": {
+                "delete_failed": "Failed to remove photo",
+                "hint": "Copied to every item created from this template. Catalog imports don't include photos — add one once here.",
+                "remove": "Remove photo",
+                "title": "Template photo",
+                "upload_failed": "Failed to upload photo"
+            },
             "save_as_template": "Save as Template",
             "selector": {
                 "clear": "Clear Template Selection",
@@ -786,6 +793,9 @@
     },
     "pages": {
         "templates": {
+            "import_catalog": "Import container catalog",
+            "import_done": "Catalog imported: {created} created, {skipped} already existed",
+            "importing": "Importing…",
             "no_templates": "No templates yet.",
             "title": "Templates"
         }

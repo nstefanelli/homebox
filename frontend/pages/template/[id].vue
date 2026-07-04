@@ -19,6 +19,7 @@
   import Markdown from "~/components/global/Markdown.vue";
   import LocationSelector from "~/components/Location/Selector.vue";
   import TagSelector from "~/components/Tag/Selector.vue";
+  import TemplatePhotoSection from "~/components/Template/PhotoSection.vue";
   import { useTagStore } from "~/stores/tags";
   import type { EntityOut } from "~~/lib/api/types/data-contracts";
 
@@ -206,6 +207,14 @@
             </div>
           </div>
         </div>
+
+        <Separator class="my-2" />
+        <TemplatePhotoSection
+          v-if="template.id"
+          :template-id="template.id"
+          :photo-path="template.photoPath"
+          @updated="refresh"
+        />
 
         <Separator class="my-2" />
         <div class="flex items-center justify-between">
