@@ -418,8 +418,12 @@ func init() {
 	entitytypeDescIsLocation := entitytypeFields[0].Descriptor()
 	// entitytype.DefaultIsLocation holds the default value on creation for the is_location field.
 	entitytype.DefaultIsLocation = entitytypeDescIsLocation.Default.(bool)
+	// entitytypeDescIsContainer is the schema descriptor for is_container field.
+	entitytypeDescIsContainer := entitytypeFields[1].Descriptor()
+	// entitytype.DefaultIsContainer holds the default value on creation for the is_container field.
+	entitytype.DefaultIsContainer = entitytypeDescIsContainer.Default.(bool)
 	// entitytypeDescIcon is the schema descriptor for icon field.
-	entitytypeDescIcon := entitytypeFields[1].Descriptor()
+	entitytypeDescIcon := entitytypeFields[2].Descriptor()
 	// entitytype.IconValidator is a validator for the "icon" field. It is called by the builders before save.
 	entitytype.IconValidator = entitytypeDescIcon.Validators[0].(func(string) error)
 	// entitytypeDescID is the schema descriptor for id field.

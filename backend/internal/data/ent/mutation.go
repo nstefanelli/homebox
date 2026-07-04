@@ -7723,6 +7723,7 @@ type EntityTypeMutation struct {
 	name                    *string
 	description             *string
 	is_location             *bool
+	is_container            *bool
 	icon                    *string
 	clearedFields           map[string]struct{}
 	group                   *uuid.UUID
@@ -8034,6 +8035,42 @@ func (m *EntityTypeMutation) ResetIsLocation() {
 	m.is_location = nil
 }
 
+// SetIsContainer sets the "is_container" field.
+func (m *EntityTypeMutation) SetIsContainer(b bool) {
+	m.is_container = &b
+}
+
+// IsContainer returns the value of the "is_container" field in the mutation.
+func (m *EntityTypeMutation) IsContainer() (r bool, exists bool) {
+	v := m.is_container
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldIsContainer returns the old "is_container" field's value of the EntityType entity.
+// If the EntityType object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EntityTypeMutation) OldIsContainer(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldIsContainer is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldIsContainer requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldIsContainer: %w", err)
+	}
+	return oldValue.IsContainer, nil
+}
+
+// ResetIsContainer resets all changes to the "is_container" field.
+func (m *EntityTypeMutation) ResetIsContainer() {
+	m.is_container = nil
+}
+
 // SetIcon sets the "icon" field.
 func (m *EntityTypeMutation) SetIcon(s string) {
 	m.icon = &s
@@ -8249,7 +8286,7 @@ func (m *EntityTypeMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *EntityTypeMutation) Fields() []string {
-	fields := make([]string, 0, 6)
+	fields := make([]string, 0, 7)
 	if m.created_at != nil {
 		fields = append(fields, entitytype.FieldCreatedAt)
 	}
@@ -8264,6 +8301,9 @@ func (m *EntityTypeMutation) Fields() []string {
 	}
 	if m.is_location != nil {
 		fields = append(fields, entitytype.FieldIsLocation)
+	}
+	if m.is_container != nil {
+		fields = append(fields, entitytype.FieldIsContainer)
 	}
 	if m.icon != nil {
 		fields = append(fields, entitytype.FieldIcon)
@@ -8286,6 +8326,8 @@ func (m *EntityTypeMutation) Field(name string) (ent.Value, bool) {
 		return m.Description()
 	case entitytype.FieldIsLocation:
 		return m.IsLocation()
+	case entitytype.FieldIsContainer:
+		return m.IsContainer()
 	case entitytype.FieldIcon:
 		return m.Icon()
 	}
@@ -8307,6 +8349,8 @@ func (m *EntityTypeMutation) OldField(ctx context.Context, name string) (ent.Val
 		return m.OldDescription(ctx)
 	case entitytype.FieldIsLocation:
 		return m.OldIsLocation(ctx)
+	case entitytype.FieldIsContainer:
+		return m.OldIsContainer(ctx)
 	case entitytype.FieldIcon:
 		return m.OldIcon(ctx)
 	}
@@ -8352,6 +8396,13 @@ func (m *EntityTypeMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetIsLocation(v)
+		return nil
+	case entitytype.FieldIsContainer:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetIsContainer(v)
 		return nil
 	case entitytype.FieldIcon:
 		v, ok := value.(string)
@@ -8438,6 +8489,9 @@ func (m *EntityTypeMutation) ResetField(name string) error {
 		return nil
 	case entitytype.FieldIsLocation:
 		m.ResetIsLocation()
+		return nil
+	case entitytype.FieldIsContainer:
+		m.ResetIsContainer()
 		return nil
 	case entitytype.FieldIcon:
 		m.ResetIcon()

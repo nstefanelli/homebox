@@ -81,6 +81,11 @@ func IsLocation(v bool) predicate.EntityType {
 	return predicate.EntityType(sql.FieldEQ(FieldIsLocation, v))
 }
 
+// IsContainer applies equality check predicate on the "is_container" field. It's identical to IsContainerEQ.
+func IsContainer(v bool) predicate.EntityType {
+	return predicate.EntityType(sql.FieldEQ(FieldIsContainer, v))
+}
+
 // Icon applies equality check predicate on the "icon" field. It's identical to IconEQ.
 func Icon(v string) predicate.EntityType {
 	return predicate.EntityType(sql.FieldEQ(FieldIcon, v))
@@ -314,6 +319,16 @@ func IsLocationEQ(v bool) predicate.EntityType {
 // IsLocationNEQ applies the NEQ predicate on the "is_location" field.
 func IsLocationNEQ(v bool) predicate.EntityType {
 	return predicate.EntityType(sql.FieldNEQ(FieldIsLocation, v))
+}
+
+// IsContainerEQ applies the EQ predicate on the "is_container" field.
+func IsContainerEQ(v bool) predicate.EntityType {
+	return predicate.EntityType(sql.FieldEQ(FieldIsContainer, v))
+}
+
+// IsContainerNEQ applies the NEQ predicate on the "is_container" field.
+func IsContainerNEQ(v bool) predicate.EntityType {
+	return predicate.EntityType(sql.FieldNEQ(FieldIsContainer, v))
 }
 
 // IconEQ applies the EQ predicate on the "icon" field.

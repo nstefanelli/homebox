@@ -26,6 +26,9 @@ func (EntityType) Fields() []ent.Field {
 	return []ent.Field{
 		field.Bool("is_location").
 			Default(false),
+		field.Bool("is_container").
+			Default(false).
+			Comment("Container types are movable holders (totes/bins); requires is_location"),
 		field.String("icon").
 			MaxLen(255).
 			Optional(),

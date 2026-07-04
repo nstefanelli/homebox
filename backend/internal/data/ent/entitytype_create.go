@@ -86,6 +86,20 @@ func (_c *EntityTypeCreate) SetNillableIsLocation(v *bool) *EntityTypeCreate {
 	return _c
 }
 
+// SetIsContainer sets the "is_container" field.
+func (_c *EntityTypeCreate) SetIsContainer(v bool) *EntityTypeCreate {
+	_c.mutation.SetIsContainer(v)
+	return _c
+}
+
+// SetNillableIsContainer sets the "is_container" field if the given value is not nil.
+func (_c *EntityTypeCreate) SetNillableIsContainer(v *bool) *EntityTypeCreate {
+	if v != nil {
+		_c.SetIsContainer(*v)
+	}
+	return _c
+}
+
 // SetIcon sets the "icon" field.
 func (_c *EntityTypeCreate) SetIcon(v string) *EntityTypeCreate {
 	_c.mutation.SetIcon(v)
@@ -206,6 +220,10 @@ func (_c *EntityTypeCreate) defaults() {
 		v := entitytype.DefaultIsLocation
 		_c.mutation.SetIsLocation(v)
 	}
+	if _, ok := _c.mutation.IsContainer(); !ok {
+		v := entitytype.DefaultIsContainer
+		_c.mutation.SetIsContainer(v)
+	}
 	if _, ok := _c.mutation.ID(); !ok {
 		v := entitytype.DefaultID()
 		_c.mutation.SetID(v)
@@ -235,6 +253,9 @@ func (_c *EntityTypeCreate) check() error {
 	}
 	if _, ok := _c.mutation.IsLocation(); !ok {
 		return &ValidationError{Name: "is_location", err: errors.New(`ent: missing required field "EntityType.is_location"`)}
+	}
+	if _, ok := _c.mutation.IsContainer(); !ok {
+		return &ValidationError{Name: "is_container", err: errors.New(`ent: missing required field "EntityType.is_container"`)}
 	}
 	if v, ok := _c.mutation.Icon(); ok {
 		if err := entitytype.IconValidator(v); err != nil {
@@ -298,6 +319,10 @@ func (_c *EntityTypeCreate) createSpec() (*EntityType, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.IsLocation(); ok {
 		_spec.SetField(entitytype.FieldIsLocation, field.TypeBool, value)
 		_node.IsLocation = value
+	}
+	if value, ok := _c.mutation.IsContainer(); ok {
+		_spec.SetField(entitytype.FieldIsContainer, field.TypeBool, value)
+		_node.IsContainer = value
 	}
 	if value, ok := _c.mutation.Icon(); ok {
 		_spec.SetField(entitytype.FieldIcon, field.TypeString, value)

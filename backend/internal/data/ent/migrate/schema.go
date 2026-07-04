@@ -304,6 +304,7 @@ var (
 		{Name: "name", Type: field.TypeString, Size: 255},
 		{Name: "description", Type: field.TypeString, Nullable: true, Size: 1000},
 		{Name: "is_location", Type: field.TypeBool, Default: false},
+		{Name: "is_container", Type: field.TypeBool, Default: false},
 		{Name: "icon", Type: field.TypeString, Nullable: true, Size: 255},
 		{Name: "entity_type_default_template", Type: field.TypeUUID, Nullable: true},
 		{Name: "group_entity_types", Type: field.TypeUUID},
@@ -316,13 +317,13 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "entity_types_entity_templates_default_template",
-				Columns:    []*schema.Column{EntityTypesColumns[7]},
+				Columns:    []*schema.Column{EntityTypesColumns[8]},
 				RefColumns: []*schema.Column{EntityTemplatesColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 			{
 				Symbol:     "entity_types_groups_entity_types",
-				Columns:    []*schema.Column{EntityTypesColumns[8]},
+				Columns:    []*schema.Column{EntityTypesColumns[9]},
 				RefColumns: []*schema.Column{GroupsColumns[0]},
 				OnDelete:   schema.Cascade,
 			},
