@@ -9,8 +9,11 @@ describe("container catalog", () => {
   });
 
   test("catalogFields produces the three size fields", () => {
-    const fields = catalogFields(CONTAINER_CATALOG[0]);
+    const first = CONTAINER_CATALOG[0];
+    expect(first).toBeDefined();
+    const fields = catalogFields(first!);
     expect(fields.map(f => f.name)).toEqual(["Capacity", "Dimensions", "Color"]);
     expect(fields.every(f => f.textValue.length > 0)).toBe(true);
+    expect(fields.every(f => f.type === "text")).toBe(true);
   });
 });

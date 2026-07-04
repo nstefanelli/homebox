@@ -1,3 +1,5 @@
+import type { TemplateField } from "./api/types/data-contracts";
+
 export interface CatalogEntry {
   name: string;
   capacity: string;
@@ -64,11 +66,23 @@ export const CONTAINER_CATALOG: CatalogEntry[] = [
   { name: "Banker's Box Stor/File", capacity: "~30 L", dimensions: '15" × 12" × 10"', color: "White/Blue" },
 ];
 
+const NIL_UUID = "00000000-0000-0000-0000-000000000000";
+
 /** Template custom fields for a catalog entry. */
-export function catalogFields(entry: CatalogEntry): { type: "text"; name: string; textValue: string }[] {
+export function catalogFields(entry: CatalogEntry): TemplateField[] {
+  const textField = (name: string, textValue: string): TemplateField => ({
+    id: NIL_UUID,
+    type: "text",
+    name,
+    textValue,
+    booleanValue: false,
+    numberValue: 0,
+    timeValue: "",
+  });
+
   return [
-    { type: "text", name: "Capacity", textValue: entry.capacity },
-    { type: "text", name: "Dimensions", textValue: entry.dimensions },
-    { type: "text", name: "Color", textValue: entry.color },
+    textField("Capacity", entry.capacity),
+    textField("Dimensions", entry.dimensions),
+    textField("Color", entry.color),
   ];
 }

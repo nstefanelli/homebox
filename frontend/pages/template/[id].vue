@@ -137,6 +137,12 @@
   }
 
   const NIL_UUID = "00000000-0000-0000-0000-000000000000";
+
+  const photoSectionProps = computed(() => {
+    const id = template.value?.id;
+    if (!id) return null;
+    return { templateId: id, photoPath: template.value?.photoPath };
+  });
 </script>
 
 <template>
@@ -209,12 +215,7 @@
         </div>
 
         <Separator class="my-2" />
-        <TemplatePhotoSection
-          v-if="template.id"
-          :template-id="template.id"
-          :photo-path="template.photoPath"
-          @updated="refresh"
-        />
+        <TemplatePhotoSection v-if="photoSectionProps" v-bind="photoSectionProps" @updated="refresh" />
 
         <Separator class="my-2" />
         <div class="flex items-center justify-between">
