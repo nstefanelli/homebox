@@ -187,6 +187,10 @@
                 "entity_photo": "{type} Photo 📷",
                 "upload_photos": "Upload Photos",
                 "uploaded": "Uploaded Photo",
+                "container_count": "Number of containers",
+                "batch_created": "Created {count} containers",
+                "batch_failed": "Failed to create containers",
+                "print_labels": "Print labels",
                 "toast": {
                     "already_creating": "Already creating an {type}",
                     "create_failed": "Couldn't create {type}",

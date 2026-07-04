@@ -15,7 +15,7 @@
       <div class="flex gap-2">
         <TooltipProvider :delay-duration="0">
           <!-- Template selector button -->
-          <Tooltip v-if="!selectedEntityType?.isLocation">
+          <Tooltip v-if="!selectedEntityType?.isLocation || selectedEntityType?.isContainer">
             <TooltipTrigger>
               <TemplateSelector v-model="selectedTemplate" compact @template-selected="handleTemplateSelected" />
             </TooltipTrigger>
@@ -173,6 +173,15 @@
         type="number"
         step="any"
       />
+      <FormTextField
+        v-if="selectedEntityType?.isContainer"
+        v-model.number="form.count"
+        type="number"
+        :min="1"
+        :max="100"
+        :step="1"
+        :label="$t('components.entity.create_modal.container_count')"
+      />
       <FormTextArea
         v-model="form.description"
         :label="
@@ -237,6 +246,7 @@
   } from "~~/lib/api/types/data-contracts";
   import { useTagStore } from "~/stores/tags";
   import { useLocationStore } from "~~/stores/locations";
+  import { useLabelPrintQueue } from "~~/stores/labels";
   import MdiBarcode from "~icons/mdi/barcode";
   import MdiBarcodeScan from "~icons/mdi/barcode-scan";
   import MdiPackageVariant from "~icons/mdi/package-variant";
@@ -371,6 +381,7 @@
     parentId: null,
     name: "",
     quantity: 1,
+    count: 1,
     description: "",
     color: "",
     tags: [] as string[],
@@ -605,6 +616,105 @@
 
     if (shift?.value) close = false;
 
+    // Container + template: batch-create form.count containers from the
+    // template in a single request. count:1 is just a batch of one, so this
+    // also covers "template + quantity 1" -- no separate single-create path
+    // needed for containers once a template is selected.
+    if (selectedEntityType.value?.isContainer && templateData.value) {
+      const { data: created, error } = await api.templates.batchCreate(templateData.value.id, {
+        count: form.count ?? 1,
+        namePrefix: form.name,
+        startNumber: 1,
+        parentId: form.location?.id ?? "",
+        entityTypeId: selectedEntityType.value?.id || "",
+        tagIds: form.tags,
+      });
+
+      if (error) {
+        loading.value = false;
+        toast.error(t("components.entity.create_modal.batch_failed"));
+        return;
+      }
+
+      toastBatchCreated(created);
+      await uploadPhotosToBatch(created.map(e => e.id));
+
+      form.name = "";
+      form.quantity = 1;
+      form.count = 1;
+      form.description = "";
+      form.color = "";
+      form.photos = [];
+      form.tags = [];
+      selectedTemplate.value = null;
+      templateData.value = null;
+      templateUserSelected.value = false;
+      showTemplateDetails.value = false;
+      focused.value = false;
+      loading.value = false;
+
+      if (close && created[0]) {
+        closeDialog(DialogID.CreateEntity);
+        navigateTo(`/location/${created[0].id}`);
+      }
+      return;
+    }
+
+    // Container, no template, count > 1 (e.g. a UPC-scanned tote where the
+    // user just wants N more of the same bin): sequential numbered creates,
+    // mirroring ItemChangeDetails' sequential-PATCH pattern (avoids sqlite
+    // write contention from firing them all concurrently). Numbering
+    // restarts at 01 per prefix since this client-side path has no
+    // server-side inference -- the template batch path above remains the
+    // numbering-aware one.
+    if (selectedEntityType.value?.isContainer && !templateData.value && (form.count ?? 1) > 1) {
+      const prefix = form.name;
+      const created: EntityOut[] = [];
+
+      for (let i = 1; i <= (form.count ?? 1); i++) {
+        const { data: createdOne, error } = await api.items.createLocation({
+          name: `${prefix} ${String(i).padStart(2, "0")}`,
+          description: form.description,
+          quantity: 1,
+          parentId: form.location?.id ?? "",
+          entityTypeId: selectedEntityType.value?.id || "",
+          tagIds: form.tags,
+        });
+
+        if (error) {
+          toast.error(t("components.entity.create_modal.batch_failed"));
+          console.error(error);
+          break;
+        }
+        created.push(createdOne);
+      }
+
+      if (created.length > 0) {
+        toastBatchCreated(created);
+        await uploadPhotosToBatch(created.map(e => e.id));
+      }
+
+      form.name = "";
+      form.quantity = 1;
+      form.count = 1;
+      form.description = "";
+      form.color = "";
+      form.photos = [];
+      form.tags = [];
+      selectedTemplate.value = null;
+      templateData.value = null;
+      templateUserSelected.value = false;
+      showTemplateDetails.value = false;
+      focused.value = false;
+      loading.value = false;
+
+      if (close && created[0]) {
+        closeDialog(DialogID.CreateEntity);
+        navigateTo(`/location/${created[0].id}`);
+      }
+      return;
+    }
+
     let error, data;
 
     // If the selected entity type is a location, use the location creation endpoint
@@ -710,6 +820,75 @@
       } else {
         navigateTo(`/item/${data.id}`);
       }
+    }
+  }
+
+  /**
+   * Shared "created N containers" success toast for both batch-creation
+   * paths below (template batchCreate + the no-template sequential loop).
+   * Its action button fills the label print queue and jumps straight to the
+   * generator, so "created a shelf of totes" flows directly into printing
+   * labels for them.
+   */
+  function toastBatchCreated(created: EntityOut[]) {
+    const queue = useLabelPrintQueue();
+    toast.success(t("components.entity.create_modal.batch_created", { count: created.length }), {
+      action: {
+        label: t("components.entity.create_modal.print_labels"),
+        onClick: () => {
+          queue.set(
+            created.map(e => ({
+              id: e.id,
+              kind: "container" as const,
+              name: e.name,
+              parentPath: form.location?.name ?? "",
+              url: `${window.location.origin}/location/${e.id}`,
+            }))
+          );
+          navigateTo("/reports/label-generator");
+        },
+      },
+    });
+  }
+
+  /**
+   * Uploads the form's pending photos (e.g. a barcode-scanned product image)
+   * to every entity created by a batch -- a batch is N copies of the same
+   * container/product, so the same photos apply to all of them. Unlike the
+   * single-create photo loop in create() below, this reports one aggregate
+   * toast for the whole batch instead of one set of toasts per container,
+   * since a batch of e.g. 6 totes would otherwise fire 6 "uploading..."/
+   * "uploaded" toasts back-to-back.
+   */
+  async function uploadPhotosToBatch(entityIds: string[]) {
+    if (form.photos.length === 0 || entityIds.length === 0) return;
+
+    const totalUploads = form.photos.length * entityIds.length;
+    toast.info(t("components.entity.create_modal.toast.uploading_photos", { count: totalUploads }));
+
+    let uploadError = false;
+    for (const entityId of entityIds) {
+      for (const photo of form.photos) {
+        const { error: attachError } = await api.items.attachments.add(
+          entityId,
+          photo.file,
+          photo.photoName,
+          AttachmentTypes.Photo,
+          photo.primary
+        );
+
+        if (attachError) {
+          uploadError = true;
+          toast.error(t("components.entity.create_modal.toast.upload_failed", { photoName: photo.photoName }));
+          console.error(attachError);
+        }
+      }
+    }
+
+    if (uploadError) {
+      toast.warning(t("components.entity.create_modal.toast.some_photos_failed", { count: totalUploads }));
+    } else {
+      toast.success(t("components.entity.create_modal.toast.upload_success", { count: totalUploads }));
     }
   }
 
