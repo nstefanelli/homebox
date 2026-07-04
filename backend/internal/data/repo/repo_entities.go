@@ -1049,17 +1049,6 @@ func (r *EntityRepository) Create(ctx context.Context, gid uuid.UUID, data Entit
 
 	if data.EntityTypeID != uuid.Nil {
 		q.SetEntityTypeID(data.EntityTypeID)
-
-		// Container-type entities default to carrying their contents when moved.
-		isContainer, cerr := r.db.EntityType.Query().
-			Where(entitytype.ID(data.EntityTypeID), entitytype.IsContainer(true)).
-			Exist(ctx)
-		if cerr != nil {
-			return EntityOut{}, cerr
-		}
-		if isContainer {
-			q.SetSyncChildEntityLocations(true)
-		}
 	} else {
 		// Auto-resolve default "Item" entity type for the group
 		etID, err := r.resolveDefaultEntityType(ctx, gid, false)
@@ -1239,19 +1228,6 @@ func (r *EntityRepository) createFromTemplateTx(ctx context.Context, tx *ent.Tx,
 	}
 
 	entityBuilder.SetEntityTypeID(data.EntityTypeID)
-
-	// Container-type entities default to carrying their contents when moved.
-	isContainer, cerr := tx.EntityType.Query().
-		Where(entitytype.ID(data.EntityTypeID), entitytype.IsContainer(true)).
-		Exist(entityCtx)
-	if cerr != nil {
-		recordSpanError(entitySpan, cerr)
-		entitySpan.End()
-		return uuid.Nil, cerr
-	}
-	if isContainer {
-		entityBuilder.SetSyncChildEntityLocations(true)
-	}
 
 	if len(data.TagIDs) > 0 {
 		entityBuilder.AddTagIDs(data.TagIDs...)

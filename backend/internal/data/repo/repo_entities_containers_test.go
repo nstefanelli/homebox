@@ -48,7 +48,17 @@ func usePlainLocationEntityType(t *testing.T) EntityTypeSummary {
 	return et
 }
 
-func TestEntityRepository_Create_ContainerDefaultsSync(t *testing.T) {
+// TestEntityRepository_Create_ContainerDoesNotForceSync verifies that creating
+// a container-flagged entity does NOT default SyncChildEntityLocations to
+// true. That flag, when true, makes UpdateByGroup reparent ALL of the
+// entity's children onto whatever new parent the entity itself is given —
+// i.e. it flattens the container's contents out into the destination
+// location on every move (and even on a no-op save, since a PUT from the
+// edit page always carries the current parent). Contents-follow-container
+// is already inherent in the tree: children keep the container as their
+// parent, and only the container's own parent changes when it moves. So
+// containers must NOT default this flag — doing so is data-destroying.
+func TestEntityRepository_Create_ContainerDoesNotForceSync(t *testing.T) {
 	tote := useToteEntityType(t)
 
 	cf := containerFactory()
@@ -57,15 +67,15 @@ func TestEntityRepository_Create_ContainerDefaultsSync(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = tRepos.Entities.Delete(context.Background(), out.ID) })
 
-	assert.True(t, out.SyncChildEntityLocations,
-		"entities of a container type must default to syncing child locations")
+	assert.False(t, out.SyncChildEntityLocations,
+		"container-type entities must NOT default to syncing child locations — the sync flag flattens children onto the new parent on move, and tree nesting alone already implements contents-follow-container")
 }
 
-// TestEntityRepository_CreateFromTemplate_ContainerDefaultsSync verifies that
-// creating an entity from a template with a container-flagged entity type
-// defaults SyncChildEntityLocations to true, mirroring the same behavior
-// already covered for Create() in TestEntityRepository_Create_ContainerDefaultsSync.
-func TestEntityRepository_CreateFromTemplate_ContainerDefaultsSync(t *testing.T) {
+// TestEntityRepository_CreateFromTemplate_ContainerDoesNotForceSync mirrors
+// TestEntityRepository_Create_ContainerDoesNotForceSync for the
+// CreateFromTemplate path (and, by extension, CreateFromTemplateBatch, which
+// shares the same createFromTemplateTx helper).
+func TestEntityRepository_CreateFromTemplate_ContainerDoesNotForceSync(t *testing.T) {
 	tote := useToteEntityType(t)
 
 	parent, err := tRepos.Entities.Create(context.Background(), tGroup.ID, containerFactory())
@@ -81,8 +91,8 @@ func TestEntityRepository_CreateFromTemplate_ContainerDefaultsSync(t *testing.T)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = tRepos.Entities.Delete(context.Background(), out.ID) })
 
-	assert.True(t, out.SyncChildEntityLocations,
-		"entities created from a template with a container type must default to syncing child locations")
+	assert.False(t, out.SyncChildEntityLocations,
+		"entities created from a template with a container type must NOT default to syncing child locations — same rationale as TestEntityRepository_Create_ContainerDoesNotForceSync")
 }
 
 func TestEntityRepository_Query_IsContainerFilter(t *testing.T) {
