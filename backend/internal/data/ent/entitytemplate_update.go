@@ -284,6 +284,46 @@ func (_u *EntityTemplateUpdate) SetNillableIncludeSoldFields(v *bool) *EntityTem
 	return _u
 }
 
+// SetPhotoPath sets the "photo_path" field.
+func (_u *EntityTemplateUpdate) SetPhotoPath(v string) *EntityTemplateUpdate {
+	_u.mutation.SetPhotoPath(v)
+	return _u
+}
+
+// SetNillablePhotoPath sets the "photo_path" field if the given value is not nil.
+func (_u *EntityTemplateUpdate) SetNillablePhotoPath(v *string) *EntityTemplateUpdate {
+	if v != nil {
+		_u.SetPhotoPath(*v)
+	}
+	return _u
+}
+
+// ClearPhotoPath clears the value of the "photo_path" field.
+func (_u *EntityTemplateUpdate) ClearPhotoPath() *EntityTemplateUpdate {
+	_u.mutation.ClearPhotoPath()
+	return _u
+}
+
+// SetPhotoMimeType sets the "photo_mime_type" field.
+func (_u *EntityTemplateUpdate) SetPhotoMimeType(v string) *EntityTemplateUpdate {
+	_u.mutation.SetPhotoMimeType(v)
+	return _u
+}
+
+// SetNillablePhotoMimeType sets the "photo_mime_type" field if the given value is not nil.
+func (_u *EntityTemplateUpdate) SetNillablePhotoMimeType(v *string) *EntityTemplateUpdate {
+	if v != nil {
+		_u.SetPhotoMimeType(*v)
+	}
+	return _u
+}
+
+// ClearPhotoMimeType clears the value of the "photo_mime_type" field.
+func (_u *EntityTemplateUpdate) ClearPhotoMimeType() *EntityTemplateUpdate {
+	_u.mutation.ClearPhotoMimeType()
+	return _u
+}
+
 // SetDefaultTagIds sets the "default_tag_ids" field.
 func (_u *EntityTemplateUpdate) SetDefaultTagIds(v []uuid.UUID) *EntityTemplateUpdate {
 	_u.mutation.SetDefaultTagIds(v)
@@ -463,6 +503,16 @@ func (_u *EntityTemplateUpdate) check() error {
 			return &ValidationError{Name: "default_warranty_details", err: fmt.Errorf(`ent: validator failed for field "EntityTemplate.default_warranty_details": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.PhotoPath(); ok {
+		if err := entitytemplate.PhotoPathValidator(v); err != nil {
+			return &ValidationError{Name: "photo_path", err: fmt.Errorf(`ent: validator failed for field "EntityTemplate.photo_path": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.PhotoMimeType(); ok {
+		if err := entitytemplate.PhotoMimeTypeValidator(v); err != nil {
+			return &ValidationError{Name: "photo_mime_type", err: fmt.Errorf(`ent: validator failed for field "EntityTemplate.photo_mime_type": %w`, err)}
+		}
+	}
 	if _u.mutation.GroupCleared() && len(_u.mutation.GroupIDs()) > 0 {
 		return errors.New(`ent: clearing a required unique edge "EntityTemplate.group"`)
 	}
@@ -549,6 +599,18 @@ func (_u *EntityTemplateUpdate) sqlSave(ctx context.Context) (_node int, err err
 	}
 	if value, ok := _u.mutation.IncludeSoldFields(); ok {
 		_spec.SetField(entitytemplate.FieldIncludeSoldFields, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.PhotoPath(); ok {
+		_spec.SetField(entitytemplate.FieldPhotoPath, field.TypeString, value)
+	}
+	if _u.mutation.PhotoPathCleared() {
+		_spec.ClearField(entitytemplate.FieldPhotoPath, field.TypeString)
+	}
+	if value, ok := _u.mutation.PhotoMimeType(); ok {
+		_spec.SetField(entitytemplate.FieldPhotoMimeType, field.TypeString, value)
+	}
+	if _u.mutation.PhotoMimeTypeCleared() {
+		_spec.ClearField(entitytemplate.FieldPhotoMimeType, field.TypeString)
 	}
 	if value, ok := _u.mutation.DefaultTagIds(); ok {
 		_spec.SetField(entitytemplate.FieldDefaultTagIds, field.TypeJSON, value)
@@ -935,6 +997,46 @@ func (_u *EntityTemplateUpdateOne) SetNillableIncludeSoldFields(v *bool) *Entity
 	return _u
 }
 
+// SetPhotoPath sets the "photo_path" field.
+func (_u *EntityTemplateUpdateOne) SetPhotoPath(v string) *EntityTemplateUpdateOne {
+	_u.mutation.SetPhotoPath(v)
+	return _u
+}
+
+// SetNillablePhotoPath sets the "photo_path" field if the given value is not nil.
+func (_u *EntityTemplateUpdateOne) SetNillablePhotoPath(v *string) *EntityTemplateUpdateOne {
+	if v != nil {
+		_u.SetPhotoPath(*v)
+	}
+	return _u
+}
+
+// ClearPhotoPath clears the value of the "photo_path" field.
+func (_u *EntityTemplateUpdateOne) ClearPhotoPath() *EntityTemplateUpdateOne {
+	_u.mutation.ClearPhotoPath()
+	return _u
+}
+
+// SetPhotoMimeType sets the "photo_mime_type" field.
+func (_u *EntityTemplateUpdateOne) SetPhotoMimeType(v string) *EntityTemplateUpdateOne {
+	_u.mutation.SetPhotoMimeType(v)
+	return _u
+}
+
+// SetNillablePhotoMimeType sets the "photo_mime_type" field if the given value is not nil.
+func (_u *EntityTemplateUpdateOne) SetNillablePhotoMimeType(v *string) *EntityTemplateUpdateOne {
+	if v != nil {
+		_u.SetPhotoMimeType(*v)
+	}
+	return _u
+}
+
+// ClearPhotoMimeType clears the value of the "photo_mime_type" field.
+func (_u *EntityTemplateUpdateOne) ClearPhotoMimeType() *EntityTemplateUpdateOne {
+	_u.mutation.ClearPhotoMimeType()
+	return _u
+}
+
 // SetDefaultTagIds sets the "default_tag_ids" field.
 func (_u *EntityTemplateUpdateOne) SetDefaultTagIds(v []uuid.UUID) *EntityTemplateUpdateOne {
 	_u.mutation.SetDefaultTagIds(v)
@@ -1127,6 +1229,16 @@ func (_u *EntityTemplateUpdateOne) check() error {
 			return &ValidationError{Name: "default_warranty_details", err: fmt.Errorf(`ent: validator failed for field "EntityTemplate.default_warranty_details": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.PhotoPath(); ok {
+		if err := entitytemplate.PhotoPathValidator(v); err != nil {
+			return &ValidationError{Name: "photo_path", err: fmt.Errorf(`ent: validator failed for field "EntityTemplate.photo_path": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.PhotoMimeType(); ok {
+		if err := entitytemplate.PhotoMimeTypeValidator(v); err != nil {
+			return &ValidationError{Name: "photo_mime_type", err: fmt.Errorf(`ent: validator failed for field "EntityTemplate.photo_mime_type": %w`, err)}
+		}
+	}
 	if _u.mutation.GroupCleared() && len(_u.mutation.GroupIDs()) > 0 {
 		return errors.New(`ent: clearing a required unique edge "EntityTemplate.group"`)
 	}
@@ -1230,6 +1342,18 @@ func (_u *EntityTemplateUpdateOne) sqlSave(ctx context.Context) (_node *EntityTe
 	}
 	if value, ok := _u.mutation.IncludeSoldFields(); ok {
 		_spec.SetField(entitytemplate.FieldIncludeSoldFields, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.PhotoPath(); ok {
+		_spec.SetField(entitytemplate.FieldPhotoPath, field.TypeString, value)
+	}
+	if _u.mutation.PhotoPathCleared() {
+		_spec.ClearField(entitytemplate.FieldPhotoPath, field.TypeString)
+	}
+	if value, ok := _u.mutation.PhotoMimeType(); ok {
+		_spec.SetField(entitytemplate.FieldPhotoMimeType, field.TypeString, value)
+	}
+	if _u.mutation.PhotoMimeTypeCleared() {
+		_spec.ClearField(entitytemplate.FieldPhotoMimeType, field.TypeString)
 	}
 	if value, ok := _u.mutation.DefaultTagIds(); ok {
 		_spec.SetField(entitytemplate.FieldDefaultTagIds, field.TypeJSON, value)

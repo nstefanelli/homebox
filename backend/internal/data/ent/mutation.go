@@ -6120,6 +6120,8 @@ type EntityTemplateMutation struct {
 	include_warranty_fields   *bool
 	include_purchase_fields   *bool
 	include_sold_fields       *bool
+	photo_path                *string
+	photo_mime_type           *string
 	default_tag_ids           *[]uuid.UUID
 	appenddefault_tag_ids     []uuid.UUID
 	clearedFields             map[string]struct{}
@@ -6926,6 +6928,104 @@ func (m *EntityTemplateMutation) ResetIncludeSoldFields() {
 	m.include_sold_fields = nil
 }
 
+// SetPhotoPath sets the "photo_path" field.
+func (m *EntityTemplateMutation) SetPhotoPath(s string) {
+	m.photo_path = &s
+}
+
+// PhotoPath returns the value of the "photo_path" field in the mutation.
+func (m *EntityTemplateMutation) PhotoPath() (r string, exists bool) {
+	v := m.photo_path
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPhotoPath returns the old "photo_path" field's value of the EntityTemplate entity.
+// If the EntityTemplate object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EntityTemplateMutation) OldPhotoPath(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPhotoPath is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPhotoPath requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPhotoPath: %w", err)
+	}
+	return oldValue.PhotoPath, nil
+}
+
+// ClearPhotoPath clears the value of the "photo_path" field.
+func (m *EntityTemplateMutation) ClearPhotoPath() {
+	m.photo_path = nil
+	m.clearedFields[entitytemplate.FieldPhotoPath] = struct{}{}
+}
+
+// PhotoPathCleared returns if the "photo_path" field was cleared in this mutation.
+func (m *EntityTemplateMutation) PhotoPathCleared() bool {
+	_, ok := m.clearedFields[entitytemplate.FieldPhotoPath]
+	return ok
+}
+
+// ResetPhotoPath resets all changes to the "photo_path" field.
+func (m *EntityTemplateMutation) ResetPhotoPath() {
+	m.photo_path = nil
+	delete(m.clearedFields, entitytemplate.FieldPhotoPath)
+}
+
+// SetPhotoMimeType sets the "photo_mime_type" field.
+func (m *EntityTemplateMutation) SetPhotoMimeType(s string) {
+	m.photo_mime_type = &s
+}
+
+// PhotoMimeType returns the value of the "photo_mime_type" field in the mutation.
+func (m *EntityTemplateMutation) PhotoMimeType() (r string, exists bool) {
+	v := m.photo_mime_type
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPhotoMimeType returns the old "photo_mime_type" field's value of the EntityTemplate entity.
+// If the EntityTemplate object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EntityTemplateMutation) OldPhotoMimeType(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPhotoMimeType is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPhotoMimeType requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPhotoMimeType: %w", err)
+	}
+	return oldValue.PhotoMimeType, nil
+}
+
+// ClearPhotoMimeType clears the value of the "photo_mime_type" field.
+func (m *EntityTemplateMutation) ClearPhotoMimeType() {
+	m.photo_mime_type = nil
+	m.clearedFields[entitytemplate.FieldPhotoMimeType] = struct{}{}
+}
+
+// PhotoMimeTypeCleared returns if the "photo_mime_type" field was cleared in this mutation.
+func (m *EntityTemplateMutation) PhotoMimeTypeCleared() bool {
+	_, ok := m.clearedFields[entitytemplate.FieldPhotoMimeType]
+	return ok
+}
+
+// ResetPhotoMimeType resets all changes to the "photo_mime_type" field.
+func (m *EntityTemplateMutation) ResetPhotoMimeType() {
+	m.photo_mime_type = nil
+	delete(m.clearedFields, entitytemplate.FieldPhotoMimeType)
+}
+
 // SetDefaultTagIds sets the "default_tag_ids" field.
 func (m *EntityTemplateMutation) SetDefaultTagIds(u []uuid.UUID) {
 	m.default_tag_ids = &u
@@ -7157,7 +7257,7 @@ func (m *EntityTemplateMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *EntityTemplateMutation) Fields() []string {
-	fields := make([]string, 0, 17)
+	fields := make([]string, 0, 19)
 	if m.created_at != nil {
 		fields = append(fields, entitytemplate.FieldCreatedAt)
 	}
@@ -7206,6 +7306,12 @@ func (m *EntityTemplateMutation) Fields() []string {
 	if m.include_sold_fields != nil {
 		fields = append(fields, entitytemplate.FieldIncludeSoldFields)
 	}
+	if m.photo_path != nil {
+		fields = append(fields, entitytemplate.FieldPhotoPath)
+	}
+	if m.photo_mime_type != nil {
+		fields = append(fields, entitytemplate.FieldPhotoMimeType)
+	}
 	if m.default_tag_ids != nil {
 		fields = append(fields, entitytemplate.FieldDefaultTagIds)
 	}
@@ -7249,6 +7355,10 @@ func (m *EntityTemplateMutation) Field(name string) (ent.Value, bool) {
 		return m.IncludePurchaseFields()
 	case entitytemplate.FieldIncludeSoldFields:
 		return m.IncludeSoldFields()
+	case entitytemplate.FieldPhotoPath:
+		return m.PhotoPath()
+	case entitytemplate.FieldPhotoMimeType:
+		return m.PhotoMimeType()
 	case entitytemplate.FieldDefaultTagIds:
 		return m.DefaultTagIds()
 	}
@@ -7292,6 +7402,10 @@ func (m *EntityTemplateMutation) OldField(ctx context.Context, name string) (ent
 		return m.OldIncludePurchaseFields(ctx)
 	case entitytemplate.FieldIncludeSoldFields:
 		return m.OldIncludeSoldFields(ctx)
+	case entitytemplate.FieldPhotoPath:
+		return m.OldPhotoPath(ctx)
+	case entitytemplate.FieldPhotoMimeType:
+		return m.OldPhotoMimeType(ctx)
 	case entitytemplate.FieldDefaultTagIds:
 		return m.OldDefaultTagIds(ctx)
 	}
@@ -7415,6 +7529,20 @@ func (m *EntityTemplateMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetIncludeSoldFields(v)
 		return nil
+	case entitytemplate.FieldPhotoPath:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPhotoPath(v)
+		return nil
+	case entitytemplate.FieldPhotoMimeType:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPhotoMimeType(v)
+		return nil
 	case entitytemplate.FieldDefaultTagIds:
 		v, ok := value.([]uuid.UUID)
 		if !ok {
@@ -7488,6 +7616,12 @@ func (m *EntityTemplateMutation) ClearedFields() []string {
 	if m.FieldCleared(entitytemplate.FieldDefaultWarrantyDetails) {
 		fields = append(fields, entitytemplate.FieldDefaultWarrantyDetails)
 	}
+	if m.FieldCleared(entitytemplate.FieldPhotoPath) {
+		fields = append(fields, entitytemplate.FieldPhotoPath)
+	}
+	if m.FieldCleared(entitytemplate.FieldPhotoMimeType) {
+		fields = append(fields, entitytemplate.FieldPhotoMimeType)
+	}
 	if m.FieldCleared(entitytemplate.FieldDefaultTagIds) {
 		fields = append(fields, entitytemplate.FieldDefaultTagIds)
 	}
@@ -7525,6 +7659,12 @@ func (m *EntityTemplateMutation) ClearField(name string) error {
 		return nil
 	case entitytemplate.FieldDefaultWarrantyDetails:
 		m.ClearDefaultWarrantyDetails()
+		return nil
+	case entitytemplate.FieldPhotoPath:
+		m.ClearPhotoPath()
+		return nil
+	case entitytemplate.FieldPhotoMimeType:
+		m.ClearPhotoMimeType()
 		return nil
 	case entitytemplate.FieldDefaultTagIds:
 		m.ClearDefaultTagIds()
@@ -7584,6 +7724,12 @@ func (m *EntityTemplateMutation) ResetField(name string) error {
 		return nil
 	case entitytemplate.FieldIncludeSoldFields:
 		m.ResetIncludeSoldFields()
+		return nil
+	case entitytemplate.FieldPhotoPath:
+		m.ResetPhotoPath()
+		return nil
+	case entitytemplate.FieldPhotoMimeType:
+		m.ResetPhotoMimeType()
 		return nil
 	case entitytemplate.FieldDefaultTagIds:
 		m.ResetDefaultTagIds()

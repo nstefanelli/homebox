@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"bytes"
 	"context"
 	"testing"
 
@@ -120,4 +121,35 @@ func TestEntityTemplatesRepository_Delete(t *testing.T) {
 
 	_, err = tRepos.EntityTemplates.GetOne(context.Background(), tGroup.ID, created.ID)
 	require.Error(t, err)
+}
+
+func TestEntityTemplatesRepository_SetAndClearPhoto(t *testing.T) {
+	created, err := tRepos.EntityTemplates.Create(context.Background(), tGroup.ID, templateFactory())
+	require.NoError(t, err)
+	defer func() { _ = tRepos.EntityTemplates.Delete(context.Background(), tGroup.ID, created.ID) }()
+
+	err = tRepos.EntityTemplates.SetPhoto(context.Background(), tGroup.ID, created.ID, "grp/documents/abc123", "image/jpeg")
+	require.NoError(t, err)
+
+	got, err := tRepos.EntityTemplates.GetOne(context.Background(), tGroup.ID, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "grp/documents/abc123", got.PhotoPath)
+	assert.Equal(t, "image/jpeg", got.PhotoMimeType)
+
+	err = tRepos.EntityTemplates.ClearPhoto(context.Background(), tGroup.ID, created.ID)
+	require.NoError(t, err)
+
+	got, err = tRepos.EntityTemplates.GetOne(context.Background(), tGroup.ID, created.ID)
+	require.NoError(t, err)
+	assert.Empty(t, got.PhotoPath)
+}
+
+func TestAttachmentRepo_UploadFileByGroupID(t *testing.T) {
+	res, err := tRepos.Attachments.UploadFileByGroupID(context.Background(), tGroup.ID, ItemCreateAttachment{
+		Title:   "tote.jpg",
+		Content: bytes.NewReader([]byte("fake-image-bytes")),
+	})
+	require.NoError(t, err)
+	assert.NotEmpty(t, res.Path)
+	assert.NotEmpty(t, res.ContentType)
 }

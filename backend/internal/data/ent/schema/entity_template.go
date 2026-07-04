@@ -86,6 +86,16 @@ func (EntityTemplate) Fields() []ent.Field {
 			Comment("Whether to include sold fields in items created from this template"),
 
 		// ------------------------------------
+		// Template photo (copied to entities created from this template)
+		field.String("photo_path").
+			MaxLen(500).
+			Optional().
+			Comment("Storage path of the template photo; copied as primary photo to created entities"),
+		field.String("photo_mime_type").
+			MaxLen(255).
+			Optional(),
+
+		// ------------------------------------
 		// Default tags (stored as JSON array of UUIDs to allow reuse across templates)
 		field.JSON("default_tag_ids", []uuid.UUID{}).
 			Optional().

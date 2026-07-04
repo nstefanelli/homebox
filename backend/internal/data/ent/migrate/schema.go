@@ -265,6 +265,8 @@ var (
 		{Name: "include_warranty_fields", Type: field.TypeBool, Default: false},
 		{Name: "include_purchase_fields", Type: field.TypeBool, Default: false},
 		{Name: "include_sold_fields", Type: field.TypeBool, Default: false},
+		{Name: "photo_path", Type: field.TypeString, Nullable: true, Size: 500},
+		{Name: "photo_mime_type", Type: field.TypeString, Nullable: true, Size: 255},
 		{Name: "default_tag_ids", Type: field.TypeJSON, Nullable: true},
 		{Name: "entity_template_location", Type: field.TypeUUID, Nullable: true},
 		{Name: "group_entity_templates", Type: field.TypeUUID},
@@ -277,13 +279,13 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "entity_templates_entities_location",
-				Columns:    []*schema.Column{EntityTemplatesColumns[18]},
+				Columns:    []*schema.Column{EntityTemplatesColumns[20]},
 				RefColumns: []*schema.Column{EntitiesColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 			{
 				Symbol:     "entity_templates_groups_entity_templates",
-				Columns:    []*schema.Column{EntityTemplatesColumns[19]},
+				Columns:    []*schema.Column{EntityTemplatesColumns[21]},
 				RefColumns: []*schema.Column{GroupsColumns[0]},
 				OnDelete:   schema.Cascade,
 			},

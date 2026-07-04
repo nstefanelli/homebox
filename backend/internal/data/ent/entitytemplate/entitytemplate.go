@@ -47,6 +47,10 @@ const (
 	FieldIncludePurchaseFields = "include_purchase_fields"
 	// FieldIncludeSoldFields holds the string denoting the include_sold_fields field in the database.
 	FieldIncludeSoldFields = "include_sold_fields"
+	// FieldPhotoPath holds the string denoting the photo_path field in the database.
+	FieldPhotoPath = "photo_path"
+	// FieldPhotoMimeType holds the string denoting the photo_mime_type field in the database.
+	FieldPhotoMimeType = "photo_mime_type"
 	// FieldDefaultTagIds holds the string denoting the default_tag_ids field in the database.
 	FieldDefaultTagIds = "default_tag_ids"
 	// EdgeGroup holds the string denoting the group edge name in mutations.
@@ -99,6 +103,8 @@ var Columns = []string{
 	FieldIncludeWarrantyFields,
 	FieldIncludePurchaseFields,
 	FieldIncludeSoldFields,
+	FieldPhotoPath,
+	FieldPhotoMimeType,
 	FieldDefaultTagIds,
 }
 
@@ -159,6 +165,10 @@ var (
 	DefaultIncludePurchaseFields bool
 	// DefaultIncludeSoldFields holds the default value on creation for the "include_sold_fields" field.
 	DefaultIncludeSoldFields bool
+	// PhotoPathValidator is a validator for the "photo_path" field. It is called by the builders before save.
+	PhotoPathValidator func(string) error
+	// PhotoMimeTypeValidator is a validator for the "photo_mime_type" field. It is called by the builders before save.
+	PhotoMimeTypeValidator func(string) error
 	// DefaultID holds the default value on creation for the "id" field.
 	DefaultID func() uuid.UUID
 )
@@ -249,6 +259,16 @@ func ByIncludePurchaseFields(opts ...sql.OrderTermOption) OrderOption {
 // ByIncludeSoldFields orders the results by the include_sold_fields field.
 func ByIncludeSoldFields(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldIncludeSoldFields, opts...).ToFunc()
+}
+
+// ByPhotoPath orders the results by the photo_path field.
+func ByPhotoPath(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPhotoPath, opts...).ToFunc()
+}
+
+// ByPhotoMimeType orders the results by the photo_mime_type field.
+func ByPhotoMimeType(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPhotoMimeType, opts...).ToFunc()
 }
 
 // ByGroupField orders the results by group field.

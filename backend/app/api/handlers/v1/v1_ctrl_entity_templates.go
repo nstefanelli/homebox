@@ -1,14 +1,24 @@
 package v1
 
 import (
+	"errors"
+	"io"
 	"net/http"
 
 	"github.com/google/uuid"
 	"github.com/hay-kot/httpkit/errchain"
+	"github.com/hay-kot/httpkit/server"
 	"github.com/samber/lo"
 	"github.com/sysadminsmedia/homebox/backend/internal/core/services"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/repo"
+	"github.com/sysadminsmedia/homebox/backend/internal/sys/validate"
 	"github.com/sysadminsmedia/homebox/backend/internal/web/adapters"
+	"gocloud.dev/blob"
+	_ "gocloud.dev/blob/azureblob"
+	_ "gocloud.dev/blob/fileblob"
+	_ "gocloud.dev/blob/gcsblob"
+	_ "gocloud.dev/blob/memblob"
+	_ "gocloud.dev/blob/s3blob"
 )
 
 // HandleEntityTemplatesGetAll godoc
@@ -167,4 +177,122 @@ func (ctrl *V1Controller) HandleEntityTemplatesCreateItem() errchain.HandlerFunc
 	}
 
 	return adapters.ActionID("id", fn, http.StatusCreated)
+}
+
+// HandleEntityTemplatePhotoUpload godoc
+//
+//	@Summary	Upload Template Photo
+//	@Tags		Entity Templates
+//	@Produce	json
+//	@Param		id		path		string	true	"Template ID"
+//	@Param		file	formData	file	true	"Photo file"
+//	@Success	201		{object}	repo.EntityTemplateOut
+//	@Failure	400		{object}	validate.ErrorResponse
+//	@Router		/v1/templates/{id}/photo [POST]
+//	@Security	Bearer
+func (ctrl *V1Controller) HandleEntityTemplatePhotoUpload() errchain.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) error {
+		err := r.ParseMultipartForm(ctrl.maxUploadSize << 20)
+		if err != nil {
+			return validate.NewRequestError(errors.New("failed to parse multipart form"), http.StatusBadRequest)
+		}
+
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			return validate.NewRequestError(errors.New("file is required"), http.StatusBadRequest)
+		}
+		defer func() { _ = file.Close() }()
+
+		id, err := ctrl.routeID(r)
+		if err != nil {
+			return err
+		}
+
+		auth := services.NewContext(r.Context())
+
+		// Ensure the template exists in this group before uploading the blob.
+		if _, err := ctrl.repo.EntityTemplates.GetOne(r.Context(), auth.GID, id); err != nil {
+			return err
+		}
+
+		res, err := ctrl.repo.Attachments.UploadFileByGroupID(r.Context(), auth.GID, repo.ItemCreateAttachment{
+			Title:   sanitizeAttachmentName(header.Filename),
+			Content: file,
+		})
+		if err != nil {
+			return validate.NewRequestError(err, http.StatusInternalServerError)
+		}
+
+		if err := ctrl.repo.EntityTemplates.SetPhoto(r.Context(), auth.GID, id, res.Path, res.ContentType); err != nil {
+			return err
+		}
+
+		out, err := ctrl.repo.EntityTemplates.GetOne(r.Context(), auth.GID, id)
+		if err != nil {
+			return err
+		}
+		return server.JSON(w, http.StatusCreated, out)
+	}
+}
+
+// HandleEntityTemplatePhotoGet godoc
+//
+//	@Summary	Get Template Photo
+//	@Tags		Entity Templates
+//	@Produce	octet-stream
+//	@Param		id	path	string	true	"Template ID"
+//	@Success	200
+//	@Failure	400	{object}	validate.ErrorResponse
+//	@Router		/v1/templates/{id}/photo [GET]
+//	@Security	Bearer
+func (ctrl *V1Controller) HandleEntityTemplatePhotoGet() errchain.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) error {
+		id, err := ctrl.routeID(r)
+		if err != nil {
+			return err
+		}
+		auth := services.NewContext(r.Context())
+
+		tmpl, err := ctrl.repo.EntityTemplates.GetOne(r.Context(), auth.GID, id)
+		if err != nil {
+			return err
+		}
+		if tmpl.PhotoPath == "" {
+			return validate.NewRequestError(errors.New("template has no photo"), http.StatusNotFound)
+		}
+
+		bucket, err := blob.OpenBucket(r.Context(), ctrl.repo.Attachments.GetConnString())
+		if err != nil {
+			return validate.NewRequestError(err, http.StatusInternalServerError)
+		}
+		defer func() { _ = bucket.Close() }()
+
+		fileReader, err := bucket.NewReader(r.Context(), ctrl.repo.Attachments.GetFullPath(tmpl.PhotoPath), nil)
+		if err != nil {
+			return validate.NewRequestError(err, http.StatusInternalServerError)
+		}
+		defer func() { _ = fileReader.Close() }()
+
+		w.Header().Set("Content-Type", tmpl.PhotoMimeType)
+		_, err = io.Copy(w, fileReader)
+		return err
+	}
+}
+
+// HandleEntityTemplatePhotoDelete godoc
+//
+//	@Summary	Delete Template Photo
+//	@Tags		Entity Templates
+//	@Produce	json
+//	@Param		id	path	string	true	"Template ID"
+//	@Success	204
+//	@Failure	400	{object}	validate.ErrorResponse
+//	@Router		/v1/templates/{id}/photo [DELETE]
+//	@Security	Bearer
+func (ctrl *V1Controller) HandleEntityTemplatePhotoDelete() errchain.HandlerFunc {
+	fn := func(r *http.Request, ID uuid.UUID) (any, error) {
+		auth := services.NewContext(r.Context())
+		return nil, ctrl.repo.EntityTemplates.ClearPhoto(r.Context(), auth.GID, ID)
+	}
+	return adapters.CommandID("id", fn, http.StatusNoContent)
 }

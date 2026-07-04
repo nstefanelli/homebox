@@ -371,6 +371,14 @@ func init() {
 	entitytemplateDescIncludeSoldFields := entitytemplateFields[11].Descriptor()
 	// entitytemplate.DefaultIncludeSoldFields holds the default value on creation for the include_sold_fields field.
 	entitytemplate.DefaultIncludeSoldFields = entitytemplateDescIncludeSoldFields.Default.(bool)
+	// entitytemplateDescPhotoPath is the schema descriptor for photo_path field.
+	entitytemplateDescPhotoPath := entitytemplateFields[12].Descriptor()
+	// entitytemplate.PhotoPathValidator is a validator for the "photo_path" field. It is called by the builders before save.
+	entitytemplate.PhotoPathValidator = entitytemplateDescPhotoPath.Validators[0].(func(string) error)
+	// entitytemplateDescPhotoMimeType is the schema descriptor for photo_mime_type field.
+	entitytemplateDescPhotoMimeType := entitytemplateFields[13].Descriptor()
+	// entitytemplate.PhotoMimeTypeValidator is a validator for the "photo_mime_type" field. It is called by the builders before save.
+	entitytemplate.PhotoMimeTypeValidator = entitytemplateDescPhotoMimeType.Validators[0].(func(string) error)
 	// entitytemplateDescID is the schema descriptor for id field.
 	entitytemplateDescID := entitytemplateMixinFields0[0].Descriptor()
 	// entitytemplate.DefaultID holds the default value on creation for the id field.

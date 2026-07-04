@@ -985,6 +985,16 @@ func (r *AttachmentRepo) UploadFile(ctx context.Context, itemGroup *ent.Group, d
 	}, nil
 }
 
+// UploadFileByGroupID uploads a blob for a group looked up by ID. Used by callers
+// (e.g. template photos) that don't already hold the *ent.Group.
+func (r *AttachmentRepo) UploadFileByGroupID(ctx context.Context, gid uuid.UUID, doc ItemCreateAttachment) (UploadResult, error) {
+	grp, err := r.db.Group.Get(ctx, gid)
+	if err != nil {
+		return UploadResult{}, err
+	}
+	return r.UploadFile(ctx, grp, doc)
+}
+
 func isImageFile(mimetype string) bool {
 	// Check file extension for image types
 	return strings.Contains(mimetype, "image/jpeg") || strings.Contains(mimetype, "image/png") || strings.Contains(mimetype, "image/gif")
