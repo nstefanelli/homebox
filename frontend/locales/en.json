@@ -393,12 +393,14 @@
                 "title": "Create Entity Type",
                 "name_label": "Name",
                 "is_container_location_type_label": "Is a container / location type",
+                "is_container_label": "Is a container (movable tote/bin — contents follow when moved)",
                 "button": "Create"
             },
             "update_dialog": {
                 "title": "Update Entity Type",
                 "name_label": "Name",
                 "is_container_location_type_label": "Is a container / location type",
+                "is_container_label": "Is a container (movable tote/bin — contents follow when moved)",
                 "button": "Update"
             },
             "page": {
@@ -410,6 +412,7 @@
             "card": {
                 "default_template": "Default template: {name}",
                 "badge_container": "Container",
+                "badge_is_container": "Movable Container",
                 "tooltip": {
                 "edit": "Edit",
                 "delete": "Delete"

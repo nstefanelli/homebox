@@ -40,6 +40,7 @@
     name: "",
     icon: "",
     isLocation: false,
+    isContainer: false,
   });
   const createTemplate = ref<EntityTemplateSummary | null>(null);
 
@@ -47,8 +48,16 @@
     createForm.name = "";
     createForm.icon = "";
     createForm.isLocation = false;
+    createForm.isContainer = false;
     createTemplate.value = null;
   }
+
+  watch(
+    () => createForm.isLocation,
+    v => {
+      if (!v) createForm.isContainer = false;
+    }
+  );
 
   async function create() {
     if (!createForm.name.trim()) {
@@ -60,6 +69,7 @@
       name: createForm.name,
       icon: createForm.icon,
       isLocation: createForm.isLocation,
+      isContainer: createForm.isContainer,
       ...(createTemplate.value?.id ? { defaultTemplateId: createTemplate.value.id } : {}),
     } as EntityTypeCreate;
 
@@ -81,15 +91,24 @@
     name: "",
     icon: "",
     isLocation: false,
+    isContainer: false,
     originalIsItem: false,
   });
   const updateTemplate = ref<EntityTemplateSummary | null>(null);
+
+  watch(
+    () => updateForm.isLocation,
+    v => {
+      if (!v) updateForm.isContainer = false;
+    }
+  );
 
   function openEdit(et: EntityTypeSummary) {
     updateForm.id = et.id;
     updateForm.name = et.name;
     updateForm.icon = et.icon;
     updateForm.isLocation = et.isLocation;
+    updateForm.isContainer = et.isContainer;
     updateForm.originalIsItem = !et.isLocation;
     updateTemplate.value = et.defaultTemplate
       ? ({
@@ -112,6 +131,7 @@
       name: updateForm.name,
       icon: updateForm.icon,
       isLocation: updateForm.isLocation,
+      isContainer: updateForm.isContainer,
       ...(updateTemplate.value?.id ? { defaultTemplateId: updateTemplate.value.id } : {}),
     } as EntityTypeUpdate;
 
@@ -168,6 +188,11 @@
             v-model="createForm.isLocation"
             :label="t('components.entityTypes.create_dialog.is_container_location_type_label')"
           />
+          <FormCheckbox
+            v-if="createForm.isLocation"
+            v-model="createForm.isContainer"
+            :label="t('components.entityTypes.create_dialog.is_container_label')"
+          />
           <TemplateSelector v-if="!createForm.isLocation" v-model="createTemplate" />
 
           <DialogFooter>
@@ -194,6 +219,11 @@
           <FormCheckbox
             v-model="updateForm.isLocation"
             :label="t('components.entityTypes.update_dialog.is_container_location_type_label')"
+          />
+          <FormCheckbox
+            v-if="updateForm.isLocation"
+            v-model="updateForm.isContainer"
+            :label="t('components.entityTypes.update_dialog.is_container_label')"
           />
           <TemplateSelector v-if="!updateForm.isLocation" v-model="updateTemplate" />
 
@@ -228,6 +258,9 @@
               <span class="font-medium">{{ t(et.name) }}</span>
               <Badge v-if="et.isLocation" variant="secondary" class="text-xs">
                 {{ t("components.entityTypes.card.badge_container") }}
+              </Badge>
+              <Badge v-if="et.isContainer" variant="outline" class="text-xs">
+                {{ t("components.entityTypes.card.badge_is_container") }}
               </Badge>
             </div>
             <p v-if="et.defaultTemplate && !et.isLocation" class="text-xs text-muted-foreground">
