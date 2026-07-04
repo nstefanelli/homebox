@@ -4,6 +4,7 @@
   import type { AnyDetail, Details } from "~~/components/global/DetailsSection/types";
   import { filterZeroValues } from "~~/components/global/DetailsSection/types";
   import type { ItemAttachment } from "~~/lib/api/types/data-contracts";
+  import { useLabelPrintQueue, type PrintQueueEntry } from "~~/stores/labels";
   import MdiPackageVariant from "~icons/mdi/package-variant";
   import MdiPlus from "~icons/mdi/plus";
   import MdiPencil from "~icons/mdi/pencil";
@@ -19,6 +20,8 @@
   } from "@/components/ui/breadcrumb";
   import { Button } from "@/components/ui/button";
   import { Badge } from "@/components/ui/badge";
+  import { Checkbox } from "@/components/ui/checkbox";
+  import { Label } from "@/components/ui/label";
   import { Separator } from "@/components/ui/separator";
   import { DialogID } from "~/components/ui/dialog-provider/utils";
   import BaseCard from "@/components/Base/Card.vue";
@@ -214,6 +217,43 @@
       watch: [locationId],
     }
   );
+
+  const printQueue = useLabelPrintQueue();
+  const printIncludeItems = ref(false);
+
+  async function printContainerLabels() {
+    const entries: PrintQueueEntry[] = [];
+
+    const { data: containers } = await api.items.getContainers({
+      parentIds: [locationId.value],
+      filterChildren: false,
+    });
+    entries.push(
+      ...containers.map(c => ({
+        id: c.id,
+        kind: "container" as const,
+        name: c.name,
+        parentPath: location.value?.name ?? "",
+        url: `${window.location.origin}/location/${c.id}`,
+      }))
+    );
+
+    if (printIncludeItems.value) {
+      entries.push(
+        ...(items.value ?? []).map(i => ({
+          id: i.id,
+          kind: "item" as const,
+          name: i.name,
+          parentPath: location.value?.name ?? "",
+          assetId: i.assetId,
+          url: `${window.location.origin}/a/${i.assetId}`,
+        }))
+      );
+    }
+
+    printQueue.set(entries);
+    navigateTo("/reports/label-generator");
+  }
 </script>
 
 <template>
@@ -283,6 +323,15 @@
             </div>
             <div class="ml-auto mt-2 flex flex-wrap items-center justify-between gap-2">
               <LabelMaker :id="location.id" type="location" />
+              <Button variant="outline" @click="printContainerLabels">
+                {{ $t("components.location.print_containers") }}
+              </Button>
+              <div class="flex items-center gap-1">
+                <Checkbox id="printIncludeItems" v-model="printIncludeItems" />
+                <Label for="printIncludeItems" class="cursor-pointer text-sm">
+                  {{ $t("components.location.print_include_items") }}
+                </Label>
+              </div>
               <Button class="w-9 md:w-auto" @click="openCreateItem">
                 <MdiPlus name="mdi-plus" />
                 <span class="hidden md:inline">

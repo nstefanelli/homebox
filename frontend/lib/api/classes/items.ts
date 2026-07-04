@@ -33,6 +33,7 @@ export type ItemsQuery = {
 
 export type LocationsQuery = {
   filterChildren: boolean;
+  parentIds?: string[];
 };
 
 export type TreeQuery = {

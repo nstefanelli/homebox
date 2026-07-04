@@ -1,6 +1,8 @@
 <script setup lang="ts">
   import { useTreeState } from "./tree-state";
   import type { TreeItem } from "~~/lib/api/types/data-contracts";
+  import { useLabelSelection } from "~~/stores/labelSelection";
+  import { Checkbox } from "@/components/ui/checkbox";
   import MdiChevronRight from "~icons/mdi/chevron-right";
   import MdiMapMarker from "~icons/mdi/map-marker";
   import MdiPackageVariant from "~icons/mdi/package-variant";
@@ -20,6 +22,17 @@
   });
 
   const state = useTreeState(props.treeId);
+
+  const selection = useLabelSelection();
+
+  function toggleSelect() {
+    selection.toggle({
+      id: props.item.id,
+      kind: "location",
+      name: props.item.name,
+      url: `${window.location.origin}/location/${props.item.id}`,
+    });
+  }
 
   const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
@@ -78,6 +91,13 @@
           </div>
         </div>
       </div>
+      <Checkbox
+        v-if="selection.selectMode && item.type === 'location'"
+        :model-value="!!selection.selected[item.id]"
+        class="mr-2"
+        @update:model-value="toggleSelect"
+        @click.stop
+      />
       <MdiMapMarker v-if="item.type === 'location'" class="size-4" />
       <MdiPackageVariant v-else class="size-4" />
       <NuxtLink class="text-lg hover:underline" :to="link" @click.stop>{{ item.name }} </NuxtLink>
