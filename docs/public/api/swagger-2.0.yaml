@@ -424,6 +424,13 @@ definitions:
       notes:
         description: Notes holds the value of the "notes" field.
         type: string
+      photo_mime_type:
+        description: PhotoMimeType holds the value of the "photo_mime_type" field.
+        type: string
+      photo_path:
+        description: Storage path of the template photo; copied as primary photo to
+          created entities
+        type: string
       updated_at:
         description: UpdatedAt holds the value of the "updated_at" field.
         type: string
@@ -464,6 +471,9 @@ definitions:
       id:
         description: ID of the ent.
         type: string
+      is_container:
+        description: Container types are movable holders (totes/bins); requires is_location
+        type: boolean
       is_location:
         description: IsLocation holds the value of the "is_location" field.
         type: boolean
@@ -1451,6 +1461,12 @@ definitions:
         type: string
       notes:
         type: string
+      photoMimeType:
+        type: string
+      photoPath:
+        description: Template photo (copied as the primary photo to entities created
+          from this template)
+        type: string
       updatedAt:
         type: string
     type: object
@@ -1539,6 +1555,8 @@ definitions:
         type: string
       icon:
         type: string
+      isContainer:
+        type: boolean
       isLocation:
         type: boolean
       name:
@@ -1558,6 +1576,8 @@ definitions:
         type: string
       id:
         type: string
+      isContainer:
+        type: boolean
       isLocation:
         type: boolean
       name:
@@ -1573,6 +1593,8 @@ definitions:
         type: string
       id:
         type: string
+      isContainer:
+        type: boolean
       isLocation:
         type: boolean
       name:
@@ -2194,6 +2216,29 @@ definitions:
     required:
     - name
     type: object
+  v1.EntityTemplateBatchCreateRequest:
+    properties:
+      count:
+        maximum: 100
+        minimum: 1
+        type: integer
+      entityTypeId:
+        type: string
+      namePrefix:
+        maxLength: 240
+        type: string
+      parentId:
+        type: string
+      startNumber:
+        minimum: 1
+        type: integer
+      tagIds:
+        items:
+          type: string
+        type: array
+    required:
+    - count
+    type: object
   v1.EntityTemplateCreateItemRequest:
     properties:
       description:
@@ -2508,6 +2553,14 @@ paths:
           type: string
         name: parentIds
         type: array
+      - description: filter by location entity types
+        in: query
+        name: isLocation
+        type: boolean
+      - description: filter by container entity types
+        in: query
+        name: isContainer
+        type: boolean
       produces:
       - application/json
       responses:
@@ -3006,6 +3059,10 @@ paths:
           description: Created
           schema:
             $ref: '#/definitions/repo.EntityTypeSummary'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/validate.ErrorResponse'
       security:
       - Bearer: []
       summary: Create Entity Type
@@ -3049,6 +3106,10 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/repo.EntityTypeSummary'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/validate.ErrorResponse'
       security:
       - Bearer: []
       summary: Update Entity Type
@@ -3922,6 +3983,38 @@ paths:
       summary: Update Entity Template
       tags:
       - Entity Templates
+  /v1/templates/{id}/batch-create:
+    post:
+      parameters:
+      - description: Template ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Batch options
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/v1.EntityTemplateBatchCreateRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            items:
+              $ref: '#/definitions/repo.EntityOut'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/validate.ErrorResponse'
+      security:
+      - Bearer: []
+      summary: Batch Create Entities from Template
+      tags:
+      - Entity Templates
   /v1/templates/{id}/create-item:
     post:
       parameters:
@@ -3946,6 +4039,77 @@ paths:
       security:
       - Bearer: []
       summary: Create Entity from Template
+      tags:
+      - Entity Templates
+  /v1/templates/{id}/photo:
+    delete:
+      parameters:
+      - description: Template ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/validate.ErrorResponse'
+      security:
+      - Bearer: []
+      summary: Delete Template Photo
+      tags:
+      - Entity Templates
+    get:
+      parameters:
+      - description: Template ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/octet-stream
+      responses:
+        "200":
+          description: OK
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/validate.ErrorResponse'
+      security:
+      - Bearer: []
+      summary: Get Template Photo
+      tags:
+      - Entity Templates
+    post:
+      parameters:
+      - description: Template ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Photo file
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/repo.EntityTemplateOut'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/validate.ErrorResponse'
+      security:
+      - Bearer: []
+      summary: Upload Template Photo
       tags:
       - Entity Templates
   /v1/users/change-password:

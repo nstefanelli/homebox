@@ -5,6 +5,7 @@ import type {
   EntityTemplateSummary,
   EntityTemplateUpdate,
   EntityTemplateCreateItemRequest,
+  EntityTemplateBatchCreateRequest,
   EntityOut,
 } from "../types/data-contracts";
 
@@ -34,5 +35,29 @@ export class TemplatesApi extends BaseAPI {
       url: route(`/templates/${templateId}/create-item`),
       body,
     });
+  }
+
+  batchCreate(templateId: string, body: EntityTemplateBatchCreateRequest) {
+    return this.http.post<EntityTemplateBatchCreateRequest, EntityOut[]>({
+      url: route(`/templates/${templateId}/batch-create`),
+      body,
+    });
+  }
+
+  uploadPhoto(templateId: string, file: File) {
+    const formData = new FormData();
+    formData.append("file", file);
+    return this.http.post<FormData, EntityTemplateOut>({
+      url: route(`/templates/${templateId}/photo`),
+      data: formData,
+    });
+  }
+
+  deletePhoto(templateId: string) {
+    return this.http.delete<void>({ url: route(`/templates/${templateId}/photo`) });
+  }
+
+  photoUrl(templateId: string): string {
+    return route(`/templates/${templateId}/photo`);
   }
 }

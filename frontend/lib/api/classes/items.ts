@@ -207,6 +207,17 @@ export class ItemsApi extends BaseAPI {
     } as { data: EntitySummary[]; error: any; status: number };
   }
 
+  async getContainers(q: LocationsQuery = { filterChildren: false }) {
+    const resp = await this.http.get<{ items: EntitySummary[] }>({
+      url: route("/entities", { ...q, isLocation: true, isContainer: true }),
+    });
+    return {
+      ...resp,
+      data: resp.data?.items ?? [],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as { data: EntitySummary[]; error: any; status: number };
+  }
+
   getTree(tq: TreeQuery = { withItems: false }) {
     return this.http.get<TreeItem[]>({ url: route("/entities/tree", tq) });
   }

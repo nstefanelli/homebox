@@ -282,6 +282,18 @@ const docTemplate = `{
                         "description": "parent Ids",
                         "name": "parentIds",
                         "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "filter by location entity types",
+                        "name": "isLocation",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "filter by container entity types",
+                        "name": "isContainer",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -1081,6 +1093,12 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/repo.EntityTypeSummary"
                         }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/validate.ErrorResponse"
+                        }
                     }
                 }
             }
@@ -1122,6 +1140,12 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/repo.EntityTypeSummary"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/validate.ErrorResponse"
                         }
                     }
                 }
@@ -2581,6 +2605,57 @@ const docTemplate = `{
                 }
             }
         },
+        "/v1/templates/{id}/batch-create": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Entity Templates"
+                ],
+                "summary": "Batch Create Entities from Template",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Template ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Batch options",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/v1.EntityTemplateBatchCreateRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/repo.EntityOut"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/validate.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/v1/templates/{id}/create-item": {
             "post": {
                 "security": [
@@ -2618,6 +2693,120 @@ const docTemplate = `{
                         "description": "Created",
                         "schema": {
                             "$ref": "#/definitions/repo.EntityOut"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/templates/{id}/photo": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "produces": [
+                    "application/octet-stream"
+                ],
+                "tags": [
+                    "Entity Templates"
+                ],
+                "summary": "Get Template Photo",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Template ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/validate.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Entity Templates"
+                ],
+                "summary": "Upload Template Photo",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Template ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "file",
+                        "description": "Photo file",
+                        "name": "file",
+                        "in": "formData",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/repo.EntityTemplateOut"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/validate.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Entity Templates"
+                ],
+                "summary": "Delete Template Photo",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Template ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/validate.ErrorResponse"
                         }
                     }
                 }
@@ -3782,6 +3971,14 @@ const docTemplate = `{
                     "description": "Notes holds the value of the \"notes\" field.",
                     "type": "string"
                 },
+                "photo_mime_type": {
+                    "description": "PhotoMimeType holds the value of the \"photo_mime_type\" field.",
+                    "type": "string"
+                },
+                "photo_path": {
+                    "description": "Storage path of the template photo; copied as primary photo to created entities",
+                    "type": "string"
+                },
                 "updated_at": {
                     "description": "UpdatedAt holds the value of the \"updated_at\" field.",
                     "type": "string"
@@ -3842,6 +4039,10 @@ const docTemplate = `{
                 "id": {
                     "description": "ID of the ent.",
                     "type": "string"
+                },
+                "is_container": {
+                    "description": "Container types are movable holders (totes/bins); requires is_location",
+                    "type": "boolean"
                 },
                 "is_location": {
                     "description": "IsLocation holds the value of the \"is_location\" field.",
@@ -5280,6 +5481,13 @@ const docTemplate = `{
                 "notes": {
                     "type": "string"
                 },
+                "photoMimeType": {
+                    "type": "string"
+                },
+                "photoPath": {
+                    "description": "Template photo (copied as the primary photo to entities created from this template)",
+                    "type": "string"
+                },
                 "updatedAt": {
                     "type": "string"
                 }
@@ -5403,6 +5611,9 @@ const docTemplate = `{
                 "icon": {
                     "type": "string"
                 },
+                "isContainer": {
+                    "type": "boolean"
+                },
                 "isLocation": {
                     "type": "boolean"
                 },
@@ -5432,6 +5643,9 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
+                "isContainer": {
+                    "type": "boolean"
+                },
                 "isLocation": {
                     "type": "boolean"
                 },
@@ -5454,6 +5668,9 @@ const docTemplate = `{
                 },
                 "id": {
                     "type": "string"
+                },
+                "isContainer": {
+                    "type": "boolean"
                 },
                 "isLocation": {
                     "type": "boolean"
@@ -6373,6 +6590,39 @@ const docTemplate = `{
             "properties": {
                 "name": {
                     "type": "string"
+                }
+            }
+        },
+        "v1.EntityTemplateBatchCreateRequest": {
+            "type": "object",
+            "required": [
+                "count"
+            ],
+            "properties": {
+                "count": {
+                    "type": "integer",
+                    "maximum": 100,
+                    "minimum": 1
+                },
+                "entityTypeId": {
+                    "type": "string"
+                },
+                "namePrefix": {
+                    "type": "string",
+                    "maxLength": 240
+                },
+                "parentId": {
+                    "type": "string"
+                },
+                "startNumber": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "tagIds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },

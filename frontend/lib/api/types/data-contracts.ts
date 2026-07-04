@@ -331,6 +331,10 @@ export interface EntEntityTemplate {
   name: string;
   /** Notes holds the value of the "notes" field. */
   notes: string;
+  /** PhotoMimeType holds the value of the "photo_mime_type" field. */
+  photo_mime_type: string;
+  /** Storage path of the template photo; copied as primary photo to created entities */
+  photo_path: string;
   /** UpdatedAt holds the value of the "updated_at" field. */
   updated_at: string;
 }
@@ -358,6 +362,8 @@ export interface EntEntityType {
   icon: string;
   /** ID of the ent. */
   id: string;
+  /** Container types are movable holders (totes/bins); requires is_location */
+  is_container: boolean;
   /** IsLocation holds the value of the "is_location" field. */
   is_location: boolean;
   /** Name holds the value of the "name" field. */
@@ -915,6 +921,9 @@ export interface EntityTemplateOut {
   includeWarrantyFields: boolean;
   name: string;
   notes: string;
+  photoMimeType: string;
+  /** Template photo (copied as the primary photo to entities created from this template) */
+  photoPath: string;
   updatedAt: Date | string;
 }
 
@@ -965,6 +974,7 @@ export interface EntityTemplateUpdate {
 export interface EntityTypeCreate {
   defaultTemplateId: string;
   icon: string;
+  isContainer: boolean;
   isLocation: boolean;
   name: string;
 }
@@ -976,6 +986,7 @@ export interface EntityTypeSummary {
   description: string;
   icon: string;
   id: string;
+  isContainer: boolean;
   isLocation: boolean;
   name: string;
   updatedAt: Date | string;
@@ -985,6 +996,7 @@ export interface EntityTypeUpdate {
   defaultTemplateId: string;
   icon: string;
   id: string;
+  isContainer: boolean;
   isLocation: boolean;
   name: string;
 }
@@ -1339,6 +1351,21 @@ export interface ChangePassword {
 
 export interface CreateRequest {
   name: string;
+}
+
+export interface EntityTemplateBatchCreateRequest {
+  /**
+   * @min 1
+   * @max 100
+   */
+  count: number;
+  entityTypeId: string;
+  /** @maxLength 240 */
+  namePrefix: string;
+  parentId: string;
+  /** @min 1 */
+  startNumber: number;
+  tagIds: string[];
 }
 
 export interface EntityTemplateCreateItemRequest {
