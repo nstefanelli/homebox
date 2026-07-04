@@ -28,6 +28,7 @@
   });
 
   const newLocation = ref<EntitySummary | null>(null);
+  const currentLocation = ref<EntitySummary | undefined>(undefined);
   const addTags = ref<string[]>([]);
   const removeTags = ref<string[]>([]);
 
@@ -57,6 +58,7 @@
       enabled.changeLocation = params.changeLocation ?? false;
       enabled.addTags = params.addTags ?? false;
       enabled.removeTags = params.removeTags ?? false;
+      currentLocation.value = params.currentLocation;
 
       if (params.changeLocation && params.items.length > 0) {
         // if all locations are the same then set the current location to said location
@@ -130,6 +132,8 @@
     enabled.addTags = false;
     enabled.removeTags = false;
     items.value = [];
+    newLocation.value = null;
+    currentLocation.value = undefined;
     addTags.value = [];
     removeTags.value = [];
     availableToAddTags.value = [];
@@ -144,7 +148,7 @@
       <DialogHeader>
         <DialogTitle>{{ $t("components.item.view.change_details.title") }}</DialogTitle>
       </DialogHeader>
-      <LocationSelector v-if="enabled.changeLocation" v-model="newLocation" />
+      <LocationSelector v-if="enabled.changeLocation" v-model="newLocation" :current-location="currentLocation" />
       <TagSelector
         v-if="enabled.addTags"
         v-model="addTags"

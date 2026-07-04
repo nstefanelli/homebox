@@ -74,6 +74,7 @@ export type DialogParamsMap = {
     changeLocation?: boolean;
     addTags?: boolean;
     removeTags?: boolean;
+    currentLocation?: EntitySummary;
   };
   [DialogID.CreateCollection]?: { redirectTo?: string };
   [DialogID.JoinCollection]?: { redirectTo?: string; inviteCode?: string };

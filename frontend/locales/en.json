@@ -799,7 +799,9 @@
     "pages": {
         "location": {
             "container_item_count": "{count} items",
-            "containers_here": "Containers here ({count})"
+            "containers_here": "Containers here ({count})",
+            "move": "Move",
+            "move_success": "Moved"
         },
         "templates": {
             "import_catalog": "Import container catalog",

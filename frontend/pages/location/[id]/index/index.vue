@@ -10,6 +10,7 @@
   import MdiPlus from "~icons/mdi/plus";
   import MdiPencil from "~icons/mdi/pencil";
   import MdiDelete from "~icons/mdi/delete";
+  import MdiArrowRight from "~icons/mdi/arrow-right";
   import { useDialog } from "@/components/ui/dialog-provider";
   import { Card } from "@/components/ui/card";
   import {
@@ -52,7 +53,7 @@
 
   const locationId = computed<string>(() => route.params.id as string);
 
-  const { data: location } = useAsyncData(locationId.value, async () => {
+  const { data: location, refresh: refreshLocation } = useAsyncData(locationId.value, async () => {
     const { data, error } = await api.items.getLocation(locationId.value);
     if (error) {
       toast.error(t("locations.toast.failed_load_location"));
@@ -91,6 +92,19 @@
 
   function goToEdit() {
     navigateTo(`/location/${locationId.value}/edit`);
+  }
+
+  function openMove() {
+    if (!location.value) return;
+    openDialog(DialogID.ItemChangeDetails, {
+      params: { items: [location.value], changeLocation: true, currentLocation: location.value },
+      onClose: result => {
+        if (result) {
+          toast.success(t("pages.location.move_success"));
+          refreshLocation();
+        }
+      },
+    });
   }
 
   // Photos
@@ -371,6 +385,12 @@
                 <MdiPencil name="mdi-pencil" />
                 <span class="hidden md:inline">
                   {{ $t("global.edit") }}
+                </span>
+              </Button>
+              <Button class="w-9 md:w-auto" variant="outline" @click="openMove">
+                <MdiArrowRight name="mdi-arrow-right" />
+                <span class="hidden md:inline">
+                  {{ $t("pages.location.move") }}
                 </span>
               </Button>
               <Button variant="destructive" class="w-9 md:w-auto" @click="confirmDelete()">
