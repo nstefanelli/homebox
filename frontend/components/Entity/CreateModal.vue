@@ -673,7 +673,11 @@
       const prefix = form.name;
       const created: EntityOut[] = [];
 
-      for (let i = 1; i <= (form.count ?? 1); i++) {
+      // Clamp client-side, mirroring the 1-100 bound the template-based batch
+      // path already gets server-side.
+      const count = Math.min(100, Math.max(1, Math.floor(form.count ?? 1)));
+
+      for (let i = 1; i <= count; i++) {
         const { data: createdOne, error } = await api.items.createLocation({
           name: `${prefix} ${String(i).padStart(2, "0")}`,
           description: form.description,
