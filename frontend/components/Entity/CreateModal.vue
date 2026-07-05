@@ -627,7 +627,7 @@
         count: form.count ?? 1,
         namePrefix: form.name,
         startNumber: 0, // 0 = backend infers next number from existing "<prefix> NN" names
-        parentId: form.location?.id ?? "",
+        parentId: (form.location?.id || null) as string,
         entityTypeId: selectedEntityType.value?.id || "",
         tagIds: form.tags,
       });
@@ -678,7 +678,7 @@
           name: `${prefix} ${String(i).padStart(2, "0")}`,
           description: form.description,
           quantity: 1,
-          parentId: form.location?.id ?? "",
+          parentId: form.location?.id || null,
           entityTypeId: selectedEntityType.value?.id || "",
           tagIds: form.tags,
         });
