@@ -145,7 +145,7 @@ func parseAnalyzeResults(raw string) ([]AnalyzeResult, error) {
 
 	results := make([]AnalyzeResult, 0, len(probes))
 	for _, p := range probes {
-		if p.AnalyzeResult.Name == "" {
+		if p.Name == "" {
 			continue
 		}
 		res := p.AnalyzeResult

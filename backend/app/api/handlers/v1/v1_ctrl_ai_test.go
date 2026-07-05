@@ -145,7 +145,7 @@ func TestHandleAnalyzeBulk_Success(t *testing.T) {
 	assert.Equal(t, "vision-bulk", resp.Lane)
 	require.Len(t, resp.Candidates, 1)
 	assert.Equal(t, "Camping Stove", resp.Candidates[0].Name)
-	assert.Equal(t, float64(1), resp.Candidates[0].Quantity)
+	assert.InDelta(t, float64(1), resp.Candidates[0].Quantity, 0.001)
 	assert.Equal(t, []string{"camping"}, resp.Candidates[0].CategoryHints)
 }
 

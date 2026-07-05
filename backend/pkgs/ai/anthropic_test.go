@@ -32,7 +32,7 @@ func TestAnthropic_Success(t *testing.T) {
 		gotPath = r.URL.Path
 		assert.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
 		resp, _ := json.Marshal(map[string]any{
-			"content": []map[string]any{{"type": "text", "text": goodReply}},
+			jsonFieldContent: []map[string]any{{"type": "text", "text": goodReply}},
 		})
 		_, _ = w.Write(resp)
 	})
@@ -48,7 +48,7 @@ func TestAnthropic_Success(t *testing.T) {
 
 	// image block must be base64-typed with the right media type
 	msgs := gotBody["messages"].([]any)
-	content := msgs[0].(map[string]any)["content"].([]any)
+	content := msgs[0].(map[string]any)[jsonFieldContent].([]any)
 	img := content[0].(map[string]any)
 	assert.Equal(t, "image", img["type"])
 	src := img["source"].(map[string]any)
@@ -68,7 +68,7 @@ func TestAnthropic_HTTPErrorStatus(t *testing.T) {
 
 func TestAnthropic_NoTextBlockErrors(t *testing.T) {
 	p := anthropicServer(t, func(w http.ResponseWriter, r *http.Request) {
-		resp, _ := json.Marshal(map[string]any{"content": []map[string]any{}})
+		resp, _ := json.Marshal(map[string]any{jsonFieldContent: []map[string]any{}})
 		_, _ = w.Write(resp)
 	})
 
@@ -79,11 +79,11 @@ func TestAnthropic_NoTextBlockErrors(t *testing.T) {
 func TestAnthropic_AnalyzeContents_Success(t *testing.T) {
 	var gotBody map[string]any
 	p := anthropicServer(t, func(w http.ResponseWriter, r *http.Request) {
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		assert.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
 		resp, _ := json.Marshal(map[string]any{
-			"content": []map[string]any{{"type": "text", "text": goodBulkReply}},
+			jsonFieldContent: []map[string]any{{"type": "text", "text": goodBulkReply}},
 		})
-		w.Write(resp)
+		_, _ = w.Write(resp)
 	})
 
 	res, err := p.AnalyzeContents(context.Background(), []byte{1}, "image/jpeg")

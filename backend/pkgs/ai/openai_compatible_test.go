@@ -28,7 +28,7 @@ func oaiServer(t *testing.T, handler http.HandlerFunc) (*httptest.Server, *opena
 
 func oaiChatResponse(content string) []byte {
 	b, _ := json.Marshal(map[string]any{
-		"choices": []map[string]any{{"message": map[string]any{"content": content}}},
+		"choices": []map[string]any{{"message": map[string]any{jsonFieldContent: content}}},
 	})
 	return b
 }
@@ -110,8 +110,8 @@ const goodBulkReply = `[{"name":"Camping Stove","description":"Green stove.","ma
 func TestOpenAICompatible_AnalyzeContents_Success(t *testing.T) {
 	var gotBody map[string]any
 	_, p := oaiServer(t, func(w http.ResponseWriter, r *http.Request) {
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
-		w.Write(oaiChatResponse(goodBulkReply))
+		assert.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		_, _ = w.Write(oaiChatResponse(goodBulkReply))
 	})
 
 	res, err := p.AnalyzeContents(context.Background(), []byte{1}, "image/jpeg")
@@ -123,7 +123,7 @@ func TestOpenAICompatible_AnalyzeContents_Success(t *testing.T) {
 	// bulk prompt, not the single-item prompt
 	msgs := gotBody["messages"].([]any)
 	sys := msgs[0].(map[string]any)
-	assert.Contains(t, sys["content"], "OPEN CONTAINER")
+	assert.Contains(t, sys[jsonFieldContent], "OPEN CONTAINER")
 }
 
 func TestOpenAICompatible_AnalyzeContents_RepairRetryRecovers(t *testing.T) {
@@ -131,10 +131,10 @@ func TestOpenAICompatible_AnalyzeContents_RepairRetryRecovers(t *testing.T) {
 	_, p := oaiServer(t, func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		if calls == 1 {
-			w.Write(oaiChatResponse("I can see a stove and some rope!"))
+			_, _ = w.Write(oaiChatResponse("I can see a stove and some rope!"))
 			return
 		}
-		w.Write(oaiChatResponse(goodBulkReply))
+		_, _ = w.Write(oaiChatResponse(goodBulkReply))
 	})
 
 	res, err := p.AnalyzeContents(context.Background(), []byte{1}, "image/jpeg")

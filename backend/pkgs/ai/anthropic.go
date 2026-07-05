@@ -17,6 +17,7 @@ import (
 const anthropicDefaultBaseURL = "https://api.anthropic.com"
 
 const jsonSchemaTypeString = "string"
+const jsonFieldContent = "content"
 
 // anthropicProvider talks to Anthropic's /v1/messages API directly
 // (image content blocks, output_config structured outputs, x-api-key auth).
@@ -63,12 +64,12 @@ var analyzeResultsArraySchema = map[string]any{
 	"items": map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"name":           map[string]any{"type": "string"},
-			"description":    map[string]any{"type": "string"},
-			"manufacturer":   map[string]any{"type": "string"},
-			"model_number":   map[string]any{"type": "string"},
+			"name":           map[string]any{"type": jsonSchemaTypeString},
+			"description":    map[string]any{"type": jsonSchemaTypeString},
+			"manufacturer":   map[string]any{"type": jsonSchemaTypeString},
+			"model_number":   map[string]any{"type": jsonSchemaTypeString},
 			"quantity":       map[string]any{"type": "number"},
-			"category_hints": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"category_hints": map[string]any{"type": "array", "items": map[string]any{"type": jsonSchemaTypeString}},
 			"confidence":     map[string]any{"type": "number"},
 		},
 		"required":             []string{"name", "description", "manufacturer", "model_number", "quantity", "category_hints", "confidence"},
@@ -100,7 +101,7 @@ func (p *anthropicProvider) message(ctx context.Context, imageBytes []byte, mime
 		"system":     system,
 		"messages": []map[string]any{{
 			"role": "user",
-			"content": []map[string]any{
+			jsonFieldContent: []map[string]any{
 				{"type": "image", "source": map[string]string{
 					"type": "base64", "media_type": mimeType,
 					"data": base64.StdEncoding.EncodeToString(imageBytes),
