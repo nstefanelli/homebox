@@ -301,6 +301,23 @@
             }
         },
         "location": {
+            "bulk_catalog": {
+                "title": "Catalog contents of {name}",
+                "add_photo": "Add photo",
+                "photo_group": "Photo {n}",
+                "no_items_found": "No items identified in that photo — try a closer shot or better lighting.",
+                "card_name": "Name",
+                "card_description": "Description",
+                "card_quantity": "Qty",
+                "possible_duplicate": "Possible duplicate",
+                "created": "Created",
+                "failed": "Failed",
+                "retry": "Retry",
+                "create_n": "Create {n} items",
+                "analyze_failed": "Couldn't analyze that photo — try again.",
+                "created_summary": "{created} items created{failed, plural, =0 {} other {, {failed} failed}}",
+                "discard_confirm": "Discard {n} unreviewed candidates?"
+            },
             "selector": {
                 "clear": "Clear Location Selection",
                 "no_location_found": "No location found",
