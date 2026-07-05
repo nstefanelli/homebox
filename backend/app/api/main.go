@@ -62,6 +62,22 @@ func build() string {
 	return fmt.Sprintf("%s, commit %s, built at %s", version, short, buildTime)
 }
 
+// validateAIProviderEnvConfig warns (does not abort) when HBOX_AI_PROVIDER is
+// set to something IntegrationsService.EffectiveAI won't recognize. Unlike
+// validatePostgresSSLMode, this can't fail fast: AI provider resolution is
+// deliberately per-request (group config layered over env, see
+// resolveAIProvider/EffectiveAI), so an unrecognized env value only ever
+// surfaces as a runtime error on the first request that falls through to it,
+// by design. "disabled" is a group-only value with no env equivalent — env
+// has no "force off" state, only "unset" ("").
+func validateAIProviderEnvConfig(provider string) {
+	switch provider {
+	case "", services.AIProviderOpenAICompatible, services.AIProviderAnthropic:
+		return
+	}
+	log.Warn().Msgf("unknown HBOX_AI_PROVIDER %q — AI features will error at request time", provider)
+}
+
 func validatePostgresSSLMode(sslMode string) bool {
 	validModes := map[string]bool{
 		"":            true,
@@ -122,6 +138,8 @@ func run(cfg *config.Config) error {
 	}
 	hasher.SetAPIKeyPepper([]byte(cfg.Auth.APIKeyPepper))
 
+	validateAIProviderEnvConfig(cfg.AI.Provider)
+
 	// =========================================================================
 	// Initialize OpenTelemetry
 	otelProvider, err := otel.NewProvider(context.Background(), &cfg.Otel, version)
@@ -180,6 +198,7 @@ func run(cfg *config.Config) error {
 		services.WithNotifierConfig(&cfg.Notifier),
 		services.WithExportPlumbing(app.bus, app.db, cfg.Storage, cfg.Database.PubSubConnString, sqlDialect),
 		services.WithMailer(&app.mailer),
+		services.WithIntegrationsConfig(cfg.AI, cfg.Barcode),
 	)
 
 	ensureAssetIDs(app)

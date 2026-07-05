@@ -55,6 +55,43 @@ const docTemplate = `{
                 }
             }
         },
+        "/v1/actions/analyze-photo-bulk": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Identifies every distinct item in a photo of an open container using the configured vision AI provider",
+                "consumes": [
+                    "multipart/form-data"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Actions"
+                ],
+                "summary": "Analyze Container Contents Photo",
+                "parameters": [
+                    {
+                        "type": "file",
+                        "description": "Photo of an open container/shelf (JPEG/PNG/WebP)",
+                        "name": "file",
+                        "in": "formData",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/v1.AnalyzeBulkResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/v1/actions/create-missing-thumbnails": {
             "post": {
                 "security": [
@@ -1524,6 +1561,114 @@ const docTemplate = `{
                             "items": {
                                 "$ref": "#/definitions/repo.Group"
                             }
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/groups/integrations": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Group"
+                ],
+                "summary": "Get Group Integrations",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/v1.GroupIntegrationsOut"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Owner-only. Body = types.GroupIntegrations. Secret fields use write-only sentinel semantics: incoming \"[REDACTED]\" keeps the stored value, \"\" clears it, anything else replaces it.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Group"
+                ],
+                "summary": "Update Group Integrations",
+                "parameters": [
+                    {
+                        "description": "Group Integrations",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/types.GroupIntegrations"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/v1.GroupIntegrationsOut"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/groups/integrations/test-ai": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Owner-only. Resolves the effective AI config and attempts a real round-trip against the configured provider using a fixed small test image, under a 30s timeout. Always 200; ok/detail report the outcome. detail is a sanitized, coarse string — never the raw provider error.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Group"
+                ],
+                "summary": "Test Group AI Integration",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/v1.TestConnectionResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/groups/integrations/test-barcode": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Owner-only. Resolves the effective barcode config and attempts a real lookup against barcodespider.com for a fixed, stable EAN. Always 200; ok/detail report the outcome. detail is a sanitized, coarse string — never the raw error.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Group"
+                ],
+                "summary": "Test Group Barcode Integration",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/v1.TestConnectionResponse"
                         }
                     }
                 }
@@ -6583,6 +6728,30 @@ const docTemplate = `{
                 "TypeTime"
             ]
         },
+        "types.GroupIntegrations": {
+            "type": "object",
+            "properties": {
+                "aiApiKey": {
+                    "type": "string"
+                },
+                "aiBaseUrl": {
+                    "type": "string"
+                },
+                "aiModel": {
+                    "type": "string"
+                },
+                "aiProvider": {
+                    "description": "\"\" inherit env | \"disabled\" force off | \"openai_compatible\" | \"anthropic\"",
+                    "type": "string"
+                },
+                "barcodeTokenBarcodespider": {
+                    "type": "string"
+                },
+                "openFoodFactsContact": {
+                    "type": "string"
+                }
+            }
+        },
         "usergroup.Role": {
             "type": "string",
             "enum": [
@@ -6648,6 +6817,20 @@ const docTemplate = `{
                 }
             }
         },
+        "v1.AnalyzeBulkResponse": {
+            "type": "object",
+            "properties": {
+                "candidates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/v1.BulkItemCandidate"
+                    }
+                },
+                "lane": {
+                    "type": "string"
+                }
+            }
+        },
         "v1.AnalyzePhotoResponse": {
             "type": "object",
             "properties": {
@@ -6682,6 +6865,35 @@ const docTemplate = `{
                 },
                 "version": {
                     "type": "string"
+                }
+            }
+        },
+        "v1.BulkItemCandidate": {
+            "type": "object",
+            "properties": {
+                "categoryHints": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "confidence": {
+                    "type": "number"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "manufacturer": {
+                    "type": "string"
+                },
+                "modelNumber": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "quantity": {
+                    "type": "number"
                 }
             }
         },
@@ -6797,6 +7009,48 @@ const docTemplate = `{
                 }
             }
         },
+        "v1.GroupIntegrationsOut": {
+            "type": "object",
+            "properties": {
+                "aiApiKey": {
+                    "type": "string"
+                },
+                "aiBaseUrl": {
+                    "type": "string"
+                },
+                "aiConfigured": {
+                    "type": "boolean"
+                },
+                "aiModel": {
+                    "type": "string"
+                },
+                "aiProvider": {
+                    "description": "\"\" inherit env | \"disabled\" force off | \"openai_compatible\" | \"anthropic\"",
+                    "type": "string"
+                },
+                "barcodeTokenBarcodespider": {
+                    "type": "string"
+                },
+                "barcodespiderConfigured": {
+                    "type": "boolean"
+                },
+                "envAiBaseUrl": {
+                    "type": "string"
+                },
+                "envAiModel": {
+                    "type": "string"
+                },
+                "envAiProvider": {
+                    "type": "string"
+                },
+                "isOwner": {
+                    "type": "boolean"
+                },
+                "openFoodFactsContact": {
+                    "type": "string"
+                }
+            }
+        },
         "v1.GroupInvitation": {
             "type": "object",
             "properties": {
@@ -6895,6 +7149,17 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "enabled": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "v1.TestConnectionResponse": {
+            "type": "object",
+            "properties": {
+                "detail": {
+                    "type": "string"
+                },
+                "ok": {
                     "type": "boolean"
                 }
             }

@@ -388,6 +388,7 @@
     type PhotoPreview,
   } from "~/components/Form/photo-uploader";
   import { useEntityTypeStore } from "~~/stores/entityTypes";
+  import { useIntegrationsStore } from "~~/stores/integrations";
   import EntitySelector from "~/components/Entity/Selector.vue";
 
   const { t } = useI18n();
@@ -403,16 +404,10 @@
   const entityTypeStore = useEntityTypeStore();
 
   const api = useUserApi();
-  // Capability status is unauthenticated (mirrors LabelMaker.vue) -- useUserApi's
-  // client has no status() endpoint, so a dedicated public client is used here
-  // rather than overloading the authenticated `api` variable.
-  const pubApi = usePublicApi();
 
-  const { data: status } = useAsyncData(async () => {
-    const { data } = await pubApi.status();
-    return data;
-  });
-  const aiPhotoEnabled = computed(() => status.value?.aiPhotoAnalysis || false);
+  const integrationsStore = useIntegrationsStore();
+  integrationsStore.ensureFetched();
+  const aiPhotoEnabled = computed(() => integrationsStore.aiConfigured);
 
   const aiPhotoInput = ref<HTMLInputElement | null>(null);
   const aiLoading = ref(false);

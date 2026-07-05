@@ -2183,6 +2183,23 @@ definitions:
     - TypeNumber
     - TypeBoolean
     - TypeTime
+  types.GroupIntegrations:
+    properties:
+      aiApiKey:
+        type: string
+      aiBaseUrl:
+        type: string
+      aiModel:
+        type: string
+      aiProvider:
+        description: '"" inherit env | "disabled" force off | "openai_compatible"
+          | "anthropic"'
+        type: string
+      barcodeTokenBarcodespider:
+        type: string
+      openFoodFactsContact:
+        type: string
+    type: object
   usergroup.Role:
     enum:
     - user
@@ -2227,6 +2244,15 @@ definitions:
       completed:
         type: integer
     type: object
+  v1.AnalyzeBulkResponse:
+    properties:
+      candidates:
+        items:
+          $ref: '#/definitions/v1.BulkItemCandidate'
+        type: array
+      lane:
+        type: string
+    type: object
   v1.AnalyzePhotoResponse:
     properties:
       categoryHints:
@@ -2250,6 +2276,25 @@ definitions:
         type: string
       version:
         type: string
+    type: object
+  v1.BulkItemCandidate:
+    properties:
+      categoryHints:
+        items:
+          type: string
+        type: array
+      confidence:
+        type: number
+      description:
+        type: string
+      manufacturer:
+        type: string
+      modelNumber:
+        type: string
+      name:
+        type: string
+      quantity:
+        type: number
     type: object
   v1.ChangePassword:
     properties:
@@ -2329,6 +2374,35 @@ definitions:
       name:
         type: string
     type: object
+  v1.GroupIntegrationsOut:
+    properties:
+      aiApiKey:
+        type: string
+      aiBaseUrl:
+        type: string
+      aiConfigured:
+        type: boolean
+      aiModel:
+        type: string
+      aiProvider:
+        description: '"" inherit env | "disabled" force off | "openai_compatible"
+          | "anthropic"'
+        type: string
+      barcodeTokenBarcodespider:
+        type: string
+      barcodespiderConfigured:
+        type: boolean
+      envAiBaseUrl:
+        type: string
+      envAiModel:
+        type: string
+      envAiProvider:
+        type: string
+      isOwner:
+        type: boolean
+      openFoodFactsContact:
+        type: string
+    type: object
   v1.GroupInvitation:
     properties:
       expiresAt:
@@ -2395,6 +2469,13 @@ definitions:
   v1.TelemetryStatus:
     properties:
       enabled:
+        type: boolean
+    type: object
+  v1.TestConnectionResponse:
+    properties:
+      detail:
+        type: string
+      ok:
         type: boolean
     type: object
   v1.TokenResponse:
@@ -2467,6 +2548,30 @@ paths:
       security:
       - Bearer: []
       summary: Analyze Item Photo
+      tags:
+      - Actions
+  /v1/actions/analyze-photo-bulk:
+    post:
+      consumes:
+      - multipart/form-data
+      description: Identifies every distinct item in a photo of an open container
+        using the configured vision AI provider
+      parameters:
+      - description: Photo of an open container/shelf (JPEG/PNG/WebP)
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/v1.AnalyzeBulkResponse'
+      security:
+      - Bearer: []
+      summary: Analyze Container Contents Photo
       tags:
       - Actions
   /v1/actions/create-missing-thumbnails:
@@ -3378,6 +3483,79 @@ paths:
       security:
       - Bearer: []
       summary: Get All Groups
+      tags:
+      - Group
+  /v1/groups/integrations:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/v1.GroupIntegrationsOut'
+      security:
+      - Bearer: []
+      summary: Get Group Integrations
+      tags:
+      - Group
+    put:
+      description: 'Owner-only. Body = types.GroupIntegrations. Secret fields use
+        write-only sentinel semantics: incoming "[REDACTED]" keeps the stored value,
+        "" clears it, anything else replaces it.'
+      parameters:
+      - description: Group Integrations
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/types.GroupIntegrations'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/v1.GroupIntegrationsOut'
+      security:
+      - Bearer: []
+      summary: Update Group Integrations
+      tags:
+      - Group
+  /v1/groups/integrations/test-ai:
+    post:
+      description: Owner-only. Resolves the effective AI config and attempts a real
+        round-trip against the configured provider using a fixed small test image,
+        under a 30s timeout. Always 200; ok/detail report the outcome. detail is a
+        sanitized, coarse string — never the raw provider error.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/v1.TestConnectionResponse'
+      security:
+      - Bearer: []
+      summary: Test Group AI Integration
+      tags:
+      - Group
+  /v1/groups/integrations/test-barcode:
+    post:
+      description: Owner-only. Resolves the effective barcode config and attempts
+        a real lookup against barcodespider.com for a fixed, stable EAN. Always 200;
+        ok/detail report the outcome. detail is a sanitized, coarse string — never
+        the raw error.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/v1.TestConnectionResponse'
+      security:
+      - Bearer: []
+      summary: Test Group Barcode Integration
       tags:
       - Group
   /v1/groups/invitations:

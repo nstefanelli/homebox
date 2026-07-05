@@ -301,6 +301,23 @@
             }
         },
         "location": {
+            "bulk_catalog": {
+                "title": "Catalog contents of {name}",
+                "add_photo": "Add photo",
+                "photo_group": "Photo {n}",
+                "no_items_found": "No items identified in that photo — try a closer shot or better lighting.",
+                "card_name": "Name",
+                "card_description": "Description",
+                "card_quantity": "Qty",
+                "possible_duplicate": "Possible duplicate",
+                "created": "Created",
+                "failed": "Failed",
+                "retry": "Retry",
+                "create_n": "{n, plural, =1 {Create 1 item} other {Create {n} items}}",
+                "analyze_failed": "Couldn't analyze that photo — try again.",
+                "created_summary": "{created} items created{failed, plural, =0 {} other {, {failed} failed}}",
+                "discard_confirm": "Discard {n} unreviewed candidates?"
+            },
             "selector": {
                 "clear": "Clear Location Selection",
                 "no_location_found": "No location found",
@@ -812,6 +829,8 @@
     },
     "pages": {
         "location": {
+            "catalog_contents": "Catalog contents",
+            "catalog_success": "{count} items cataloged",
             "container_item_count": "{count} items",
             "containers_here": "Containers here ({count})",
             "empty_container": "Empty container",
@@ -858,6 +877,35 @@
         "group_settings": "Group Settings",
         "group_settings_sub": "Shared Group Settings. You may need to refresh your browser for some settings to apply.",
         "inactive": "Inactive",
+        "integrations": {
+            "ai_section_title": "AI Photo Analysis",
+            "api_key_label": "API Key",
+            "barcode_token_label": "Barcodespider Token",
+            "base_url_label": "Base URL",
+            "clear_field": "Clear",
+            "env_hint": "Server default: {provider} @ {baseUrl}",
+            "env_hint_with_model": "Server default: {provider} @ {baseUrl} — {model}",
+            "model_label": "Model",
+            "off_contact_label": "OpenFoodFacts Contact",
+            "owner_only_notice": "Only the group owner can edit integration settings. Other members can view them.",
+            "provider_anthropic": "Anthropic",
+            "provider_disabled": "Disabled",
+            "provider_inherit": "Inherit server default",
+            "provider_label": "Provider",
+            "provider_openai_compatible": "OpenAI-compatible",
+            "save": "Save Integrations",
+            "secret_saved_placeholder": "•••••••• saved — type to replace",
+            "subtitle": "Configure AI photo analysis and barcode lookup for this collection.",
+            "test": "Test",
+            "title": "Integrations",
+            "toast": {
+                "failed_load": "Failed to load integrations settings",
+                "failed_save": "Failed to save integrations settings",
+                "saved": "Integrations settings saved",
+                "test_failed": "Test failed"
+            },
+            "upc_section_title": "Barcode Lookup"
+        },
         "language": "Language",
         "legacy_image_fit": "{ currentValue, select, true {Disable Legacy Fit: Fit Image with Bars} false {Enable Legacy Fit: Fill Image with Crop} other {Not Hit}}",
         "moved_notice_body": "Notifiers, invites, and currency settings have been moved to the collection pages.",

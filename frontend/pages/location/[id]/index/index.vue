@@ -11,6 +11,7 @@
   import MdiPencil from "~icons/mdi/pencil";
   import MdiDelete from "~icons/mdi/delete";
   import MdiArrowRight from "~icons/mdi/arrow-right";
+  import MdiCameraPlusOutline from "~icons/mdi/camera-plus-outline";
   import { useDialog } from "@/components/ui/dialog-provider";
   import { Card } from "@/components/ui/card";
   import {
@@ -38,6 +39,7 @@
   import ItemImageDialog from "~/components/Item/ImageDialog.vue";
   import LocationCard from "~/components/Location/Card.vue";
   import TagChip from "~/components/Tag/Chip.vue";
+  import { useIntegrationsStore } from "~~/stores/integrations";
 
   definePageMeta({
     middleware: ["auth"],
@@ -50,6 +52,10 @@
   const route = useRoute();
   const api = useUserApi();
   const preferences = useViewPreferences();
+
+  const integrationsStore = useIntegrationsStore();
+  integrationsStore.ensureFetched();
+  const aiPhotoEnabled = computed(() => integrationsStore.aiConfigured);
 
   const locationId = computed<string>(() => route.params.id as string);
 
@@ -114,6 +120,21 @@
       onClose: result => {
         if (result) {
           toast.success(t("pages.location.empty_success"));
+          refreshItemList();
+          refreshLocation();
+          refreshContainersHere();
+        }
+      },
+    });
+  }
+
+  function openBulkCatalog() {
+    if (!location.value) return;
+    openDialog(DialogID.BulkCatalog, {
+      params: { containerId: location.value.id, containerName: location.value.name },
+      onClose: result => {
+        if (result) {
+          toast.success(t("pages.location.catalog_success", { count: result.created }));
           refreshItemList();
           refreshLocation();
           refreshContainersHere();
@@ -460,6 +481,12 @@
                 <MdiPackageVariantClosedRemove name="mdi-package-variant-closed-remove" />
                 <span class="hidden md:inline">
                   {{ $t("pages.location.empty_container") }}
+                </span>
+              </Button>
+              <Button v-if="aiPhotoEnabled" class="w-9 md:w-auto" variant="outline" @click="openBulkCatalog">
+                <MdiCameraPlusOutline name="mdi-camera-plus-outline" />
+                <span class="hidden md:inline">
+                  {{ $t("pages.location.catalog_contents") }}
                 </span>
               </Button>
               <Button variant="destructive" class="w-9 md:w-auto" @click="confirmDelete()">

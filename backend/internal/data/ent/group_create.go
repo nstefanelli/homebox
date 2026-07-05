@@ -20,6 +20,7 @@ import (
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/notifier"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/tag"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/user"
+	"github.com/sysadminsmedia/homebox/backend/internal/data/types"
 )
 
 // GroupCreate is the builder for creating a Group entity.
@@ -73,6 +74,20 @@ func (_c *GroupCreate) SetCurrency(v string) *GroupCreate {
 func (_c *GroupCreate) SetNillableCurrency(v *string) *GroupCreate {
 	if v != nil {
 		_c.SetCurrency(*v)
+	}
+	return _c
+}
+
+// SetIntegrations sets the "integrations" field.
+func (_c *GroupCreate) SetIntegrations(v types.GroupIntegrations) *GroupCreate {
+	_c.mutation.SetIntegrations(v)
+	return _c
+}
+
+// SetNillableIntegrations sets the "integrations" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableIntegrations(v *types.GroupIntegrations) *GroupCreate {
+	if v != nil {
+		_c.SetIntegrations(*v)
 	}
 	return _c
 }
@@ -333,6 +348,10 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Currency(); ok {
 		_spec.SetField(group.FieldCurrency, field.TypeString, value)
 		_node.Currency = value
+	}
+	if value, ok := _c.mutation.Integrations(); ok {
+		_spec.SetField(group.FieldIntegrations, field.TypeJSON, value)
+		_node.Integrations = value
 	}
 	if nodes := _c.mutation.UsersIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{

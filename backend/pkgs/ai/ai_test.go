@@ -1,6 +1,8 @@
 package ai
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -62,4 +64,68 @@ func TestNewProvider_Selection(t *testing.T) {
 	_, err = NewProvider(config.AIConf{Provider: "bogus"})
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, ErrAIDisabled)
+}
+
+func TestParseAnalyzeResults_ValidArray(t *testing.T) {
+	raw := `[
+	  {"name":"Camping Stove","description":"Green two-burner stove.","manufacturer":"Coleman","model_number":"","quantity":1,"category_hints":["camping"],"confidence":0.9},
+	  {"name":"Propane Canister","description":"Small green canisters.","manufacturer":"","model_number":"","quantity":4,"category_hints":["camping","fuel"],"confidence":0.8}
+	]`
+
+	res, err := parseAnalyzeResults(raw)
+	require.NoError(t, err)
+	require.Len(t, res, 2)
+	assert.Equal(t, "Camping Stove", res[0].Name)
+	assert.InDelta(t, 4.0, res[1].Quantity, 0.001)
+}
+
+func TestParseAnalyzeResults_StripsFencesAndDefaults(t *testing.T) {
+	raw := "```json\n[{\"name\":\"Rope\",\"description\":\"\",\"manufacturer\":\"\",\"model_number\":\"\",\"category_hints\":[]}]\n```"
+
+	res, err := parseAnalyzeResults(raw)
+	require.NoError(t, err)
+	require.Len(t, res, 1)
+	assert.InDelta(t, 1.0, res[0].Quantity, 0.001)   // absent quantity -> 1
+	assert.InDelta(t, 0.5, res[0].Confidence, 0.001) // absent confidence -> 0.5
+}
+
+func TestParseAnalyzeResults_DropsNamelessElements(t *testing.T) {
+	raw := `[{"name":"Tarp"},{"description":"mystery blob with no name"}]`
+
+	res, err := parseAnalyzeResults(raw)
+	require.NoError(t, err)
+	require.Len(t, res, 1)
+	assert.Equal(t, "Tarp", res[0].Name)
+}
+
+func TestParseAnalyzeResults_AllNamelessErrors(t *testing.T) {
+	_, err := parseAnalyzeResults(`[{"description":"no name"}]`)
+	require.Error(t, err)
+}
+
+func TestParseAnalyzeResults_EmptyArrayOK(t *testing.T) {
+	res, err := parseAnalyzeResults(`[]`)
+	require.NoError(t, err)
+	assert.Empty(t, res)
+}
+
+func TestParseAnalyzeResults_OverCapErrors(t *testing.T) {
+	var sb strings.Builder
+	sb.WriteString("[")
+	for i := 0; i < 51; i++ {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		fmt.Fprintf(&sb, `{"name":"item %d"}`, i)
+	}
+	sb.WriteString("]")
+
+	_, err := parseAnalyzeResults(sb.String())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "implausible")
+}
+
+func TestParseAnalyzeResults_NotAnArrayErrors(t *testing.T) {
+	_, err := parseAnalyzeResults(`{"name":"single object not array"}`)
+	require.Error(t, err)
 }

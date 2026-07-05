@@ -1341,6 +1341,16 @@ export interface UserRegistration {
   token: string;
 }
 
+export interface TypesGroupIntegrations {
+  aiApiKey: string;
+  aiBaseUrl: string;
+  aiModel: string;
+  /** "" inherit env | "disabled" force off | "openai_compatible" | "anthropic" */
+  aiProvider: string;
+  barcodeTokenBarcodespider: string;
+  openFoodFactsContact: string;
+}
+
 export interface APISummary {
   aiPhotoAnalysis: boolean;
   allowRegistration: boolean;
@@ -1360,6 +1370,11 @@ export interface ActionAmountResult {
   completed: number;
 }
 
+export interface AnalyzeBulkResponse {
+  candidates: BulkItemCandidate[];
+  lane: string;
+}
+
 export interface AnalyzePhotoResponse {
   categoryHints: string[];
   confidence: number;
@@ -1371,6 +1386,16 @@ export interface Build {
   buildTime: string;
   commit: string;
   version: string;
+}
+
+export interface BulkItemCandidate {
+  categoryHints: string[];
+  confidence: number;
+  description: string;
+  manufacturer: string;
+  modelNumber: string;
+  name: string;
+  quantity: number;
 }
 
 export interface ChangePassword {
@@ -1425,6 +1450,22 @@ export interface GroupAcceptInvitationResponse {
   name: string;
 }
 
+export interface GroupIntegrationsOut {
+  aiApiKey: string;
+  aiBaseUrl: string;
+  aiConfigured: boolean;
+  aiModel: string;
+  /** "" inherit env | "disabled" force off | "openai_compatible" | "anthropic" */
+  aiProvider: string;
+  barcodeTokenBarcodespider: string;
+  barcodespiderConfigured: boolean;
+  envAiBaseUrl: string;
+  envAiModel: string;
+  envAiProvider: string;
+  isOwner: boolean;
+  openFoodFactsContact: string;
+}
+
 export interface GroupInvitation {
   expiresAt: Date | string;
   id: string;
@@ -1469,6 +1510,11 @@ export interface ResultsRepoExportOut {
 
 export interface TelemetryStatus {
   enabled: boolean;
+}
+
+export interface TestConnectionResponse {
+  detail: string;
+  ok: boolean;
 }
 
 export interface TokenResponse {

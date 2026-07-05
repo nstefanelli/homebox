@@ -14,6 +14,7 @@ export enum DialogID {
   ChangePassword = "changePassword",
   CreateApiKey = "create-api-key",
   CreateApiKeyResult = "create-api-key-result",
+  BulkCatalog = "bulk-catalog",
   CreateEntity = "create-entity",
   CreateTag = "create-tag",
   CreateCollection = "create-collection",
@@ -47,6 +48,7 @@ export enum DialogID {
  * - Keys not present       => no params allowed
  */
 export type DialogParamsMap = {
+  [DialogID.BulkCatalog]: { containerId: string; containerName: string };
   [DialogID.ItemImage]: (
     | {
         type: "preloaded";
@@ -84,6 +86,7 @@ export type DialogParamsMap = {
  * Defines the payload type for a dialog's onClose callback.
  */
 export type DialogResultMap = {
+  [DialogID.BulkCatalog]?: { created: number };
   [DialogID.ItemImage]?: { action: "delete"; id: string };
   [DialogID.EditMaintenance]?: boolean;
   [DialogID.ItemChangeDetails]?: boolean;

@@ -19,7 +19,6 @@ import (
 	docs "github.com/sysadminsmedia/homebox/backend/app/api/static/docs"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/authroles"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/repo"
-	"github.com/sysadminsmedia/homebox/backend/pkgs/ai"
 )
 
 const prefix = "/api"
@@ -41,15 +40,6 @@ func (a *app) debugRouter() *http.ServeMux {
 // registerRoutes registers all the routes for the API
 func (a *app) mountRoutes(r *chi.Mux, chain *errchain.ErrChain, repos *repo.AllRepos) error {
 	registerMimes()
-
-	var aiProvider ai.Provider
-	if a.conf.AI.Provider != "" {
-		var err error
-		aiProvider, err = ai.NewProvider(a.conf.AI)
-		if err != nil {
-			return fmt.Errorf("invalid HBOX_AI configuration: %w", err)
-		}
-	}
 
 	// Serve doc.json dynamically so the Swagger UI "Base URL" reflects the
 	// actual host of the user's instance rather than a hardcoded value.
@@ -138,6 +128,11 @@ func (a *app) mountRoutes(r *chi.Mux, chain *errchain.ErrChain, repos *repo.AllR
 		r.Put("/groups", chain.ToHandlerFunc(v1Ctrl.HandleGroupUpdate(), userMW...))
 		r.Delete("/groups", chain.ToHandlerFunc(v1Ctrl.HandleGroupDelete(), userMW...))
 
+		r.Get("/groups/integrations", chain.ToHandlerFunc(v1Ctrl.HandleIntegrationsGet(), userMW...))
+		r.Put("/groups/integrations", chain.ToHandlerFunc(v1Ctrl.HandleIntegrationsUpdate(), userMW...))
+		r.Post("/groups/integrations/test-ai", chain.ToHandlerFunc(v1Ctrl.HandleIntegrationsTestAI(), userMW...))
+		r.Post("/groups/integrations/test-barcode", chain.ToHandlerFunc(v1Ctrl.HandleIntegrationsTestBarcode(), userMW...))
+
 		r.Get("/groups/members", chain.ToHandlerFunc(v1Ctrl.HandleGroupMembersGetAll(), userMW...))
 		r.Delete("/groups/members/{user_id}", chain.ToHandlerFunc(v1Ctrl.HandleGroupMemberRemove(), userMW...))
 
@@ -167,9 +162,8 @@ func (a *app) mountRoutes(r *chi.Mux, chain *errchain.ErrChain, repos *repo.AllR
 		r.Post("/actions/create-missing-thumbnails", chain.ToHandlerFunc(v1Ctrl.HandleCreateMissingThumbnails(), userMW...))
 		r.Post("/actions/wipe-inventory", chain.ToHandlerFunc(v1Ctrl.HandleWipeInventory(), userMW...))
 
-		if aiProvider != nil {
-			r.Post("/actions/analyze-photo", chain.ToHandlerFunc(v1Ctrl.HandleAnalyzePhoto(aiProvider), userMW...))
-		}
+		r.Post("/actions/analyze-photo", chain.ToHandlerFunc(v1Ctrl.HandleAnalyzePhoto(), userMW...))
+		r.Post("/actions/analyze-photo-bulk", chain.ToHandlerFunc(v1Ctrl.HandleAnalyzeBulk(), userMW...))
 
 		// Tags endpoints
 		r.Get("/tags", chain.ToHandlerFunc(v1Ctrl.HandleTagsGetAll(), userMW...))
@@ -243,7 +237,7 @@ func (a *app) mountRoutes(r *chi.Mux, chain *errchain.ErrChain, repos *repo.AllR
 			a.mwRoles(RoleModeOr, authroles.RoleUser.String(), authroles.RoleAttachments.String()),
 		}
 
-		r.Get("/products/search-from-barcode", chain.ToHandlerFunc(v1Ctrl.HandleProductSearchFromBarcode(a.conf.Barcode), userMW...))
+		r.Get("/products/search-from-barcode", chain.ToHandlerFunc(v1Ctrl.HandleProductSearchFromBarcode(), userMW...))
 
 		r.Get("/qrcode", chain.ToHandlerFunc(v1Ctrl.HandleGenerateQRCode(), assetMW...))
 		r.Get(

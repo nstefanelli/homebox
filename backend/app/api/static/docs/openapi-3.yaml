@@ -36,6 +36,35 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/v1.AnalyzePhotoResponse"
+  /v1/actions/analyze-photo-bulk:
+    post:
+      security:
+        - Bearer: []
+      description: Identifies every distinct item in a photo of an open container
+        using the configured vision AI provider
+      tags:
+        - Actions
+      summary: Analyze Container Contents Photo
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  description: Photo of an open container/shelf (JPEG/PNG/WebP)
+                  type: string
+                  format: binary
+              required:
+                - file
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/v1.AnalyzeBulkResponse"
   /v1/actions/create-missing-thumbnails:
     post:
       security:
@@ -1003,6 +1032,79 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/repo.Group"
+  /v1/groups/integrations:
+    get:
+      security:
+        - Bearer: []
+      tags:
+        - Group
+      summary: Get Group Integrations
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/v1.GroupIntegrationsOut"
+    put:
+      security:
+        - Bearer: []
+      description: 'Owner-only. Body = types.GroupIntegrations. Secret fields use
+        write-only sentinel semantics: incoming "[REDACTED]" keeps the stored
+        value, "" clears it, anything else replaces it.'
+      tags:
+        - Group
+      summary: Update Group Integrations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/types.GroupIntegrations"
+        description: Group Integrations
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/v1.GroupIntegrationsOut"
+  /v1/groups/integrations/test-ai:
+    post:
+      security:
+        - Bearer: []
+      description: Owner-only. Resolves the effective AI config and attempts a real
+        round-trip against the configured provider using a fixed small test
+        image, under a 30s timeout. Always 200; ok/detail report the outcome.
+        detail is a sanitized, coarse string — never the raw provider error.
+      tags:
+        - Group
+      summary: Test Group AI Integration
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/v1.TestConnectionResponse"
+  /v1/groups/integrations/test-barcode:
+    post:
+      security:
+        - Bearer: []
+      description: Owner-only. Resolves the effective barcode config and attempts a
+        real lookup against barcodespider.com for a fixed, stable EAN. Always
+        200; ok/detail report the outcome. detail is a sanitized, coarse string
+        — never the raw error.
+      tags:
+        - Group
+      summary: Test Group Barcode Integration
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/v1.TestConnectionResponse"
   /v1/groups/invitations:
     get:
       security:
@@ -4411,6 +4513,23 @@ components:
         - TypeNumber
         - TypeBoolean
         - TypeTime
+    types.GroupIntegrations:
+      type: object
+      properties:
+        aiApiKey:
+          type: string
+        aiBaseUrl:
+          type: string
+        aiModel:
+          type: string
+        aiProvider:
+          description: '"" inherit env | "disabled" force off | "openai_compatible" |
+            "anthropic"'
+          type: string
+        barcodeTokenBarcodespider:
+          type: string
+        openFoodFactsContact:
+          type: string
     usergroup.Role:
       type: string
       enum:
@@ -4455,6 +4574,15 @@ components:
       properties:
         completed:
           type: integer
+    v1.AnalyzeBulkResponse:
+      type: object
+      properties:
+        candidates:
+          type: array
+          items:
+            $ref: "#/components/schemas/v1.BulkItemCandidate"
+        lane:
+          type: string
     v1.AnalyzePhotoResponse:
       type: object
       properties:
@@ -4479,6 +4607,25 @@ components:
           type: string
         version:
           type: string
+    v1.BulkItemCandidate:
+      type: object
+      properties:
+        categoryHints:
+          type: array
+          items:
+            type: string
+        confidence:
+          type: number
+        description:
+          type: string
+        manufacturer:
+          type: string
+        modelNumber:
+          type: string
+        name:
+          type: string
+        quantity:
+          type: number
     v1.ChangePassword:
       type: object
       properties:
@@ -4559,6 +4706,35 @@ components:
           type: string
         name:
           type: string
+    v1.GroupIntegrationsOut:
+      type: object
+      properties:
+        aiApiKey:
+          type: string
+        aiBaseUrl:
+          type: string
+        aiConfigured:
+          type: boolean
+        aiModel:
+          type: string
+        aiProvider:
+          description: '"" inherit env | "disabled" force off | "openai_compatible" |
+            "anthropic"'
+          type: string
+        barcodeTokenBarcodespider:
+          type: string
+        barcodespiderConfigured:
+          type: boolean
+        envAiBaseUrl:
+          type: string
+        envAiModel:
+          type: string
+        envAiProvider:
+          type: string
+        isOwner:
+          type: boolean
+        openFoodFactsContact:
+          type: string
     v1.GroupInvitation:
       type: object
       properties:
@@ -4626,6 +4802,13 @@ components:
       type: object
       properties:
         enabled:
+          type: boolean
+    v1.TestConnectionResponse:
+      type: object
+      properties:
+        detail:
+          type: string
+        ok:
           type: boolean
     v1.TokenResponse:
       type: object

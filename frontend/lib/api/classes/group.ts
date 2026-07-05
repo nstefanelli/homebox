@@ -3,9 +3,12 @@ import type {
   CurrenciesCurrency,
   Group,
   GroupAcceptInvitationResponse,
+  GroupIntegrationsOut,
   GroupInvitation,
   GroupInvitationCreate,
   GroupUpdate,
+  TestConnectionResponse,
+  TypesGroupIntegrations,
   UserSummary,
 } from "../types/data-contracts";
 
@@ -153,6 +156,43 @@ export class GroupApi extends BaseAPI {
   currencies() {
     return this.http.get<CurrenciesCurrency[]>({
       url: route("/currencies"),
+    });
+  }
+
+  /**
+   * Get the effective integrations config for the current group.
+   */
+  integrations() {
+    return this.http.get<GroupIntegrationsOut>({
+      url: route("/groups/integrations"),
+    });
+  }
+
+  /**
+   * Update the integrations config for the current group.
+   */
+  updateIntegrations(data: TypesGroupIntegrations) {
+    return this.http.put<TypesGroupIntegrations, GroupIntegrationsOut>({
+      url: route("/groups/integrations"),
+      body: data,
+    });
+  }
+
+  /**
+   * Test the current group's AI provider connection.
+   */
+  testAI() {
+    return this.http.post<null, TestConnectionResponse>({
+      url: route("/groups/integrations/test-ai"),
+    });
+  }
+
+  /**
+   * Test the current group's barcodespider connection.
+   */
+  testBarcode() {
+    return this.http.post<null, TestConnectionResponse>({
+      url: route("/groups/integrations/test-barcode"),
     });
   }
 }
