@@ -794,3 +794,21 @@ func TestEntityRepository_WipeInventory_OnlyItems(t *testing.T) {
 	// Cleanup
 	_ = tRepos.Tags.DeleteByGroup(context.Background(), tGroup.ID, tagObj.ID)
 }
+
+func TestEntityRepository_Create_PersistsIdentifications(t *testing.T) {
+	itemET := useItemEntityType(t)
+
+	itm := entityFactory()
+	itm.EntityTypeID = itemET.ID
+	itm.Manufacturer = "DeWalt"
+	itm.ModelNumber = "DCD771"
+
+	result, err := tRepos.Entities.Create(context.Background(), tGroup.ID, itm)
+	require.NoError(t, err)
+	assert.Equal(t, "DeWalt", result.Manufacturer)
+	assert.Equal(t, "DCD771", result.ModelNumber)
+
+	// Cleanup
+	err = tRepos.Entities.Delete(context.Background(), result.ID)
+	require.NoError(t, err)
+}

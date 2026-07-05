@@ -99,6 +99,10 @@ type (
 		AssetID      AssetID   `json:"-"`
 		EntityTypeID uuid.UUID `json:"entityTypeId"`
 
+		// Identifications
+		ModelNumber  string `json:"modelNumber"  validate:"max=255"`
+		Manufacturer string `json:"manufacturer" validate:"max=255"`
+
 		// Edges
 		TagIDs []uuid.UUID `json:"tagIds"`
 	}
@@ -1040,6 +1044,8 @@ func (r *EntityRepository) Create(ctx context.Context, gid uuid.UUID, data Entit
 		SetName(data.Name).
 		SetQuantity(data.Quantity).
 		SetDescription(data.Description).
+		SetModelNumber(data.ModelNumber).
+		SetManufacturer(data.Manufacturer).
 		SetGroupID(gid).
 		SetAssetID(int64(data.AssetID))
 
