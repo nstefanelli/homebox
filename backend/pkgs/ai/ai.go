@@ -33,6 +33,8 @@ func NewProvider(conf config.AIConf) (Provider, error) {
 	switch conf.Provider {
 	case "openai_compatible":
 		return newOpenAICompatibleProvider(conf), nil
+	case "anthropic":
+		return newAnthropicProvider(conf), nil
 	case "":
 		return nil, ErrAIDisabled
 	default:

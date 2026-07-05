@@ -52,6 +52,10 @@ func TestNewProvider_Selection(t *testing.T) {
 	require.NoError(t, err)
 	assert.IsType(t, &openaiCompatibleProvider{}, p)
 
+	p2, err := NewProvider(config.AIConf{Provider: "anthropic", APIKey: "k", Model: "m", TimeoutSeconds: 120})
+	require.NoError(t, err)
+	assert.IsType(t, &anthropicProvider{}, p2)
+
 	_, err = NewProvider(config.AIConf{Provider: ""})
 	assert.ErrorIs(t, err, ErrAIDisabled)
 
