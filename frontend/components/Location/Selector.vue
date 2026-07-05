@@ -43,6 +43,17 @@
                 @select="selectLocation(location as unknown as EntitySummary)"
               >
                 <Check :class="cn('mr-2 h-4 w-4', value?.id === location.id ? 'opacity-100' : 'opacity-0')" />
+                <component
+                  :is="
+                    resolveEntityIcon({
+                      icon: location.icon,
+                      typeIcon: location.typeIcon,
+                      isContainer: location.isContainer,
+                      isLocation: true,
+                    })
+                  "
+                  class="mr-2 size-4 shrink-0"
+                />
                 <div>
                   <div class="flex w-full">
                     {{ location.name }}
@@ -70,6 +81,7 @@
   import { cn } from "~/lib/utils";
   import type { EntitySummary } from "~~/lib/api/types/data-contracts";
   import { useFlatLocations } from "~~/composables/use-location-helpers";
+  import { resolveEntityIcon } from "~~/lib/icons";
 
   type Props = {
     modelValue?: EntitySummary | null;

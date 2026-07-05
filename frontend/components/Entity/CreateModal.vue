@@ -194,7 +194,25 @@
         :no-results-text="$t('components.entity.create_modal.item_selector_no_results_text')"
         :is-loading="isLoading"
         :trigger-search="triggerSearch"
-      />
+      >
+        <template #display="{ item }">
+          <span class="flex items-center gap-2">
+            <component
+              :is="
+                resolveEntityIcon({
+                  icon: asEntitySummary(item).icon,
+                  typeIcon: asEntitySummary(item).entityType?.icon,
+                  isContainer: asEntitySummary(item).entityType?.isContainer,
+                  isLocation: true,
+                })
+              "
+              v-if="asEntitySummary(item).entityType?.isLocation"
+              class="size-4 shrink-0"
+            />
+            {{ asEntitySummary(item).name }}
+          </span>
+        </template>
+      </ItemSelector>
       <FormTextField
         ref="nameInput"
         v-model="form.name"
@@ -313,6 +331,7 @@
   import type {
     BarcodeProduct,
     EntityCreate,
+    EntitySummary,
     EntityTemplateOut,
     EntityTemplateSummary,
     EntityOut,
@@ -332,6 +351,7 @@
   import MdiLoading from "~icons/mdi/loading";
   import { Badge } from "~/components/ui/badge";
   import { detectProductBarcode } from "~~/lib/barcode/from-file";
+  import { resolveEntityIcon } from "~~/lib/icons";
   import { matchHintToTag } from "~~/lib/ai/hints";
   import { AttachmentTypes } from "~~/lib/api/types/non-generated";
   import { useDialog, useDialogHotkey } from "~/components/ui/dialog-provider";
@@ -396,6 +416,13 @@
   const parent = ref();
   const { query, results, isLoading, triggerSearch } = useItemSearch(api, { immediate: false });
   const subItemCreate = ref();
+
+  // ItemSelector's #display slot types `item` as `string | ItemsObject` (its generic prop
+  // shape); the parent-item search results are always EntitySummary in practice, so narrow
+  // via `unknown` (a direct cast doesn't type-check — the two types don't sufficiently overlap).
+  function asEntitySummary(item: unknown): EntitySummary {
+    return item as unknown as EntitySummary;
+  }
 
   const tagId = computed(() => {
     if (route.fullPath.includes("/tag/")) {

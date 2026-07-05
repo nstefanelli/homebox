@@ -5,8 +5,7 @@
   import { filterZeroValues } from "~~/components/global/DetailsSection/types";
   import type { ItemAttachment } from "~~/lib/api/types/data-contracts";
   import { useLabelPrintQueue, type PrintQueueEntry } from "~~/stores/labels";
-  import MdiPackageVariant from "~icons/mdi/package-variant";
-  import MdiPackageVariantClosed from "~icons/mdi/package-variant-closed";
+  import { resolveEntityIcon } from "~~/lib/icons";
   import MdiPackageVariantClosedRemove from "~icons/mdi/package-variant-closed-remove";
   import MdiPlus from "~icons/mdi/plus";
   import MdiPencil from "~icons/mdi/pencil";
@@ -294,6 +293,27 @@
     () => !!location.value?.entityType?.isContainer && emptyableChildren.value.length > 0
   );
 
+  // Same vue-tsc ref-unwrap quirk as above — resolve icons here rather than referencing
+  // `location.icon`/`location.entityType`/`location.parent` directly in the template.
+  const locationIcon = computed(() =>
+    resolveEntityIcon({
+      icon: location.value?.icon,
+      typeIcon: location.value?.entityType?.icon,
+      isContainer: location.value?.entityType?.isContainer,
+      isLocation: true,
+    })
+  );
+
+  const parentLocationIcon = computed(() => {
+    const parent = location.value?.parent;
+    return resolveEntityIcon({
+      icon: parent?.icon,
+      typeIcon: parent?.entityType?.icon,
+      isContainer: parent?.entityType?.isContainer,
+      isLocation: true,
+    });
+  });
+
   const printQueue = useLabelPrintQueue();
   const printIncludeItems = ref(false);
 
@@ -373,7 +393,7 @@
             <div
               class="mb-auto flex size-12 items-center justify-center rounded-full bg-secondary text-secondary-foreground"
             >
-              <MdiPackageVariant class="size-7" />
+              <component :is="locationIcon" class="size-7" />
             </div>
             <div>
               <Breadcrumb v-if="location?.parent">
@@ -381,6 +401,7 @@
                   <BreadcrumbItem>
                     <BreadcrumbLink as-child class="text-foreground/70 hover:underline">
                       <NuxtLink :to="`/location/${location.parent.id}`">
+                        <component :is="parentLocationIcon" class="mr-1 inline-block size-4 align-text-bottom" />
                         {{ location.parent.name }}
                       </NuxtLink>
                     </BreadcrumbLink>
@@ -505,7 +526,17 @@
             class="flex items-center justify-between rounded-md border p-3 hover:bg-accent"
           >
             <span class="flex items-center gap-2">
-              <MdiPackageVariantClosed class="size-4" />
+              <component
+                :is="
+                  resolveEntityIcon({
+                    icon: c.icon,
+                    typeIcon: c.entityType?.icon,
+                    isContainer: c.entityType?.isContainer,
+                    isLocation: true,
+                  })
+                "
+                class="size-4"
+              />
               {{ c.name }}
             </span>
             <Badge v-if="c.itemCount != null" variant="secondary">
