@@ -21,6 +21,7 @@
   import { DialogID } from "~/components/ui/dialog-provider/utils";
   import FormTextField from "~/components/Form/TextField.vue";
   import FormCheckbox from "~/components/Form/Checkbox.vue";
+  import IconSelector from "~/components/Form/IconSelector.vue";
   import TemplateSelector from "~/components/Template/Selector.vue";
   import { useEntityTypeStore } from "~/stores/entityTypes";
 
@@ -193,6 +194,11 @@
             v-model="createForm.isContainer"
             :label="t('components.entityTypes.create_dialog.is_container_label')"
           />
+          <IconSelector
+            v-if="createForm.isLocation"
+            v-model="createForm.icon"
+            :label="t('components.entityTypes.create_dialog.icon_label')"
+          />
           <TemplateSelector v-if="!createForm.isLocation" v-model="createTemplate" />
 
           <DialogFooter>
@@ -224,6 +230,11 @@
             v-if="updateForm.isLocation"
             v-model="updateForm.isContainer"
             :label="t('components.entityTypes.update_dialog.is_container_label')"
+          />
+          <IconSelector
+            v-if="updateForm.isLocation"
+            v-model="updateForm.icon"
+            :label="t('components.entityTypes.update_dialog.icon_label')"
           />
           <TemplateSelector v-if="!updateForm.isLocation" v-model="updateTemplate" />
 

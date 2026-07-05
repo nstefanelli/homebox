@@ -419,6 +419,7 @@
                 "name_label": "Name",
                 "is_container_location_type_label": "Is a container / location type",
                 "is_container_label": "Is a container (movable tote/bin — contents follow when moved)",
+                "icon_label": "Icon",
                 "button": "Create"
             },
             "update_dialog": {
@@ -426,6 +427,7 @@
                 "name_label": "Name",
                 "is_container_location_type_label": "Is a container / location type",
                 "is_container_label": "Is a container (movable tote/bin — contents follow when moved)",
+                "icon_label": "Icon",
                 "button": "Update"
             },
             "page": {
