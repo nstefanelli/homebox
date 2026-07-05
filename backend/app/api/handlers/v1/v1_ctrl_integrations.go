@@ -50,7 +50,19 @@ type TestConnectionResponse struct {
 	Detail string `json:"detail"`
 }
 
-// testImagePNG is a 1x1 transparent PNG used as the fixed payload for
+// testImagePNGDim is the fixed test-ai fixture's pixel width/height (square).
+//
+// Found by S9 E2E against the live GB10 provider (qwen3-vl:32b via Ollama):
+// a 1x1 image made the Ollama model runner crash outright (500 "model runner
+// has unexpectedly stopped ... check ollama server logs", reproduced
+// directly against /api/generate, not just through Homebox) — a real vision
+// pipeline bug for that runner/model on tiny inputs, not a Homebox
+// correctness issue, but it made Test AI always fail against this provider.
+// 64x64 round-trips fine against the same model and is still a trivial,
+// meaningless-content fixture.
+const testImagePNGDim = 64
+
+// testImagePNG is a small solid-color PNG used as the fixed payload for
 // POST /v1/groups/integrations/test-ai. It exists purely to exercise the
 // configured vision provider's plumbing (auth, reachability, response
 // shape) — nothing meaningful is expected to be identified in it.
@@ -58,15 +70,15 @@ type TestConnectionResponse struct {
 // Generated at package init via image/png rather than embedding a byte
 // literal: a hand-copied literal is opaque to review and a single wrong
 // byte would silently produce a corrupt fixture, whereas image.NewRGBA +
-// png.Encode is self-evidently correct and cannot fail for a 1x1 image.
+// png.Encode is self-evidently correct and cannot fail for a fixed-size image.
 var testImagePNG = generateTestImagePNG()
 
 func generateTestImagePNG() []byte {
-	img := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	img := image.NewRGBA(image.Rect(0, 0, testImagePNGDim, testImagePNGDim))
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err != nil {
-		// png.Encode cannot fail for an in-memory 1x1 RGBA image; a panic
-		// here would only ever fire on a Go stdlib regression.
+		// png.Encode cannot fail for an in-memory RGBA image of this size; a
+		// panic here would only ever fire on a Go stdlib regression.
 		panic(fmt.Sprintf("failed to generate test-ai fixture image: %v", err))
 	}
 	return buf.Bytes()
@@ -255,7 +267,7 @@ func testAIResponseForConfig(conf config.AIConf) (TestConnectionResponse, bool) 
 // Pure and testable without a live provider: callers pass in whatever
 // Analyze returned. On success, detail prefers the identified item's name
 // (proof the round trip produced a sane reply) and falls back to a generic
-// "responded" when the model returned an empty name (e.g. the 1x1 blank
+// "responded" when the model returned an empty name (e.g. the blank
 // test image gives it nothing to identify). On failure, the raw error is
 // classified into a coarse bucket — never returned verbatim.
 func buildTestAIResult(res ai.AnalyzeResult, err error) TestConnectionResponse {
@@ -331,7 +343,7 @@ func classifyTestError(err error) string {
 // HandleIntegrationsTestAI godoc
 //
 //	@Summary		Test Group AI Integration
-//	@Description	Owner-only. Resolves the effective AI config and attempts a real round-trip against the configured provider using a fixed 1x1 test image, under a 30s timeout. Always 200; ok/detail report the outcome. detail is a sanitized, coarse string — never the raw provider error.
+//	@Description	Owner-only. Resolves the effective AI config and attempts a real round-trip against the configured provider using a fixed small test image, under a 30s timeout. Always 200; ok/detail report the outcome. detail is a sanitized, coarse string — never the raw provider error.
 //	@Tags			Group
 //	@Produce		json
 //	@Success		200	{object}	TestConnectionResponse

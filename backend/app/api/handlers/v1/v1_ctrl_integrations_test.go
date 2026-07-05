@@ -234,8 +234,11 @@ func Test_redactSecretField(t *testing.T) {
 }
 
 // Test_testImagePNG pins the test-ai fixture image down: it must actually be
-// a valid, decodable 1x1 PNG (not just non-empty bytes), since the whole
-// point is to hand the configured provider a real image.
+// a valid, decodable square PNG of testImagePNGDim (not just non-empty
+// bytes), since the whole point is to hand the configured provider a real
+// image. Dimension is asserted via the named constant, not a literal, so a
+// deliberate future resize (e.g. another vision-runner crash threshold) only
+// needs to change generateTestImagePNG's constant.
 func Test_testImagePNG(t *testing.T) {
 	require.NotEmpty(t, testImagePNG)
 
@@ -243,8 +246,8 @@ func Test_testImagePNG(t *testing.T) {
 	require.NoError(t, err, "testImagePNG must decode as a valid PNG")
 
 	bounds := img.Bounds()
-	assert.Equal(t, 1, bounds.Dx())
-	assert.Equal(t, 1, bounds.Dy())
+	assert.Equal(t, testImagePNGDim, bounds.Dx())
+	assert.Equal(t, testImagePNGDim, bounds.Dy())
 }
 
 // Test_testAIResponseForConfig covers the "" (not configured, no group
