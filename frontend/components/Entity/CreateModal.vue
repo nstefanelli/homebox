@@ -650,7 +650,7 @@
       // Lane 1: barcode visible in the photo -> existing UPC pipeline, authoritative.
       const barcode = await detectProductBarcode(file);
       if (barcode) {
-        const { data, error } = await api.products.searchFromBarcode(barcode);
+        const { data, error } = await api.products.searchFromBarcode(barcode, aiAbort.signal);
         if (!error && data && data.length > 0) {
           applyProductPrefill(data[0]!);
           return;
@@ -681,6 +681,7 @@
 
   onMounted(() => {
     const cleanup = registerOpenDialogCallback(DialogID.CreateEntity, async params => {
+      aiAbort?.abort();
       subItemCreate.value = false;
       let parentItemLocationId = null;
       parent.value = {};
