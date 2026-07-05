@@ -10,6 +10,52 @@
         "version": "1.0"
     },
     "paths": {
+        "/v1/actions/analyze-photo": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Identifies a physical item from a photo using the configured vision AI provider",
+                "tags": [
+                    "Actions"
+                ],
+                "summary": "Analyze Item Photo",
+                "requestBody": {
+                    "content": {
+                        "multipart/form-data": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "file": {
+                                        "description": "Photo of a single item (JPEG/PNG/WebP)",
+                                        "type": "string",
+                                        "format": "binary"
+                                    }
+                                },
+                                "required": [
+                                    "file"
+                                ]
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/v1.AnalyzePhotoResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/v1/actions/create-missing-thumbnails": {
             "post": {
                 "security": [
@@ -2954,6 +3000,16 @@
                                 }
                             }
                         }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/octet-stream": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/validate.ErrorResponse"
+                                }
+                            }
+                        }
                     }
                 }
             },
@@ -5262,6 +5318,15 @@
                     "entityTypeId": {
                         "type": "string"
                     },
+                    "manufacturer": {
+                        "type": "string",
+                        "maxLength": 255
+                    },
+                    "modelNumber": {
+                        "description": "Identifications",
+                        "type": "string",
+                        "maxLength": 255
+                    },
                     "name": {
                         "type": "string",
                         "maxLength": 255,
@@ -6797,6 +6862,9 @@
             "v1.APISummary": {
                 "type": "object",
                 "properties": {
+                    "aiPhotoAnalysis": {
+                        "type": "boolean"
+                    },
                     "allowRegistration": {
                         "type": "boolean"
                     },
@@ -6840,6 +6908,29 @@
                 "properties": {
                     "completed": {
                         "type": "integer"
+                    }
+                }
+            },
+            "v1.AnalyzePhotoResponse": {
+                "type": "object",
+                "properties": {
+                    "categoryHints": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "confidence": {
+                        "type": "number"
+                    },
+                    "lane": {
+                        "type": "string"
+                    },
+                    "products": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/repo.BarcodeProduct"
+                        }
                     }
                 }
             },

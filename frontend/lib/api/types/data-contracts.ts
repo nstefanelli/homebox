@@ -751,6 +751,13 @@ export interface EntityCreate {
   /** @maxLength 1000 */
   description: string;
   entityTypeId: string;
+  /** @maxLength 255 */
+  manufacturer: string;
+  /**
+   * Identifications
+   * @maxLength 255
+   */
+  modelNumber: string;
   /**
    * @minLength 1
    * @maxLength 255
@@ -1321,6 +1328,7 @@ export interface UserRegistration {
 }
 
 export interface APISummary {
+  aiPhotoAnalysis: boolean;
   allowRegistration: boolean;
   build: Build;
   demo: boolean;
@@ -1336,6 +1344,13 @@ export interface APISummary {
 
 export interface ActionAmountResult {
   completed: number;
+}
+
+export interface AnalyzePhotoResponse {
+  categoryHints: string[];
+  confidence: number;
+  lane: string;
+  products: BarcodeProduct[];
 }
 
 export interface Build {

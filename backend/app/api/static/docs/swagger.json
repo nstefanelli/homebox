@@ -15,6 +15,43 @@
     },
     "basePath": "/api",
     "paths": {
+        "/v1/actions/analyze-photo": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Identifies a physical item from a photo using the configured vision AI provider",
+                "consumes": [
+                    "multipart/form-data"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Actions"
+                ],
+                "summary": "Analyze Item Photo",
+                "parameters": [
+                    {
+                        "type": "file",
+                        "description": "Photo of a single item (JPEG/PNG/WebP)",
+                        "name": "file",
+                        "in": "formData",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/v1.AnalyzePhotoResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/v1/actions/create-missing-thumbnails": {
             "post": {
                 "security": [
@@ -2727,6 +2764,12 @@
                         "schema": {
                             "$ref": "#/definitions/validate.ErrorResponse"
                         }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/validate.ErrorResponse"
+                        }
                     }
                 }
             },
@@ -4973,6 +5016,15 @@
                 "entityTypeId": {
                     "type": "string"
                 },
+                "manufacturer": {
+                    "type": "string",
+                    "maxLength": 255
+                },
+                "modelNumber": {
+                    "description": "Identifications",
+                    "type": "string",
+                    "maxLength": 255
+                },
                 "name": {
                     "type": "string",
                     "maxLength": 255,
@@ -6508,6 +6560,9 @@
         "v1.APISummary": {
             "type": "object",
             "properties": {
+                "aiPhotoAnalysis": {
+                    "type": "boolean"
+                },
                 "allowRegistration": {
                     "type": "boolean"
                 },
@@ -6551,6 +6606,29 @@
             "properties": {
                 "completed": {
                     "type": "integer"
+                }
+            }
+        },
+        "v1.AnalyzePhotoResponse": {
+            "type": "object",
+            "properties": {
+                "categoryHints": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "confidence": {
+                    "type": "number"
+                },
+                "lane": {
+                    "type": "string"
+                },
+                "products": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/repo.BarcodeProduct"
+                    }
                 }
             }
         },
