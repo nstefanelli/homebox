@@ -31,6 +31,7 @@ import (
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/templatefield"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/user"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/usergroup"
+	"github.com/sysadminsmedia/homebox/backend/internal/data/types"
 )
 
 const (
@@ -9777,6 +9778,7 @@ type GroupMutation struct {
 	updated_at               *time.Time
 	name                     *string
 	currency                 *string
+	integrations             *types.GroupIntegrations
 	clearedFields            map[string]struct{}
 	users                    map[uuid.UUID]struct{}
 	removedusers             map[uuid.UUID]struct{}
@@ -10053,6 +10055,55 @@ func (m *GroupMutation) OldCurrency(ctx context.Context) (v string, err error) {
 // ResetCurrency resets all changes to the "currency" field.
 func (m *GroupMutation) ResetCurrency() {
 	m.currency = nil
+}
+
+// SetIntegrations sets the "integrations" field.
+func (m *GroupMutation) SetIntegrations(ti types.GroupIntegrations) {
+	m.integrations = &ti
+}
+
+// Integrations returns the value of the "integrations" field in the mutation.
+func (m *GroupMutation) Integrations() (r types.GroupIntegrations, exists bool) {
+	v := m.integrations
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldIntegrations returns the old "integrations" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldIntegrations(ctx context.Context) (v types.GroupIntegrations, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldIntegrations is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldIntegrations requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldIntegrations: %w", err)
+	}
+	return oldValue.Integrations, nil
+}
+
+// ClearIntegrations clears the value of the "integrations" field.
+func (m *GroupMutation) ClearIntegrations() {
+	m.integrations = nil
+	m.clearedFields[group.FieldIntegrations] = struct{}{}
+}
+
+// IntegrationsCleared returns if the "integrations" field was cleared in this mutation.
+func (m *GroupMutation) IntegrationsCleared() bool {
+	_, ok := m.clearedFields[group.FieldIntegrations]
+	return ok
+}
+
+// ResetIntegrations resets all changes to the "integrations" field.
+func (m *GroupMutation) ResetIntegrations() {
+	m.integrations = nil
+	delete(m.clearedFields, group.FieldIntegrations)
 }
 
 // AddUserIDs adds the "users" edge to the User entity by ids.
@@ -10521,7 +10572,7 @@ func (m *GroupMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *GroupMutation) Fields() []string {
-	fields := make([]string, 0, 4)
+	fields := make([]string, 0, 5)
 	if m.created_at != nil {
 		fields = append(fields, group.FieldCreatedAt)
 	}
@@ -10533,6 +10584,9 @@ func (m *GroupMutation) Fields() []string {
 	}
 	if m.currency != nil {
 		fields = append(fields, group.FieldCurrency)
+	}
+	if m.integrations != nil {
+		fields = append(fields, group.FieldIntegrations)
 	}
 	return fields
 }
@@ -10550,6 +10604,8 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
 		return m.Name()
 	case group.FieldCurrency:
 		return m.Currency()
+	case group.FieldIntegrations:
+		return m.Integrations()
 	}
 	return nil, false
 }
@@ -10567,6 +10623,8 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldName(ctx)
 	case group.FieldCurrency:
 		return m.OldCurrency(ctx)
+	case group.FieldIntegrations:
+		return m.OldIntegrations(ctx)
 	}
 	return nil, fmt.Errorf("unknown Group field %s", name)
 }
@@ -10604,6 +10662,13 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetCurrency(v)
 		return nil
+	case group.FieldIntegrations:
+		v, ok := value.(types.GroupIntegrations)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetIntegrations(v)
+		return nil
 	}
 	return fmt.Errorf("unknown Group field %s", name)
 }
@@ -10633,7 +10698,11 @@ func (m *GroupMutation) AddField(name string, value ent.Value) error {
 // ClearedFields returns all nullable fields that were cleared during this
 // mutation.
 func (m *GroupMutation) ClearedFields() []string {
-	return nil
+	var fields []string
+	if m.FieldCleared(group.FieldIntegrations) {
+		fields = append(fields, group.FieldIntegrations)
+	}
+	return fields
 }
 
 // FieldCleared returns a boolean indicating if a field with the given name was
@@ -10646,6 +10715,11 @@ func (m *GroupMutation) FieldCleared(name string) bool {
 // ClearField clears the value of the field with the given name. It returns an
 // error if the field is not defined in the schema.
 func (m *GroupMutation) ClearField(name string) error {
+	switch name {
+	case group.FieldIntegrations:
+		m.ClearIntegrations()
+		return nil
+	}
 	return fmt.Errorf("unknown Group nullable field %s", name)
 }
 
@@ -10664,6 +10738,9 @@ func (m *GroupMutation) ResetField(name string) error {
 		return nil
 	case group.FieldCurrency:
 		m.ResetCurrency()
+		return nil
+	case group.FieldIntegrations:
+		m.ResetIntegrations()
 		return nil
 	}
 	return fmt.Errorf("unknown Group field %s", name)
