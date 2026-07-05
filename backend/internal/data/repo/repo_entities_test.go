@@ -933,3 +933,37 @@ func TestEntityRepository_Tree_CarriesIconFields(t *testing.T) {
 	require.NoError(t, tRepos.Entities.Delete(ctx, a.ID))
 	require.NoError(t, tRepos.Entities.Delete(ctx, b.ID))
 }
+
+func TestEntityRepository_PathForEntity_CarriesIconFields(t *testing.T) {
+	ctx := context.Background()
+
+	et, err := tRepos.EntityTypes.Create(ctx, tGroup.ID, EntityTypeCreate{
+		Name: "Iconic Shelf", IsLocation: true, IsContainer: true, Icon: "bookshelf",
+	})
+	require.NoError(t, err)
+
+	parent := entityFactory()
+	parent.EntityTypeID = et.ID
+	parent.Icon = "safe"
+	p, err := tRepos.Entities.Create(ctx, tGroup.ID, parent)
+	require.NoError(t, err)
+
+	child := entityFactory()
+	child.EntityTypeID = et.ID
+	child.ParentID = p.ID
+	c, err := tRepos.Entities.Create(ctx, tGroup.ID, child)
+	require.NoError(t, err)
+
+	path, err := tRepos.Entities.PathForEntity(ctx, tGroup.ID, c.ID)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(path), 2)
+
+	// First element is the root ancestor (the parent), last is the entity itself.
+	assert.Equal(t, "safe", path[0].Icon)
+	assert.Equal(t, "bookshelf", path[0].TypeIcon)
+	assert.True(t, path[0].IsContainer)
+
+	// Cleanup
+	require.NoError(t, tRepos.Entities.Delete(ctx, c.ID))
+	require.NoError(t, tRepos.Entities.Delete(ctx, p.ID))
+}

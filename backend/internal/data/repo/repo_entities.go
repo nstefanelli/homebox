@@ -2912,9 +2912,12 @@ const (
 )
 
 type EntityPath struct {
-	Type EntityPathType `json:"type"`
-	ID   uuid.UUID      `json:"id"`
-	Name string         `json:"name"`
+	Type        EntityPathType `json:"type"`
+	ID          uuid.UUID      `json:"id"`
+	Name        string         `json:"name"`
+	Icon        string         `json:"icon"`
+	TypeIcon    string         `json:"typeIcon"`
+	IsContainer bool           `json:"isContainer"`
 }
 
 func (r *EntityRepository) PathForEntity(ctx context.Context, gid, entityID uuid.UUID) ([]EntityPath, error) {
@@ -2926,19 +2929,27 @@ func (r *EntityRepository) PathForEntity(ctx context.Context, gid, entityID uuid
 	defer span.End()
 
 	query := `WITH RECURSIVE entity_path AS (
-		SELECT id, name, entity_children
-		FROM entities
-		WHERE id = $1
-		AND group_entities = $2
+		SELECT e.id, e.name, e.entity_children,
+			COALESCE(e.icon, '') AS icon,
+			COALESCE(et.icon, '') AS type_icon,
+			COALESCE(et.is_container, false) AS is_container
+		FROM entities e
+		JOIN entity_types et ON et.id = e.entity_type_entities
+		WHERE e.id = $1
+		AND e.group_entities = $2
 
 		UNION ALL
 
-		SELECT e.id, e.name, e.entity_children
+		SELECT e.id, e.name, e.entity_children,
+			COALESCE(e.icon, '') AS icon,
+			COALESCE(et.icon, '') AS type_icon,
+			COALESCE(et.is_container, false) AS is_container
 		FROM entities e
+		JOIN entity_types et ON et.id = e.entity_type_entities
 		JOIN entity_path ep ON e.id = ep.entity_children
 	  )
 
-	  SELECT id, name
+	  SELECT id, name, icon, type_icon, is_container
 	  FROM entity_path`
 
 	queryCtx, querySpan := entityTracer().Start(ctx, "repo.EntityRepository.PathForEntity.query")
@@ -2956,7 +2967,7 @@ func (r *EntityRepository) PathForEntity(ctx context.Context, gid, entityID uuid
 	for rows.Next() {
 		var entry EntityPath
 		entry.Type = EntityPathTypeLocation
-		if err := rows.Scan(&entry.ID, &entry.Name); err != nil {
+		if err := rows.Scan(&entry.ID, &entry.Name, &entry.Icon, &entry.TypeIcon, &entry.IsContainer); err != nil {
 			recordSpanError(querySpan, err)
 			querySpan.End()
 			recordSpanError(span, err)
