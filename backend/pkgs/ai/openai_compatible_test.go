@@ -104,3 +104,41 @@ func TestOpenAICompatible_HTTPErrorStatus(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "500")
 }
+
+const goodBulkReply = `[{"name":"Camping Stove","description":"Green stove.","manufacturer":"Coleman","model_number":"","quantity":1,"category_hints":["camping"],"confidence":0.9},{"name":"Rope","description":"Coiled rope.","manufacturer":"","model_number":"","quantity":2,"category_hints":[],"confidence":0.7}]`
+
+func TestOpenAICompatible_AnalyzeContents_Success(t *testing.T) {
+	var gotBody map[string]any
+	_, p := oaiServer(t, func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		w.Write(oaiChatResponse(goodBulkReply))
+	})
+
+	res, err := p.AnalyzeContents(context.Background(), []byte{1}, "image/jpeg")
+	require.NoError(t, err)
+	require.Len(t, res, 2)
+	assert.Equal(t, "Camping Stove", res[0].Name)
+	assert.InDelta(t, 2.0, res[1].Quantity, 0.001)
+
+	// bulk prompt, not the single-item prompt
+	msgs := gotBody["messages"].([]any)
+	sys := msgs[0].(map[string]any)
+	assert.Contains(t, sys["content"], "OPEN CONTAINER")
+}
+
+func TestOpenAICompatible_AnalyzeContents_RepairRetryRecovers(t *testing.T) {
+	calls := 0
+	_, p := oaiServer(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			w.Write(oaiChatResponse("I can see a stove and some rope!"))
+			return
+		}
+		w.Write(oaiChatResponse(goodBulkReply))
+	})
+
+	res, err := p.AnalyzeContents(context.Background(), []byte{1}, "image/jpeg")
+	require.NoError(t, err)
+	assert.Equal(t, 2, calls)
+	assert.Len(t, res, 2)
+}

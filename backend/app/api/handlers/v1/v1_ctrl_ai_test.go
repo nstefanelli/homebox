@@ -28,6 +28,10 @@ func (s stubProvider) Analyze(_ context.Context, _ []byte, _ string) (ai.Analyze
 	return s.res, s.err
 }
 
+func (s stubProvider) AnalyzeContents(_ context.Context, _ []byte, _ string) ([]ai.AnalyzeResult, error) {
+	return []ai.AnalyzeResult{s.res}, s.err
+}
+
 func tinyPNG(t *testing.T) []byte {
 	t.Helper()
 	var buf bytes.Buffer

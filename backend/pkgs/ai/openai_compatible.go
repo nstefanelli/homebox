@@ -75,6 +75,39 @@ func (p *openaiCompatibleProvider) Analyze(ctx context.Context, imageBytes []byt
 	return parseAnalyzeResult(reply)
 }
 
+func (p *openaiCompatibleProvider) AnalyzeContents(ctx context.Context, imageBytes []byte, mimeType string) ([]AnalyzeResult, error) {
+	dataURI := "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(imageBytes)
+
+	messages := []oaiMessage{
+		{Role: "system", Content: systemPromptBulk},
+		{Role: "user", Content: []map[string]any{
+			{"type": "text", "text": userPromptBulk},
+			{"type": "image_url", "image_url": map[string]string{"url": dataURI}},
+		}},
+	}
+
+	reply, err := p.complete(ctx, messages)
+	if err != nil {
+		return nil, err
+	}
+
+	results, parseErr := parseAnalyzeResults(reply)
+	if parseErr == nil {
+		return results, nil
+	}
+
+	messages = append(messages,
+		oaiMessage{Role: "assistant", Content: reply},
+		oaiMessage{Role: "user", Content: fmt.Sprintf(
+			"Your previous response was not the required JSON array (%v). Respond again with ONLY the JSON array, no other text.", parseErr)},
+	)
+	reply, err = p.complete(ctx, messages)
+	if err != nil {
+		return nil, err
+	}
+	return parseAnalyzeResults(reply)
+}
+
 func (p *openaiCompatibleProvider) complete(ctx context.Context, messages []oaiMessage) (string, error) {
 	body, err := json.Marshal(map[string]any{
 		"model":           p.model,

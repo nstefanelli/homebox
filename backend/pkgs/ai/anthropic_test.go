@@ -75,3 +75,24 @@ func TestAnthropic_NoTextBlockErrors(t *testing.T) {
 	_, err := p.Analyze(context.Background(), []byte{1}, "image/jpeg")
 	require.Error(t, err)
 }
+
+func TestAnthropic_AnalyzeContents_Success(t *testing.T) {
+	var gotBody map[string]any
+	p := anthropicServer(t, func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		resp, _ := json.Marshal(map[string]any{
+			"content": []map[string]any{{"type": "text", "text": goodBulkReply}},
+		})
+		w.Write(resp)
+	})
+
+	res, err := p.AnalyzeContents(context.Background(), []byte{1}, "image/jpeg")
+	require.NoError(t, err)
+	require.Len(t, res, 2)
+
+	// array-typed structured output schema sent
+	oc := gotBody["output_config"].(map[string]any)
+	format := oc["format"].(map[string]any)
+	schema := format["schema"].(map[string]any)
+	assert.Equal(t, "array", schema["type"])
+}
