@@ -59,6 +59,7 @@ type Config struct {
 	LabelMaker LabelMakerConf `yaml:"labelmaker"`
 	Thumbnail  Thumbnail      `yaml:"thumbnail"`
 	Barcode    BarcodeAPIConf `yaml:"barcode"`
+	AI         AIConf         `yaml:"ai"`
 	Otel       OTelConfig     `yaml:"otel"`
 	Auth       AuthConfig     `yaml:"auth"`
 	Notifier   NotifierConf   `yaml:"notifier"`
@@ -158,6 +159,23 @@ func (c BarcodeAPIConf) MarshalJSON() ([]byte, error) {
 	a := alias(c)
 	if a.TokenBarcodespider != "" {
 		a.TokenBarcodespider = redactedValue
+	}
+	return json.Marshal(a)
+}
+
+type AIConf struct {
+	Provider       string `yaml:"provider"`        // "" (disabled) | "openai_compatible" | "anthropic"
+	BaseURL        string `yaml:"base_url"`
+	APIKey         string `yaml:"api_key"`
+	Model          string `yaml:"model"`
+	TimeoutSeconds int    `yaml:"timeout_seconds" conf:"default:120"`
+}
+
+func (c AIConf) MarshalJSON() ([]byte, error) {
+	type alias AIConf
+	a := alias(c)
+	if a.APIKey != "" {
+		a.APIKey = redactedValue
 	}
 	return json.Marshal(a)
 }
