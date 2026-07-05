@@ -39,6 +39,7 @@
   import ItemImageDialog from "~/components/Item/ImageDialog.vue";
   import LocationCard from "~/components/Location/Card.vue";
   import TagChip from "~/components/Tag/Chip.vue";
+  import { useIntegrationsStore } from "~~/stores/integrations";
 
   definePageMeta({
     middleware: ["auth"],
@@ -50,15 +51,11 @@
 
   const route = useRoute();
   const api = useUserApi();
-  const pubApi = usePublicApi();
   const preferences = useViewPreferences();
 
-  const { data: status } = useAsyncData(async () => {
-    const { data } = await pubApi.status();
-    return data;
-  });
-
-  const aiPhotoEnabled = computed(() => status.value?.aiPhotoAnalysis || false);
+  const integrationsStore = useIntegrationsStore();
+  integrationsStore.ensureFetched();
+  const aiPhotoEnabled = computed(() => integrationsStore.aiConfigured);
 
   const locationId = computed<string>(() => route.params.id as string);
 
