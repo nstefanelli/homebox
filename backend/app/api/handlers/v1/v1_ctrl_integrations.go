@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/hay-kot/httpkit/errchain"
+	"github.com/hay-kot/httpkit/server"
 	"github.com/rs/zerolog/log"
 	"github.com/sysadminsmedia/homebox/backend/internal/core/services"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/types"
@@ -350,25 +351,39 @@ func classifyTestError(err error) string {
 //	@Router			/v1/groups/integrations/test-ai [Post]
 //	@Security		Bearer
 func (ctrl *V1Controller) HandleIntegrationsTestAI() errchain.HandlerFunc {
-	fn := func(r *http.Request) (TestConnectionResponse, error) {
+	return func(w http.ResponseWriter, r *http.Request) error {
+		// Extend the response deadline past the global http.Server
+		// write/read timeout (10s, see internal/sys/config Web.WriteTimeout)
+		// — this handler's own 30s Analyze budget below would otherwise get
+		// killed by the global timeout long before it ever fires. Same
+		// pattern as readPhotoUpload (v1_ctrl_ai.go).
+		deadline := time.Now().Add(40 * time.Second)
+		rc := http.NewResponseController(w)
+		if err := rc.SetWriteDeadline(deadline); err != nil {
+			log.Warn().Err(err).Msg("failed to extend response deadline for test-ai")
+		}
+		if err := rc.SetReadDeadline(deadline); err != nil {
+			log.Warn().Err(err).Msg("failed to extend response deadline for test-ai")
+		}
+
 		auth, err := requireIntegrationsOwner(ctrl, r)
 		if err != nil {
-			return TestConnectionResponse{}, err
+			return err
 		}
 
 		effectiveAI, err := ctrl.svc.Integrations.EffectiveAI(auth, auth.GID)
 		if err != nil {
-			return TestConnectionResponse{}, err
+			return err
 		}
 
 		if resp, handled := testAIResponseForConfig(effectiveAI); handled {
-			return resp, nil
+			return server.JSON(w, http.StatusOK, resp)
 		}
 
 		provider, err := ai.NewProvider(effectiveAI)
 		if err != nil {
 			log.Err(err).Msg("test-ai: failed to construct provider for effective config")
-			return TestConnectionResponse{OK: false, Detail: testDetailProviderError}, nil
+			return server.JSON(w, http.StatusOK, TestConnectionResponse{OK: false, Detail: testDetailProviderError})
 		}
 
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
@@ -378,10 +393,8 @@ func (ctrl *V1Controller) HandleIntegrationsTestAI() errchain.HandlerFunc {
 		if analyzeErr != nil {
 			log.Err(analyzeErr).Msg("test-ai: provider analyze failed")
 		}
-		return buildTestAIResult(res, analyzeErr), nil
+		return server.JSON(w, http.StatusOK, buildTestAIResult(res, analyzeErr))
 	}
-
-	return adapters.Command(fn, http.StatusOK)
 }
 
 // HandleIntegrationsTestBarcode godoc
@@ -394,27 +407,39 @@ func (ctrl *V1Controller) HandleIntegrationsTestAI() errchain.HandlerFunc {
 //	@Router			/v1/groups/integrations/test-barcode [Post]
 //	@Security		Bearer
 func (ctrl *V1Controller) HandleIntegrationsTestBarcode() errchain.HandlerFunc {
-	fn := func(r *http.Request) (TestConnectionResponse, error) {
+	return func(w http.ResponseWriter, r *http.Request) error {
+		// Extend the response deadline past the global http.Server
+		// write/read timeout (10s, see internal/sys/config Web.WriteTimeout)
+		// — this handler's own 30s lookup budget below would otherwise get
+		// killed by the global timeout long before it ever fires. Same
+		// pattern as readPhotoUpload (v1_ctrl_ai.go).
+		deadline := time.Now().Add(40 * time.Second)
+		rc := http.NewResponseController(w)
+		if err := rc.SetWriteDeadline(deadline); err != nil {
+			log.Warn().Err(err).Msg("failed to extend response deadline for test-barcode")
+		}
+		if err := rc.SetReadDeadline(deadline); err != nil {
+			log.Warn().Err(err).Msg("failed to extend response deadline for test-barcode")
+		}
+
 		auth, err := requireIntegrationsOwner(ctrl, r)
 		if err != nil {
-			return TestConnectionResponse{}, err
+			return err
 		}
 
 		effectiveBarcode, err := ctrl.svc.Integrations.EffectiveBarcode(auth, auth.GID)
 		if err != nil {
-			return TestConnectionResponse{}, err
+			return err
 		}
 
 		if resp, handled := testBarcodeResponseForConfig(effectiveBarcode); handled {
-			return resp, nil
+			return server.JSON(w, http.StatusOK, resp)
 		}
 
 		_, lookupErr := lookupBarcodespider(effectiveBarcode.TokenBarcodespider, testBarcodeEAN)
 		if lookupErr != nil {
 			log.Err(lookupErr).Msg("test-barcode: barcodespider lookup failed")
 		}
-		return buildTestBarcodeResult(lookupErr), nil
+		return server.JSON(w, http.StatusOK, buildTestBarcodeResult(lookupErr))
 	}
-
-	return adapters.Command(fn, http.StatusOK)
 }

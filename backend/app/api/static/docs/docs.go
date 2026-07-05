@@ -1631,7 +1631,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "Owner-only. Resolves the effective AI config and attempts a real round-trip against the configured provider using a fixed 1x1 test image, under a 30s timeout. Always 200; ok/detail report the outcome. detail is a sanitized, coarse string — never the raw provider error.",
+                "description": "Owner-only. Resolves the effective AI config and attempts a real round-trip against the configured provider using a fixed small test image, under a 30s timeout. Always 200; ok/detail report the outcome. detail is a sanitized, coarse string — never the raw provider error.",
                 "produces": [
                     "application/json"
                 ],
@@ -4374,14 +4374,6 @@ const docTemplate = `{
                 "id": {
                     "description": "ID of the ent.",
                     "type": "string"
-                },
-                "integrations": {
-                    "description": "Integrations holds the value of the \"integrations\" field.",
-                    "allOf": [
-                        {
-                            "$ref": "#/definitions/types.GroupIntegrations"
-                        }
-                    ]
                 },
                 "name": {
                     "description": "Name holds the value of the \"name\" field.",

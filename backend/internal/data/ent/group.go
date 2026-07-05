@@ -29,7 +29,7 @@ type Group struct {
 	// Currency holds the value of the "currency" field.
 	Currency string `json:"currency,omitempty"`
 	// Integrations holds the value of the "integrations" field.
-	Integrations types.GroupIntegrations `json:"integrations,omitempty"`
+	Integrations types.GroupIntegrations `json:"-"`
 	// Edges holds the relations/edges for other nodes in the graph.
 	// The values are being populated by the GroupQuery when eager-loading is set.
 	Edges        GroupEdges `json:"edges"`
@@ -301,8 +301,7 @@ func (_m *Group) String() string {
 	builder.WriteString("currency=")
 	builder.WriteString(_m.Currency)
 	builder.WriteString(", ")
-	builder.WriteString("integrations=")
-	builder.WriteString(fmt.Sprintf("%v", _m.Integrations))
+	builder.WriteString("integrations=<sensitive>")
 	builder.WriteByte(')')
 	return builder.String()
 }

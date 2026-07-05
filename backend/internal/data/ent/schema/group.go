@@ -31,7 +31,8 @@ func (Group) Fields() []ent.Field {
 		field.String("currency").
 			Default("usd"),
 		field.JSON("integrations", types.GroupIntegrations{}).
-			Optional(),
+			Optional().
+			Sensitive(),
 	}
 }
 
