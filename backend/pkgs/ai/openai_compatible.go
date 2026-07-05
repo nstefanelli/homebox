@@ -101,7 +101,8 @@ func (p *openaiCompatibleProvider) complete(ctx context.Context, messages []oaiM
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("vision provider returned status code: %d", resp.StatusCode)
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return "", fmt.Errorf("vision provider returned status code: %d: %s", resp.StatusCode, snippet)
 	}
 
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))

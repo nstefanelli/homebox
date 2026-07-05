@@ -144,6 +144,7 @@ func Test_Config_FullMarshalRedactsAllSecrets(t *testing.T) {
 		},
 		Barcode: BarcodeAPIConf{TokenBarcodespider: "bs-secret"},
 		Otel:    OTelConfig{Headers: "Authorization=Bearer otel-secret"},
+		AI:      AIConf{APIKey: "ai-secret"},
 	}
 
 	out, err := json.MarshalIndent(c, "", "  ")
@@ -158,7 +159,10 @@ func Test_Config_FullMarshalRedactsAllSecrets(t *testing.T) {
 		"pubsecret",
 		"bs-secret",
 		"otel-secret",
+		"ai-secret",
 	} {
 		assert.NotContainsf(t, string(out), secret, "expected %q to be redacted in output", secret)
 	}
+
+	assert.Contains(t, string(out), sentinel)
 }

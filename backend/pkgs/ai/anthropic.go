@@ -96,7 +96,8 @@ func (p *anthropicProvider) Analyze(ctx context.Context, imageBytes []byte, mime
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return AnalyzeResult{}, fmt.Errorf("vision provider returned status code: %d", resp.StatusCode)
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return AnalyzeResult{}, fmt.Errorf("vision provider returned status code: %d: %s", resp.StatusCode, snippet)
 	}
 
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))

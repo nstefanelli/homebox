@@ -47,8 +47,12 @@ func (ctrl *V1Controller) HandleAnalyzePhoto(provider ai.Provider) errchain.Hand
 		// connection mid-request long before the provider ever times out.
 		deadline := time.Now().Add(time.Duration(ctrl.config.AI.TimeoutSeconds+30) * time.Second)
 		rc := http.NewResponseController(w)
-		_ = rc.SetWriteDeadline(deadline)
-		_ = rc.SetReadDeadline(deadline)
+		if err := rc.SetWriteDeadline(deadline); err != nil {
+			log.Warn().Err(err).Msg("failed to extend response deadline for analyze-photo")
+		}
+		if err := rc.SetReadDeadline(deadline); err != nil {
+			log.Warn().Err(err).Msg("failed to extend response deadline for analyze-photo")
+		}
 
 		err := r.ParseMultipartForm(ctrl.maxUploadSize << 20)
 		if err != nil {
