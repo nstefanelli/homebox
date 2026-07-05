@@ -4,8 +4,8 @@
   import { useLabelSelection } from "~~/stores/labelSelection";
   import { Checkbox } from "@/components/ui/checkbox";
   import MdiChevronRight from "~icons/mdi/chevron-right";
-  import MdiMapMarker from "~icons/mdi/map-marker";
   import MdiPackageVariant from "~icons/mdi/package-variant";
+  import { resolveEntityIcon } from "~~/lib/icons";
   import LocationTreeNode from "./Node.vue";
 
   type Props = {
@@ -65,6 +65,18 @@
     // converts a UUID to a short hash
     return props.item.id.replace(/-/g, "").substring(0, 8);
   });
+
+  const nodeIcon = computed(() => {
+    if (props.item.type !== "location") {
+      return MdiPackageVariant; // item nodes keep their existing icon
+    }
+    return resolveEntityIcon({
+      icon: props.item.icon,
+      typeIcon: props.item.typeIcon,
+      isContainer: props.item.isContainer,
+      isLocation: true,
+    });
+  });
 </script>
 
 <template>
@@ -98,8 +110,7 @@
         @update:model-value="toggleSelect"
         @click.stop
       />
-      <MdiMapMarker v-if="item.type === 'location'" class="size-4" />
-      <MdiPackageVariant v-else class="size-4" />
+      <component :is="nodeIcon" class="size-4" />
       <NuxtLink class="text-lg hover:underline" :to="link" @click.stop>{{ item.name }} </NuxtLink>
     </div>
     <div v-if="openRef" class="ml-4">

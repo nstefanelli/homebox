@@ -12,7 +12,7 @@
             <div
               class="absolute inset-0 flex items-center justify-center transition-transform duration-300 group-hover/location-card:-rotate-90"
             >
-              <MdiMapMarkerOutline class="size-6 group-hover/location-card:hidden" />
+              <component :is="cardIcon" class="size-6 group-hover/location-card:hidden" />
               <MdiArrowUp class="hidden size-6 group-hover/location-card:block" />
             </div>
           </div>
@@ -31,7 +31,7 @@
 <script lang="ts" setup>
   import type { EntityOut, EntitySummary } from "~~/lib/api/types/data-contracts";
   import MdiArrowUp from "~icons/mdi/arrow-down";
-  import MdiMapMarkerOutline from "~icons/mdi/map-marker-outline";
+  import { resolveEntityIcon } from "~~/lib/icons";
   import { Card } from "@/components/ui/card";
   import { Badge } from "@/components/ui/badge";
 
@@ -53,4 +53,13 @@
   const count = computed(() => {
     return hasCount.value ? (props.location as EntitySummary).itemCount : undefined;
   });
+
+  const cardIcon = computed(() =>
+    resolveEntityIcon({
+      icon: props.location.icon,
+      typeIcon: props.location.entityType?.icon,
+      isContainer: props.location.entityType?.isContainer,
+      isLocation: true,
+    })
+  );
 </script>
