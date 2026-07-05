@@ -812,3 +812,32 @@ func TestEntityRepository_Create_PersistsIdentifications(t *testing.T) {
 	err = tRepos.Entities.Delete(context.Background(), result.ID)
 	require.NoError(t, err)
 }
+
+func TestEntityRepository_IconPersistsThroughCreateAndUpdate(t *testing.T) {
+	itemET := useItemEntityType(t)
+
+	itm := entityFactory()
+	itm.EntityTypeID = itemET.ID
+	itm.Icon = "basket-outline"
+
+	result, err := tRepos.Entities.Create(context.Background(), tGroup.ID, itm)
+	require.NoError(t, err)
+	assert.Equal(t, "basket-outline", result.Icon)
+
+	// Update changes it
+	upd := EntityUpdate{
+		ID:           result.ID,
+		Name:         result.Name,
+		Description:  result.Description,
+		Quantity:     result.Quantity,
+		EntityTypeID: itemET.ID,
+		Icon:         "toolbox-outline",
+	}
+	updated, err := tRepos.Entities.UpdateByGroup(context.Background(), tGroup.ID, upd)
+	require.NoError(t, err)
+	assert.Equal(t, "toolbox-outline", updated.Icon)
+
+	// Cleanup
+	err = tRepos.Entities.Delete(context.Background(), result.ID)
+	require.NoError(t, err)
+}

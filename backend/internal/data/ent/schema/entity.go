@@ -64,6 +64,9 @@ func (Entity) Fields() []ent.Field {
 		field.String("manufacturer").
 			MaxLen(255).
 			Optional(),
+		field.String("icon").
+			MaxLen(255).
+			Optional(),
 
 		// ------------------------------------
 		// Item Warranty

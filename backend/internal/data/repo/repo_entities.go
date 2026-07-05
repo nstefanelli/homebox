@@ -102,6 +102,7 @@ type (
 		// Identifications
 		ModelNumber  string `json:"modelNumber"  validate:"max=255"`
 		Manufacturer string `json:"manufacturer" validate:"max=255"`
+		Icon         string `json:"icon"         validate:"max=255"`
 
 		// Edges
 		TagIDs []uuid.UUID `json:"tagIds"`
@@ -126,6 +127,7 @@ type (
 		SerialNumber string `json:"serialNumber"`
 		ModelNumber  string `json:"modelNumber"`
 		Manufacturer string `json:"manufacturer"`
+		Icon         string `json:"icon"         validate:"max=255"`
 
 		// Warranty
 		LifetimeWarranty bool       `json:"lifetimeWarranty"`
@@ -163,6 +165,7 @@ type (
 		AssetID     AssetID   `json:"assetId,string"`
 		Name        string    `json:"name"`
 		Description string    `json:"description"`
+		Icon        string    `json:"icon"`
 		Quantity    float64   `json:"quantity"`
 		Insured     bool      `json:"insured"`
 		Archived    bool      `json:"archived"`
@@ -265,6 +268,7 @@ func mapEntitySummary(e *ent.Entity) EntitySummary {
 		AssetID:       AssetID(e.AssetID),
 		Name:          e.Name,
 		Description:   e.Description,
+		Icon:          e.Icon,
 		ImportRef:     e.ImportRef,
 		Quantity:      e.Quantity,
 		CreatedAt:     e.CreatedAt,
@@ -1046,6 +1050,7 @@ func (r *EntityRepository) Create(ctx context.Context, gid uuid.UUID, data Entit
 		SetDescription(data.Description).
 		SetModelNumber(data.ModelNumber).
 		SetManufacturer(data.Manufacturer).
+		SetIcon(data.Icon).
 		SetGroupID(gid).
 		SetAssetID(int64(data.AssetID))
 
@@ -1710,6 +1715,7 @@ func (r *EntityRepository) UpdateByGroup(ctx context.Context, gid uuid.UUID, dat
 		SetSerialNumber(data.SerialNumber).
 		SetModelNumber(data.ModelNumber).
 		SetManufacturer(data.Manufacturer).
+		SetIcon(data.Icon).
 		SetArchived(data.Archived).
 		SetPurchaseFrom(data.PurchaseFrom).
 		SetPurchasePrice(data.PurchasePrice).

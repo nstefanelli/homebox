@@ -2630,6 +2630,7 @@ type EntityMutation struct {
 	serial_number               *string
 	model_number                *string
 	manufacturer                *string
+	icon                        *string
 	lifetime_warranty           *bool
 	warranty_expires            *time.Time
 	warranty_details            *string
@@ -3393,6 +3394,55 @@ func (m *EntityMutation) ManufacturerCleared() bool {
 func (m *EntityMutation) ResetManufacturer() {
 	m.manufacturer = nil
 	delete(m.clearedFields, entity.FieldManufacturer)
+}
+
+// SetIcon sets the "icon" field.
+func (m *EntityMutation) SetIcon(s string) {
+	m.icon = &s
+}
+
+// Icon returns the value of the "icon" field in the mutation.
+func (m *EntityMutation) Icon() (r string, exists bool) {
+	v := m.icon
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldIcon returns the old "icon" field's value of the Entity entity.
+// If the Entity object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EntityMutation) OldIcon(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldIcon is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldIcon requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldIcon: %w", err)
+	}
+	return oldValue.Icon, nil
+}
+
+// ClearIcon clears the value of the "icon" field.
+func (m *EntityMutation) ClearIcon() {
+	m.icon = nil
+	m.clearedFields[entity.FieldIcon] = struct{}{}
+}
+
+// IconCleared returns if the "icon" field was cleared in this mutation.
+func (m *EntityMutation) IconCleared() bool {
+	_, ok := m.clearedFields[entity.FieldIcon]
+	return ok
+}
+
+// ResetIcon resets all changes to the "icon" field.
+func (m *EntityMutation) ResetIcon() {
+	m.icon = nil
+	delete(m.clearedFields, entity.FieldIcon)
 }
 
 // SetLifetimeWarranty sets the "lifetime_warranty" field.
@@ -4307,7 +4357,7 @@ func (m *EntityMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *EntityMutation) Fields() []string {
-	fields := make([]string, 0, 24)
+	fields := make([]string, 0, 25)
 	if m.created_at != nil {
 		fields = append(fields, entity.FieldCreatedAt)
 	}
@@ -4349,6 +4399,9 @@ func (m *EntityMutation) Fields() []string {
 	}
 	if m.manufacturer != nil {
 		fields = append(fields, entity.FieldManufacturer)
+	}
+	if m.icon != nil {
+		fields = append(fields, entity.FieldIcon)
 	}
 	if m.lifetime_warranty != nil {
 		fields = append(fields, entity.FieldLifetimeWarranty)
@@ -4416,6 +4469,8 @@ func (m *EntityMutation) Field(name string) (ent.Value, bool) {
 		return m.ModelNumber()
 	case entity.FieldManufacturer:
 		return m.Manufacturer()
+	case entity.FieldIcon:
+		return m.Icon()
 	case entity.FieldLifetimeWarranty:
 		return m.LifetimeWarranty()
 	case entity.FieldWarrantyExpires:
@@ -4473,6 +4528,8 @@ func (m *EntityMutation) OldField(ctx context.Context, name string) (ent.Value, 
 		return m.OldModelNumber(ctx)
 	case entity.FieldManufacturer:
 		return m.OldManufacturer(ctx)
+	case entity.FieldIcon:
+		return m.OldIcon(ctx)
 	case entity.FieldLifetimeWarranty:
 		return m.OldLifetimeWarranty(ctx)
 	case entity.FieldWarrantyExpires:
@@ -4599,6 +4656,13 @@ func (m *EntityMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetManufacturer(v)
+		return nil
+	case entity.FieldIcon:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetIcon(v)
 		return nil
 	case entity.FieldLifetimeWarranty:
 		v, ok := value.(bool)
@@ -4769,6 +4833,9 @@ func (m *EntityMutation) ClearedFields() []string {
 	if m.FieldCleared(entity.FieldManufacturer) {
 		fields = append(fields, entity.FieldManufacturer)
 	}
+	if m.FieldCleared(entity.FieldIcon) {
+		fields = append(fields, entity.FieldIcon)
+	}
 	if m.FieldCleared(entity.FieldWarrantyExpires) {
 		fields = append(fields, entity.FieldWarrantyExpires)
 	}
@@ -4821,6 +4888,9 @@ func (m *EntityMutation) ClearField(name string) error {
 		return nil
 	case entity.FieldManufacturer:
 		m.ClearManufacturer()
+		return nil
+	case entity.FieldIcon:
+		m.ClearIcon()
 		return nil
 	case entity.FieldWarrantyExpires:
 		m.ClearWarrantyExpires()
@@ -4892,6 +4962,9 @@ func (m *EntityMutation) ResetField(name string) error {
 		return nil
 	case entity.FieldManufacturer:
 		m.ResetManufacturer()
+		return nil
+	case entity.FieldIcon:
+		m.ResetIcon()
 		return nil
 	case entity.FieldLifetimeWarranty:
 		m.ResetLifetimeWarranty()
