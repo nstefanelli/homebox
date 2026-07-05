@@ -568,6 +568,10 @@ definitions:
       id:
         description: ID of the ent.
         type: string
+      integrations:
+        allOf:
+        - $ref: '#/definitions/types.GroupIntegrations'
+        description: Integrations holds the value of the "integrations" field.
       name:
         description: Name holds the value of the "name" field.
         type: string
@@ -2183,6 +2187,23 @@ definitions:
     - TypeNumber
     - TypeBoolean
     - TypeTime
+  types.GroupIntegrations:
+    properties:
+      aiApiKey:
+        type: string
+      aiBaseUrl:
+        type: string
+      aiModel:
+        type: string
+      aiProvider:
+        description: '"" inherit env | "disabled" force off | "openai_compatible"
+          | "anthropic"'
+        type: string
+      barcodeTokenBarcodespider:
+        type: string
+      openFoodFactsContact:
+        type: string
+    type: object
   usergroup.Role:
     enum:
     - user
@@ -2357,6 +2378,35 @@ definitions:
       name:
         type: string
     type: object
+  v1.GroupIntegrationsOut:
+    properties:
+      aiApiKey:
+        type: string
+      aiBaseUrl:
+        type: string
+      aiConfigured:
+        type: boolean
+      aiModel:
+        type: string
+      aiProvider:
+        description: '"" inherit env | "disabled" force off | "openai_compatible"
+          | "anthropic"'
+        type: string
+      barcodeTokenBarcodespider:
+        type: string
+      barcodespiderConfigured:
+        type: boolean
+      envAiBaseUrl:
+        type: string
+      envAiModel:
+        type: string
+      envAiProvider:
+        type: string
+      isOwner:
+        type: boolean
+      openFoodFactsContact:
+        type: string
+    type: object
   v1.GroupInvitation:
     properties:
       expiresAt:
@@ -2423,6 +2473,13 @@ definitions:
   v1.TelemetryStatus:
     properties:
       enabled:
+        type: boolean
+    type: object
+  v1.TestConnectionResponse:
+    properties:
+      detail:
+        type: string
+      ok:
         type: boolean
     type: object
   v1.TokenResponse:
@@ -3430,6 +3487,79 @@ paths:
       security:
       - Bearer: []
       summary: Get All Groups
+      tags:
+      - Group
+  /v1/groups/integrations:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/v1.GroupIntegrationsOut'
+      security:
+      - Bearer: []
+      summary: Get Group Integrations
+      tags:
+      - Group
+    put:
+      description: 'Owner-only. Body = types.GroupIntegrations. Secret fields use
+        write-only sentinel semantics: incoming "[REDACTED]" keeps the stored value,
+        "" clears it, anything else replaces it.'
+      parameters:
+      - description: Group Integrations
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/types.GroupIntegrations'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/v1.GroupIntegrationsOut'
+      security:
+      - Bearer: []
+      summary: Update Group Integrations
+      tags:
+      - Group
+  /v1/groups/integrations/test-ai:
+    post:
+      description: Owner-only. Resolves the effective AI config and attempts a real
+        round-trip against the configured provider using a fixed 1x1 test image, under
+        a 30s timeout. Always 200; ok/detail report the outcome. detail is a sanitized,
+        coarse string — never the raw provider error.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/v1.TestConnectionResponse'
+      security:
+      - Bearer: []
+      summary: Test Group AI Integration
+      tags:
+      - Group
+  /v1/groups/integrations/test-barcode:
+    post:
+      description: Owner-only. Resolves the effective barcode config and attempts
+        a real lookup against barcodespider.com for a fixed, stable EAN. Always 200;
+        ok/detail report the outcome. detail is a sanitized, coarse string — never
+        the raw error.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/v1.TestConnectionResponse'
+      security:
+      - Bearer: []
+      summary: Test Group Barcode Integration
       tags:
       - Group
   /v1/groups/invitations:

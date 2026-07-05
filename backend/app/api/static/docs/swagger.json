@@ -1563,6 +1563,114 @@
                 }
             }
         },
+        "/v1/groups/integrations": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Group"
+                ],
+                "summary": "Get Group Integrations",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/v1.GroupIntegrationsOut"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Owner-only. Body = types.GroupIntegrations. Secret fields use write-only sentinel semantics: incoming \"[REDACTED]\" keeps the stored value, \"\" clears it, anything else replaces it.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Group"
+                ],
+                "summary": "Update Group Integrations",
+                "parameters": [
+                    {
+                        "description": "Group Integrations",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/types.GroupIntegrations"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/v1.GroupIntegrationsOut"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/groups/integrations/test-ai": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Owner-only. Resolves the effective AI config and attempts a real round-trip against the configured provider using a fixed 1x1 test image, under a 30s timeout. Always 200; ok/detail report the outcome. detail is a sanitized, coarse string — never the raw provider error.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Group"
+                ],
+                "summary": "Test Group AI Integration",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/v1.TestConnectionResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/groups/integrations/test-barcode": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Owner-only. Resolves the effective barcode config and attempts a real lookup against barcodespider.com for a fixed, stable EAN. Always 200; ok/detail report the outcome. detail is a sanitized, coarse string — never the raw error.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Group"
+                ],
+                "summary": "Test Group Barcode Integration",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/v1.TestConnectionResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/v1/groups/invitations": {
             "get": {
                 "security": [
@@ -4264,6 +4372,14 @@
                     "description": "ID of the ent.",
                     "type": "string"
                 },
+                "integrations": {
+                    "description": "Integrations holds the value of the \"integrations\" field.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/types.GroupIntegrations"
+                        }
+                    ]
+                },
                 "name": {
                     "description": "Name holds the value of the \"name\" field.",
                     "type": "string"
@@ -6617,6 +6733,30 @@
                 "TypeTime"
             ]
         },
+        "types.GroupIntegrations": {
+            "type": "object",
+            "properties": {
+                "aiApiKey": {
+                    "type": "string"
+                },
+                "aiBaseUrl": {
+                    "type": "string"
+                },
+                "aiModel": {
+                    "type": "string"
+                },
+                "aiProvider": {
+                    "description": "\"\" inherit env | \"disabled\" force off | \"openai_compatible\" | \"anthropic\"",
+                    "type": "string"
+                },
+                "barcodeTokenBarcodespider": {
+                    "type": "string"
+                },
+                "openFoodFactsContact": {
+                    "type": "string"
+                }
+            }
+        },
         "usergroup.Role": {
             "type": "string",
             "enum": [
@@ -6874,6 +7014,48 @@
                 }
             }
         },
+        "v1.GroupIntegrationsOut": {
+            "type": "object",
+            "properties": {
+                "aiApiKey": {
+                    "type": "string"
+                },
+                "aiBaseUrl": {
+                    "type": "string"
+                },
+                "aiConfigured": {
+                    "type": "boolean"
+                },
+                "aiModel": {
+                    "type": "string"
+                },
+                "aiProvider": {
+                    "description": "\"\" inherit env | \"disabled\" force off | \"openai_compatible\" | \"anthropic\"",
+                    "type": "string"
+                },
+                "barcodeTokenBarcodespider": {
+                    "type": "string"
+                },
+                "barcodespiderConfigured": {
+                    "type": "boolean"
+                },
+                "envAiBaseUrl": {
+                    "type": "string"
+                },
+                "envAiModel": {
+                    "type": "string"
+                },
+                "envAiProvider": {
+                    "type": "string"
+                },
+                "isOwner": {
+                    "type": "boolean"
+                },
+                "openFoodFactsContact": {
+                    "type": "string"
+                }
+            }
+        },
         "v1.GroupInvitation": {
             "type": "object",
             "properties": {
@@ -6972,6 +7154,17 @@
             "type": "object",
             "properties": {
                 "enabled": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "v1.TestConnectionResponse": {
+            "type": "object",
+            "properties": {
+                "detail": {
+                    "type": "string"
+                },
+                "ok": {
                     "type": "boolean"
                 }
             }

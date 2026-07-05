@@ -428,6 +428,8 @@ export interface EntGroup {
   edges: EntGroupEdges;
   /** ID of the ent. */
   id: string;
+  /** Integrations holds the value of the "integrations" field. */
+  integrations: TypesGroupIntegrations;
   /** Name holds the value of the "name" field. */
   name: string;
   /** UpdatedAt holds the value of the "updated_at" field. */
@@ -1341,6 +1343,16 @@ export interface UserRegistration {
   token: string;
 }
 
+export interface TypesGroupIntegrations {
+  aiApiKey: string;
+  aiBaseUrl: string;
+  aiModel: string;
+  /** "" inherit env | "disabled" force off | "openai_compatible" | "anthropic" */
+  aiProvider: string;
+  barcodeTokenBarcodespider: string;
+  openFoodFactsContact: string;
+}
+
 export interface APISummary {
   aiPhotoAnalysis: boolean;
   allowRegistration: boolean;
@@ -1440,6 +1452,22 @@ export interface GroupAcceptInvitationResponse {
   name: string;
 }
 
+export interface GroupIntegrationsOut {
+  aiApiKey: string;
+  aiBaseUrl: string;
+  aiConfigured: boolean;
+  aiModel: string;
+  /** "" inherit env | "disabled" force off | "openai_compatible" | "anthropic" */
+  aiProvider: string;
+  barcodeTokenBarcodespider: string;
+  barcodespiderConfigured: boolean;
+  envAiBaseUrl: string;
+  envAiModel: string;
+  envAiProvider: string;
+  isOwner: boolean;
+  openFoodFactsContact: string;
+}
+
 export interface GroupInvitation {
   expiresAt: Date | string;
   id: string;
@@ -1484,6 +1512,11 @@ export interface ResultsRepoExportOut {
 
 export interface TelemetryStatus {
   enabled: boolean;
+}
+
+export interface TestConnectionResponse {
+  detail: string;
+  ok: boolean;
 }
 
 export interface TokenResponse {
