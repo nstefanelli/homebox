@@ -39,8 +39,8 @@ func TestOpenAICompatible_Success(t *testing.T) {
 	_, p := oaiServer(t, func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
 		gotPath = r.URL.Path
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
-		w.Write(oaiChatResponse(goodReply))
+		assert.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		_, _ = w.Write(oaiChatResponse(goodReply))
 	})
 
 	res, err := p.Analyze(context.Background(), []byte{0x89, 0x50}, "image/png")
@@ -56,7 +56,7 @@ func TestOpenAICompatible_NoAuthHeaderWhenNoKey(t *testing.T) {
 	var gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
-		w.Write(oaiChatResponse(goodReply))
+		_, _ = w.Write(oaiChatResponse(goodReply))
 	}))
 	t.Cleanup(srv.Close)
 	p := newOpenAICompatibleProvider(config.AIConf{BaseURL: srv.URL, Model: "m", TimeoutSeconds: 5})
@@ -71,10 +71,10 @@ func TestOpenAICompatible_RepairRetryRecovers(t *testing.T) {
 	_, p := oaiServer(t, func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		if calls == 1 {
-			w.Write(oaiChatResponse("Sure! It looks like a drill."))
+			_, _ = w.Write(oaiChatResponse("Sure! It looks like a drill."))
 			return
 		}
-		w.Write(oaiChatResponse(goodReply))
+		_, _ = w.Write(oaiChatResponse(goodReply))
 	})
 
 	res, err := p.Analyze(context.Background(), []byte{1}, "image/jpeg")
@@ -87,7 +87,7 @@ func TestOpenAICompatible_RepairRetryExhaustedErrors(t *testing.T) {
 	calls := 0
 	_, p := oaiServer(t, func(w http.ResponseWriter, r *http.Request) {
 		calls++
-		w.Write(oaiChatResponse("still not json"))
+		_, _ = w.Write(oaiChatResponse("still not json"))
 	})
 
 	_, err := p.Analyze(context.Background(), []byte{1}, "image/jpeg")

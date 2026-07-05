@@ -30,11 +30,11 @@ func TestAnthropic_Success(t *testing.T) {
 		gotKey = r.Header.Get("x-api-key")
 		gotVersion = r.Header.Get("anthropic-version")
 		gotPath = r.URL.Path
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		assert.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
 		resp, _ := json.Marshal(map[string]any{
 			"content": []map[string]any{{"type": "text", "text": goodReply}},
 		})
-		w.Write(resp)
+		_, _ = w.Write(resp)
 	})
 
 	res, err := p.Analyze(context.Background(), []byte{0xFF, 0xD8}, "image/jpeg")
@@ -69,7 +69,7 @@ func TestAnthropic_HTTPErrorStatus(t *testing.T) {
 func TestAnthropic_NoTextBlockErrors(t *testing.T) {
 	p := anthropicServer(t, func(w http.ResponseWriter, r *http.Request) {
 		resp, _ := json.Marshal(map[string]any{"content": []map[string]any{}})
-		w.Write(resp)
+		_, _ = w.Write(resp)
 	})
 
 	_, err := p.Analyze(context.Background(), []byte{1}, "image/jpeg")

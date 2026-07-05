@@ -12,7 +12,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/hay-kot/httpkit/errchain"
-	"github.com/rs/zerolog/log"
 	httpSwagger "github.com/swaggo/http-swagger/v2" // http-swagger middleware
 	"github.com/sysadminsmedia/homebox/backend/app/api/handlers/debughandlers"
 	v1 "github.com/sysadminsmedia/homebox/backend/app/api/handlers/v1"
@@ -40,8 +39,17 @@ func (a *app) debugRouter() *http.ServeMux {
 }
 
 // registerRoutes registers all the routes for the API
-func (a *app) mountRoutes(r *chi.Mux, chain *errchain.ErrChain, repos *repo.AllRepos) {
+func (a *app) mountRoutes(r *chi.Mux, chain *errchain.ErrChain, repos *repo.AllRepos) error {
 	registerMimes()
+
+	var aiProvider ai.Provider
+	if a.conf.AI.Provider != "" {
+		var err error
+		aiProvider, err = ai.NewProvider(a.conf.AI)
+		if err != nil {
+			return fmt.Errorf("invalid HBOX_AI configuration: %w", err)
+		}
+	}
 
 	// Serve doc.json dynamically so the Swagger UI "Base URL" reflects the
 	// actual host of the user's instance rather than a hardcoded value.
@@ -159,11 +167,7 @@ func (a *app) mountRoutes(r *chi.Mux, chain *errchain.ErrChain, repos *repo.AllR
 		r.Post("/actions/create-missing-thumbnails", chain.ToHandlerFunc(v1Ctrl.HandleCreateMissingThumbnails(), userMW...))
 		r.Post("/actions/wipe-inventory", chain.ToHandlerFunc(v1Ctrl.HandleWipeInventory(), userMW...))
 
-		if a.conf.AI.Provider != "" {
-			aiProvider, err := ai.NewProvider(a.conf.AI)
-			if err != nil {
-				log.Fatal().Err(err).Msg("invalid HBOX_AI configuration")
-			}
+		if aiProvider != nil {
 			r.Post("/actions/analyze-photo", chain.ToHandlerFunc(v1Ctrl.HandleAnalyzePhoto(aiProvider), userMW...))
 		}
 
@@ -268,6 +272,8 @@ func (a *app) mountRoutes(r *chi.Mux, chain *errchain.ErrChain, repos *repo.AllR
 	})
 
 	r.NotFound(chain.ToHandlerFunc(notFoundHandler()))
+
+	return nil
 }
 
 func registerMimes() {

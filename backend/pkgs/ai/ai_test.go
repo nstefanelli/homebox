@@ -57,7 +57,7 @@ func TestNewProvider_Selection(t *testing.T) {
 	assert.IsType(t, &anthropicProvider{}, p2)
 
 	_, err = NewProvider(config.AIConf{Provider: ""})
-	assert.ErrorIs(t, err, ErrAIDisabled)
+	require.ErrorIs(t, err, ErrAIDisabled)
 
 	_, err = NewProvider(config.AIConf{Provider: "bogus"})
 	require.Error(t, err)

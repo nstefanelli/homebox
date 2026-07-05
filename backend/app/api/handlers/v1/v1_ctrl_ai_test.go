@@ -79,7 +79,7 @@ func TestHandleAnalyzePhoto_Success(t *testing.T) {
 	assert.Equal(t, "DeWalt 20V Drill", p.Item.Name)
 	assert.Equal(t, "DeWalt", p.Item.Manufacturer)
 	assert.Equal(t, "DCD771", p.Item.ModelNumber)
-	assert.Equal(t, float64(1), p.Item.Quantity)
+	assert.InDelta(t, float64(1), p.Item.Quantity, 0)
 	assert.Empty(t, p.Barcode)
 	assert.Contains(t, p.ImageBase64, "data:image/png;base64,")
 	assert.Equal(t, p.ImageBase64, p.ImageURL, "prefill guard in CreateModal checks imageURL truthiness")

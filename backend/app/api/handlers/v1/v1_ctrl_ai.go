@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/hay-kot/httpkit/errchain"
 	"github.com/hay-kot/httpkit/server"
@@ -37,6 +38,18 @@ type AnalyzePhotoResponse struct {
 //	@Security		Bearer
 func (ctrl *V1Controller) HandleAnalyzePhoto(provider ai.Provider) errchain.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) error {
+		// The global http.Server write/read timeouts (default 10s, see
+		// internal/sys/config Web.WriteTimeout) are sized for ordinary API
+		// requests. A cold vision-model load on the configured AI provider
+		// can legitimately take 30-60s+ (see spec Q5), so this route alone
+		// needs a deadline that covers the provider's own timeout plus
+		// margin for upload/JSON overhead — otherwise the server aborts the
+		// connection mid-request long before the provider ever times out.
+		deadline := time.Now().Add(time.Duration(ctrl.config.AI.TimeoutSeconds+30) * time.Second)
+		rc := http.NewResponseController(w)
+		_ = rc.SetWriteDeadline(deadline)
+		_ = rc.SetReadDeadline(deadline)
+
 		err := r.ParseMultipartForm(ctrl.maxUploadSize << 20)
 		if err != nil {
 			return validate.NewRequestError(errors.New("failed to parse multipart form"), http.StatusBadRequest)

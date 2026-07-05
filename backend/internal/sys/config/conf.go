@@ -164,7 +164,7 @@ func (c BarcodeAPIConf) MarshalJSON() ([]byte, error) {
 }
 
 type AIConf struct {
-	Provider       string `yaml:"provider"`        // "" (disabled) | "openai_compatible" | "anthropic"
+	Provider       string `yaml:"provider"` // "" (disabled) | "openai_compatible" | "anthropic"
 	BaseURL        string `yaml:"base_url"`
 	APIKey         string `yaml:"api_key"`
 	Model          string `yaml:"model"`
