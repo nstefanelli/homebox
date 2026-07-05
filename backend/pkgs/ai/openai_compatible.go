@@ -52,7 +52,7 @@ func (p *openaiCompatibleProvider) Analyze(ctx context.Context, imageBytes []byt
 		}},
 	}
 
-	reply, err := p.complete(ctx, messages)
+	reply, err := p.complete(ctx, messages, true)
 	if err != nil {
 		return AnalyzeResult{}, err
 	}
@@ -68,7 +68,7 @@ func (p *openaiCompatibleProvider) Analyze(ctx context.Context, imageBytes []byt
 		oaiMessage{Role: "user", Content: fmt.Sprintf(
 			"Your previous response was not the required JSON object (%v). Respond again with ONLY the JSON object, no other text.", parseErr)},
 	)
-	reply, err = p.complete(ctx, messages)
+	reply, err = p.complete(ctx, messages, true)
 	if err != nil {
 		return AnalyzeResult{}, err
 	}
@@ -86,7 +86,13 @@ func (p *openaiCompatibleProvider) AnalyzeContents(ctx context.Context, imageByt
 		}},
 	}
 
-	reply, err := p.complete(ctx, messages)
+	// No response_format here: OpenAI-style json_object mode contracts the
+	// reply to a JSON OBJECT, but the bulk lane needs a top-level ARRAY.
+	// Constrained backends (e.g. Ollama) will emit an object wrapper (or bare
+	// {}) under json_object even when re-asked for an array, which is a
+	// guaranteed parse failure. Free-form + fence-tolerant parsing + the
+	// repair retry below is the reliable path for arrays.
+	reply, err := p.complete(ctx, messages, false)
 	if err != nil {
 		return nil, err
 	}
@@ -101,19 +107,22 @@ func (p *openaiCompatibleProvider) AnalyzeContents(ctx context.Context, imageByt
 		oaiMessage{Role: "user", Content: fmt.Sprintf(
 			"Your previous response was not the required JSON array (%v). Respond again with ONLY the JSON array, no other text.", parseErr)},
 	)
-	reply, err = p.complete(ctx, messages)
+	reply, err = p.complete(ctx, messages, false)
 	if err != nil {
 		return nil, err
 	}
 	return parseAnalyzeResults(reply)
 }
 
-func (p *openaiCompatibleProvider) complete(ctx context.Context, messages []oaiMessage) (string, error) {
-	body, err := json.Marshal(map[string]any{
-		"model":           p.model,
-		"messages":        messages,
-		"response_format": map[string]string{"type": "json_object"},
-	})
+func (p *openaiCompatibleProvider) complete(ctx context.Context, messages []oaiMessage, jsonObjectFormat bool) (string, error) {
+	payload := map[string]any{
+		"model":    p.model,
+		"messages": messages,
+	}
+	if jsonObjectFormat {
+		payload["response_format"] = map[string]string{"type": "json_object"}
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
 	}

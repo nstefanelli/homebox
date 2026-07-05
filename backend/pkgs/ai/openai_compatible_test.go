@@ -124,6 +124,12 @@ func TestOpenAICompatible_AnalyzeContents_Success(t *testing.T) {
 	msgs := gotBody["messages"].([]any)
 	sys := msgs[0].(map[string]any)
 	assert.Contains(t, sys[jsonFieldContent], "OPEN CONTAINER")
+
+	// json_object response_format must NOT be sent on the bulk lane -- it
+	// contracts the reply to an object, but bulk needs a top-level array
+	// (verified live against Ollama: under json_object the model returns an
+	// object wrapper even when re-asked for an array -> guaranteed 502).
+	assert.NotContains(t, gotBody, "response_format")
 }
 
 func TestOpenAICompatible_AnalyzeContents_RepairRetryRecovers(t *testing.T) {
