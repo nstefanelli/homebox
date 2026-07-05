@@ -70,15 +70,19 @@ const NIL_UUID = "00000000-0000-0000-0000-000000000000";
 
 /** Template custom fields for a catalog entry. */
 export function catalogFields(entry: CatalogEntry): TemplateField[] {
-  const textField = (name: string, textValue: string): TemplateField => ({
-    id: NIL_UUID,
-    type: "text",
-    name,
-    textValue,
-    booleanValue: false,
-    numberValue: 0,
-    timeValue: "",
-  });
+  const textField = (name: string, textValue: string): TemplateField =>
+    ({
+      id: NIL_UUID,
+      type: "text",
+      name,
+      textValue,
+      booleanValue: false,
+      numberValue: 0,
+      // Backend decodes timeValue as time.Time; "" fails to parse (only "" via
+      // omission/null is accepted). Match the established EntityFieldData
+      // pattern (pages/item/[id]/index/edit.vue, pages/location/[id]/index/edit.vue).
+      timeValue: null,
+    }) as unknown as TemplateField;
 
   return [
     textField("Capacity", entry.capacity),
