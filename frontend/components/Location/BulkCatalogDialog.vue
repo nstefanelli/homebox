@@ -1,5 +1,5 @@
 <template>
-  <Dialog :dialog-id="DialogID.BulkCatalog">
+  <Dialog :dialog-id="DialogID.BulkCatalog" :before-close="guardBeforeClose">
     <DialogContent
       :class="'w-full md:max-w-xl lg:max-w-4xl'"
       @escape-key-down="guardClose"
@@ -177,6 +177,13 @@
   const committing = ref(false);
   const createdCount = ref(0);
 
+  // Indices into `photos` that have already been uploaded as container
+  // attachments. commit() is re-entrant (retried after a partial failure),
+  // so this lets the upload loop skip photos that already succeeded instead
+  // of re-uploading them as duplicate attachments. Failed uploads are NOT
+  // added here, so they remain retryable on the next commit().
+  const uploadedPhotoIdx = new Set<number>();
+
   // Applied-hint tag ids per candidate, keyed by candidate key. Nothing in the
   // template reads this directly (it's only consulted at commit time), so a
   // plain Map avoids taking on Vue's deep-reactivity overhead for no benefit.
@@ -211,6 +218,7 @@
       committing.value = false;
       createdCount.value = 0;
       tagIdsByCandidate.clear();
+      uploadedPhotoIdx.clear();
     });
 
     onUnmounted(cleanup);
@@ -299,7 +307,13 @@
     // attaches to the container itself (once), not to the individual items
     // created from it. Items are already created at this point, so an upload
     // failure here is non-fatal -- it's toasted but doesn't block the summary.
+    // commit() can be re-invoked after a partial failure (retryable failed
+    // candidates), so skip photos already uploaded by a prior call -- only
+    // the ones that actually failed get retried.
     for (let i = 0; i < photos.value.length; i++) {
+      if (uploadedPhotoIdx.has(i)) {
+        continue;
+      }
       const photo = photos.value[i]!;
       const photoName = `contents-snapshot-${i + 1}.jpg`;
       const { error } = await api.items.attachments.add(
@@ -311,6 +325,8 @@
       );
       if (error) {
         toast.error(t("components.entity.create_modal.toast.upload_failed", { photoName }));
+      } else {
+        uploadedPhotoIdx.add(i);
       }
     }
 
@@ -329,24 +345,57 @@
     }
   }
 
-  // Guards accidental dismissal (Escape / click-outside) while there are
+  // Shared by both dismissal guards below: candidates that would be silently
+  // discarded if the dialog closed right now.
+  function pendingUnconfirmed() {
+    return candidates.value.filter(c => c.status === "pending" && c.checked);
+  }
+
+  // Same confirmation prompt for every dismissal path, so "x" button, Escape,
+  // and outside-click all ask the user the identical question.
+  async function confirmDiscard(pending: ReviewCandidate[]): Promise<boolean> {
+    const { isCanceled } = await confirm.open(
+      t("components.location.bulk_catalog.discard_confirm", { n: pending.length })
+    );
+    return !isCanceled;
+  }
+
+  // Guards accidental dismissal via Escape / click-outside while there are
   // checked-but-not-yet-created candidates, so a stray click doesn't silently
-  // discard a batch of reviewed items. The dialog's built-in "x" close button
-  // isn't covered by this guard -- see task report for the reasoning.
+  // discard a batch of reviewed items. These reka-ui events are cancelable,
+  // so preventDefault() must happen synchronously (before the confirm await)
+  // to stop the dismissal -- see DismissableLayer, which checks
+  // event.defaultPrevented immediately after emitting.
   async function guardClose(event: KeyboardEvent | PointerDownOutsideEvent) {
     if (committing.value) {
       return;
     }
-    const pending = candidates.value.filter(c => c.status === "pending" && c.checked);
+    const pending = pendingUnconfirmed();
     if (pending.length === 0) {
       return;
     }
     event.preventDefault();
-    const { isCanceled } = await confirm.open(
-      t("components.location.bulk_catalog.discard_confirm", { n: pending.length })
-    );
-    if (!isCanceled) {
+    if (await confirmDiscard(pending)) {
       closeDialog(DialogID.BulkCatalog, undefined);
     }
+  }
+
+  // Consulted by the shared Dialog wrapper's `before-close` prop before ANY
+  // close request reaches closeDialog -- this is what catches the dialog's
+  // built-in "x" button, which (unlike Escape/outside-click) fires directly
+  // through DialogRoot's onOpenChange with no cancelable event to intercept.
+  // Escape/outside-click are already handled by guardClose above via
+  // preventDefault, but this also runs for them (harmlessly redundant when
+  // guardClose already blocked the event, since closeDialog is never reached
+  // in that case) -- see task report for the full dismissal-path analysis.
+  async function guardBeforeClose(): Promise<boolean> {
+    if (committing.value) {
+      return true;
+    }
+    const pending = pendingUnconfirmed();
+    if (pending.length === 0) {
+      return true;
+    }
+    return confirmDiscard(pending);
   }
 </script>
