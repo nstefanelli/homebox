@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/hay-kot/httpkit/errchain"
+	"github.com/rs/zerolog/log"
 	httpSwagger "github.com/swaggo/http-swagger/v2" // http-swagger middleware
 	"github.com/sysadminsmedia/homebox/backend/app/api/handlers/debughandlers"
 	v1 "github.com/sysadminsmedia/homebox/backend/app/api/handlers/v1"
@@ -19,6 +20,7 @@ import (
 	docs "github.com/sysadminsmedia/homebox/backend/app/api/static/docs"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/authroles"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/repo"
+	"github.com/sysadminsmedia/homebox/backend/pkgs/ai"
 )
 
 const prefix = "/api"
@@ -156,6 +158,14 @@ func (a *app) mountRoutes(r *chi.Mux, chain *errchain.ErrChain, repos *repo.AllR
 		r.Post("/actions/set-primary-photos", chain.ToHandlerFunc(v1Ctrl.HandleSetPrimaryPhotos(), userMW...))
 		r.Post("/actions/create-missing-thumbnails", chain.ToHandlerFunc(v1Ctrl.HandleCreateMissingThumbnails(), userMW...))
 		r.Post("/actions/wipe-inventory", chain.ToHandlerFunc(v1Ctrl.HandleWipeInventory(), userMW...))
+
+		if a.conf.AI.Provider != "" {
+			aiProvider, err := ai.NewProvider(a.conf.AI)
+			if err != nil {
+				log.Fatal().Err(err).Msg("invalid HBOX_AI configuration")
+			}
+			r.Post("/actions/analyze-photo", chain.ToHandlerFunc(v1Ctrl.HandleAnalyzePhoto(aiProvider), userMW...))
+		}
 
 		// Tags endpoints
 		r.Get("/tags", chain.ToHandlerFunc(v1Ctrl.HandleTagsGetAll(), userMW...))
