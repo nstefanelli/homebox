@@ -1,11 +1,20 @@
 package v1
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"image/png"
+	"net"
+	"net/url"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/types"
 	"github.com/sysadminsmedia/homebox/backend/internal/sys/config"
+	"github.com/sysadminsmedia/homebox/backend/pkgs/ai"
 )
 
 // Test_redactIntegrations covers the pure redaction/shaping mapper behind
@@ -182,6 +191,220 @@ func Test_redactSecretField(t *testing.T) {
 			if tc.effectiveValue != "" {
 				assert.NotEqual(t, tc.effectiveValue, got, "must never leak the effective plaintext value")
 			}
+		})
+	}
+}
+
+// Test_testImagePNG pins the test-ai fixture image down: it must actually be
+// a valid, decodable 1x1 PNG (not just non-empty bytes), since the whole
+// point is to hand the configured provider a real image.
+func Test_testImagePNG(t *testing.T) {
+	require.NotEmpty(t, testImagePNG)
+
+	img, err := png.Decode(bytes.NewReader(testImagePNG))
+	require.NoError(t, err, "testImagePNG must decode as a valid PNG")
+
+	bounds := img.Bounds()
+	assert.Equal(t, 1, bounds.Dx())
+	assert.Equal(t, 1, bounds.Dy())
+}
+
+// Test_testAIResponseForConfig covers the "" (not configured, no group
+// override and no env fallback) short-circuit for POST test-ai. This is
+// reachable purely (no DB) because it operates on an already-resolved
+// config.AIConf rather than fetching one — see the doc comment on
+// testAIResponseForConfig for why this package can't test the DB-backed
+// EffectiveAI call itself.
+func Test_testAIResponseForConfig(t *testing.T) {
+	tests := []struct {
+		name        string
+		conf        config.AIConf
+		wantHandled bool
+		want        TestConnectionResponse
+	}{
+		{
+			name:        "no provider anywhere -> not configured, short-circuited",
+			conf:        config.AIConf{},
+			wantHandled: true,
+			want:        TestConnectionResponse{OK: false, Detail: testDetailAINotConfigured},
+		},
+		{
+			name:        "provider configured -> not handled here, caller proceeds to Analyze",
+			conf:        config.AIConf{Provider: "openai_compatible", BaseURL: "http://localhost:1234"},
+			wantHandled: false,
+			want:        TestConnectionResponse{},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, handled := testAIResponseForConfig(tc.conf)
+			assert.Equal(t, tc.wantHandled, handled)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// Test_testBarcodeResponseForConfig mirrors Test_testAIResponseForConfig for
+// the barcode not-configured branch.
+func Test_testBarcodeResponseForConfig(t *testing.T) {
+	tests := []struct {
+		name        string
+		conf        config.BarcodeAPIConf
+		wantHandled bool
+		want        TestConnectionResponse
+	}{
+		{
+			name:        "no token anywhere -> not configured, short-circuited",
+			conf:        config.BarcodeAPIConf{},
+			wantHandled: true,
+			want:        TestConnectionResponse{OK: false, Detail: testDetailNoTokenConfigured},
+		},
+		{
+			name:        "token configured -> not handled here, caller proceeds to lookup",
+			conf:        config.BarcodeAPIConf{TokenBarcodespider: "some-token"},
+			wantHandled: false,
+			want:        TestConnectionResponse{},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, handled := testBarcodeResponseForConfig(tc.conf)
+			assert.Equal(t, tc.wantHandled, handled)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// Test_buildTestAIResult covers the success/failure mapping for POST
+// test-ai's provider.Analyze outcome, without ever invoking a real provider.
+func Test_buildTestAIResult(t *testing.T) {
+	tests := []struct {
+		name string
+		res  ai.AnalyzeResult
+		err  error
+		want TestConnectionResponse
+	}{
+		{
+			name: "success with a name -> ok, detail is the identified name",
+			res:  ai.AnalyzeResult{Name: "Mystery Item"},
+			want: TestConnectionResponse{OK: true, Detail: "Mystery Item"},
+		},
+		{
+			name: "success with an empty name (blank test image) -> ok, generic detail",
+			res:  ai.AnalyzeResult{},
+			want: TestConnectionResponse{OK: true, Detail: testDetailResponded},
+		},
+		{
+			name: "failure -> not ok, error classified not echoed",
+			err:  errors.New("vision provider returned status code: 401: unauthorized"),
+			want: TestConnectionResponse{OK: false, Detail: testDetailAuthFailed},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := buildTestAIResult(tc.res, tc.err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// Test_buildTestBarcodeResult mirrors Test_buildTestAIResult for POST
+// test-barcode's lookupBarcodespider outcome.
+func Test_buildTestBarcodeResult(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want TestConnectionResponse
+	}{
+		{
+			name: "success -> ok, generic detail",
+			want: TestConnectionResponse{OK: true, Detail: testDetailResponded},
+		},
+		{
+			name: "failure -> not ok, error classified not echoed",
+			err:  errors.New("barcodespider API returned status code: 500: server error"),
+			want: TestConnectionResponse{OK: false, Detail: testDetailProviderError},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := buildTestBarcodeResult(tc.err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// Test_classifyTestError pins down every bucket classifyTestError can
+// produce, and — critically — that none of them ever contain the raw
+// error's text (the whole point of the sanitization discipline).
+func Test_classifyTestError(t *testing.T) {
+	sensitive := "https://user:s3cr3t-api-key@internal.example.com/v1/messages"
+
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "context deadline exceeded (our own 30s timeout) -> connection failed",
+			err:  fmt.Errorf("provider call: %w", context.DeadlineExceeded),
+			want: testDetailConnectionFailed,
+		},
+		{
+			name: "url.Error (client.Do network failure) -> connection failed",
+			err: &url.Error{
+				Op:  "Post",
+				URL: sensitive,
+				Err: errors.New("connection refused"),
+			},
+			want: testDetailConnectionFailed,
+		},
+		{
+			name: "wrapped url.Error -> connection failed (unwraps through fmt.Errorf)",
+			err: fmt.Errorf("vision provider request failed: %w", &url.Error{
+				Op:  "Post",
+				URL: sensitive,
+				Err: errors.New("no such host"),
+			}),
+			want: testDetailConnectionFailed,
+		},
+		{
+			name: "bare net.Error -> connection failed",
+			err:  &net.DNSError{Err: "no such host", Name: "internal.example.com", IsTimeout: true},
+			want: testDetailConnectionFailed,
+		},
+		{
+			name: "401 status marker -> authentication failed",
+			err:  fmt.Errorf("vision provider returned status code: 401: %s", sensitive),
+			want: testDetailAuthFailed,
+		},
+		{
+			name: "403 status marker -> authentication failed",
+			err:  errors.New("barcodespider API returned status code: 403: forbidden"),
+			want: testDetailAuthFailed,
+		},
+		{
+			name: "other status code -> provider error",
+			err:  errors.New("vision provider returned status code: 500: internal error"),
+			want: testDetailProviderError,
+		},
+		{
+			name: "unparseable body -> provider error",
+			err:  errors.New("vision provider returned unparseable body: unexpected EOF"),
+			want: testDetailProviderError,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := classifyTestError(tc.err)
+			assert.Equal(t, tc.want, got)
+			assert.NotContains(t, got, "s3cr3t-api-key", "classified detail must never leak the raw error text")
+			assert.NotContains(t, got, "internal.example.com", "classified detail must never leak the raw error text")
 		})
 	}
 }

@@ -140,6 +140,8 @@ func (a *app) mountRoutes(r *chi.Mux, chain *errchain.ErrChain, repos *repo.AllR
 
 		r.Get("/groups/integrations", chain.ToHandlerFunc(v1Ctrl.HandleIntegrationsGet(), userMW...))
 		r.Put("/groups/integrations", chain.ToHandlerFunc(v1Ctrl.HandleIntegrationsUpdate(), userMW...))
+		r.Post("/groups/integrations/test-ai", chain.ToHandlerFunc(v1Ctrl.HandleIntegrationsTestAI(), userMW...))
+		r.Post("/groups/integrations/test-barcode", chain.ToHandlerFunc(v1Ctrl.HandleIntegrationsTestBarcode(), userMW...))
 
 		r.Get("/groups/members", chain.ToHandlerFunc(v1Ctrl.HandleGroupMembersGetAll(), userMW...))
 		r.Delete("/groups/members/{user_id}", chain.ToHandlerFunc(v1Ctrl.HandleGroupMemberRemove(), userMW...))
