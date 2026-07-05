@@ -1,7 +1,13 @@
 <template>
   <Select :model-value="selectedEntityType" @update:model-value="id => onEntityTypeChanged(id as string)">
     <SelectTrigger :class="{ 'h-7 p-1': size === 'sm' }">
-      <SelectValue :class="{ 'text-xl': size === 'sm' }" :placeholder="$t('components.entity.selector.placeholder')" />
+      <SelectValue :class="{ 'text-xl': size === 'sm' }" :placeholder="$t('components.entity.selector.placeholder')">
+        <span v-if="currentEntityType" class="inline-flex items-center gap-2">
+          <MdiMapMarkerOutline v-if="currentEntityType.isLocation && !currentEntityType.isContainer" class="size-4" />
+          <MdiPackageVariantClosed v-else class="size-4" />
+          <span>{{ t(currentEntityType.name) }}</span>
+        </span>
+      </SelectValue>
     </SelectTrigger>
     <SelectContent>
       <SelectItem v-for="type in entityTypes" :key="type.id" :value="type.id">
@@ -28,10 +34,12 @@
 
   const { t } = useI18n();
 
-  defineProps<{
+  const props = defineProps<{
     entityTypes: EntityTypeSummary[];
     selectedEntityType?: string;
     onEntityTypeChanged: (id: string) => void;
     size?: "sm" | "md";
   }>();
+
+  const currentEntityType = computed(() => props.entityTypes.find(t => t.id === props.selectedEntityType));
 </script>
