@@ -222,7 +222,9 @@ func run(cfg *config.Config) error {
 
 	chain := errchain.New(mid.Errors(logger))
 
-	app.mountRoutes(router, chain, app.repos)
+	if err := app.mountRoutes(router, chain, app.repos); err != nil {
+		return err
+	}
 
 	runner := graceful.NewRunner()
 

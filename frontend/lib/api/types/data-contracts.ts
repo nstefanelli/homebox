@@ -195,6 +195,8 @@ export interface EntEntity {
    * The values are being populated by the EntityQuery when eager-loading is set.
    */
   edges: EntEntityEdges;
+  /** Icon holds the value of the "icon" field. */
+  icon: string;
   /** ID of the ent. */
   id: string;
   /** ImportRef holds the value of the "import_ref" field. */
@@ -751,6 +753,15 @@ export interface EntityCreate {
   /** @maxLength 1000 */
   description: string;
   entityTypeId: string;
+  /** @maxLength 255 */
+  icon: string;
+  /** @maxLength 255 */
+  manufacturer: string;
+  /**
+   * Identifications
+   * @maxLength 255
+   */
+  modelNumber: string;
   /**
    * @minLength 1
    * @maxLength 255
@@ -790,6 +801,7 @@ export interface EntityOut {
   description: string;
   entityType?: EntityTypeSummary | null;
   fields: EntityFieldData[];
+  icon: string;
   id: string;
   imageId?: string | null;
   insured: boolean;
@@ -833,9 +845,12 @@ export interface EntityPatch {
 }
 
 export interface EntityPath {
+  icon: string;
   id: string;
+  isContainer: boolean;
   name: string;
   type: EntityPathType;
+  typeIcon: string;
 }
 
 export interface EntitySummary {
@@ -845,6 +860,7 @@ export interface EntitySummary {
   createdAt: Date | string;
   description: string;
   entityType?: EntityTypeSummary | null;
+  icon: string;
   id: string;
   imageId?: string | null;
   insured: boolean;
@@ -1008,6 +1024,8 @@ export interface EntityUpdate {
   description: string;
   entityTypeId: string;
   fields: EntityFieldData[];
+  /** @maxLength 255 */
+  icon: string;
   id: string;
   insured: boolean;
   /** Warranty */
@@ -1267,9 +1285,12 @@ export interface TotalsByOrganizer {
 
 export interface TreeItem {
   children: TreeItem[];
+  icon: string;
   id: string;
+  isContainer: boolean;
   name: string;
   type: string;
+  typeIcon: string;
 }
 
 export interface UserOut {
@@ -1321,6 +1342,7 @@ export interface UserRegistration {
 }
 
 export interface APISummary {
+  aiPhotoAnalysis: boolean;
   allowRegistration: boolean;
   build: Build;
   demo: boolean;
@@ -1336,6 +1358,13 @@ export interface APISummary {
 
 export interface ActionAmountResult {
   completed: number;
+}
+
+export interface AnalyzePhotoResponse {
+  categoryHints: string[];
+  confidence: number;
+  lane: string;
+  products: BarcodeProduct[];
 }
 
 export interface Build {

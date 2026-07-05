@@ -18,6 +18,43 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/v1/actions/analyze-photo": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Identifies a physical item from a photo using the configured vision AI provider",
+                "consumes": [
+                    "multipart/form-data"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Actions"
+                ],
+                "summary": "Analyze Item Photo",
+                "parameters": [
+                    {
+                        "type": "file",
+                        "description": "Photo of a single item (JPEG/PNG/WebP)",
+                        "name": "file",
+                        "in": "formData",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/v1.AnalyzePhotoResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/v1/actions/create-missing-thumbnails": {
             "post": {
                 "security": [
@@ -2730,6 +2767,12 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/validate.ErrorResponse"
                         }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/validate.ErrorResponse"
+                        }
                     }
                 }
             },
@@ -3668,6 +3711,10 @@ const docTemplate = `{
                             "$ref": "#/definitions/ent.EntityEdges"
                         }
                     ]
+                },
+                "icon": {
+                    "description": "Icon holds the value of the \"icon\" field.",
+                    "type": "string"
                 },
                 "id": {
                     "description": "ID of the ent.",
@@ -4976,6 +5023,19 @@ const docTemplate = `{
                 "entityTypeId": {
                     "type": "string"
                 },
+                "icon": {
+                    "type": "string",
+                    "maxLength": 255
+                },
+                "manufacturer": {
+                    "type": "string",
+                    "maxLength": 255
+                },
+                "modelNumber": {
+                    "description": "Identifications",
+                    "type": "string",
+                    "maxLength": 255
+                },
                 "name": {
                     "type": "string",
                     "maxLength": 255,
@@ -5086,6 +5146,9 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/repo.EntityFieldData"
                     }
+                },
+                "icon": {
+                    "type": "string"
                 },
                 "id": {
                     "type": "string"
@@ -5220,14 +5283,23 @@ const docTemplate = `{
         "repo.EntityPath": {
             "type": "object",
             "properties": {
+                "icon": {
+                    "type": "string"
+                },
                 "id": {
                     "type": "string"
+                },
+                "isContainer": {
+                    "type": "boolean"
                 },
                 "name": {
                     "type": "string"
                 },
                 "type": {
                     "$ref": "#/definitions/repo.EntityPathType"
+                },
+                "typeIcon": {
+                    "type": "string"
                 }
             }
         },
@@ -5266,6 +5338,9 @@ const docTemplate = `{
                     ],
                     "x-nullable": true,
                     "x-omitempty": true
+                },
+                "icon": {
+                    "type": "string"
                 },
                 "id": {
                     "type": "string"
@@ -5704,6 +5779,10 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/repo.EntityFieldData"
                     }
+                },
+                "icon": {
+                    "type": "string",
+                    "maxLength": 255
                 },
                 "id": {
                     "type": "string"
@@ -6347,13 +6426,22 @@ const docTemplate = `{
                         "$ref": "#/definitions/repo.TreeItem"
                     }
                 },
+                "icon": {
+                    "type": "string"
+                },
                 "id": {
                     "type": "string"
+                },
+                "isContainer": {
+                    "type": "boolean"
                 },
                 "name": {
                     "type": "string"
                 },
                 "type": {
+                    "type": "string"
+                },
+                "typeIcon": {
                     "type": "string"
                 }
             }
@@ -6511,6 +6599,9 @@ const docTemplate = `{
         "v1.APISummary": {
             "type": "object",
             "properties": {
+                "aiPhotoAnalysis": {
+                    "type": "boolean"
+                },
                 "allowRegistration": {
                     "type": "boolean"
                 },
@@ -6554,6 +6645,29 @@ const docTemplate = `{
             "properties": {
                 "completed": {
                     "type": "integer"
+                }
+            }
+        },
+        "v1.AnalyzePhotoResponse": {
+            "type": "object",
+            "properties": {
+                "categoryHints": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "confidence": {
+                    "type": "number"
+                },
+                "lane": {
+                    "type": "string"
+                },
+                "products": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/repo.BarcodeProduct"
+                    }
                 }
             }
         },

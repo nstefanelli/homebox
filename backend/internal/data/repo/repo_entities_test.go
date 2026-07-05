@@ -794,3 +794,176 @@ func TestEntityRepository_WipeInventory_OnlyItems(t *testing.T) {
 	// Cleanup
 	_ = tRepos.Tags.DeleteByGroup(context.Background(), tGroup.ID, tagObj.ID)
 }
+
+func TestEntityRepository_Create_PersistsIdentifications(t *testing.T) {
+	itemET := useItemEntityType(t)
+
+	itm := entityFactory()
+	itm.EntityTypeID = itemET.ID
+	itm.Manufacturer = "DeWalt"
+	itm.ModelNumber = "DCD771"
+
+	result, err := tRepos.Entities.Create(context.Background(), tGroup.ID, itm)
+	require.NoError(t, err)
+	assert.Equal(t, "DeWalt", result.Manufacturer)
+	assert.Equal(t, "DCD771", result.ModelNumber)
+
+	// Cleanup
+	err = tRepos.Entities.Delete(context.Background(), result.ID)
+	require.NoError(t, err)
+}
+
+func TestEntityRepository_IconPersistsThroughCreateAndUpdate(t *testing.T) {
+	itemET := useItemEntityType(t)
+
+	itm := entityFactory()
+	itm.EntityTypeID = itemET.ID
+	itm.Icon = "basket-outline"
+
+	result, err := tRepos.Entities.Create(context.Background(), tGroup.ID, itm)
+	require.NoError(t, err)
+	assert.Equal(t, "basket-outline", result.Icon)
+
+	// Update changes it
+	upd := EntityUpdate{
+		ID:           result.ID,
+		Name:         result.Name,
+		Description:  result.Description,
+		Quantity:     result.Quantity,
+		EntityTypeID: itemET.ID,
+		Icon:         "toolbox-outline",
+	}
+	updated, err := tRepos.Entities.UpdateByGroup(context.Background(), tGroup.ID, upd)
+	require.NoError(t, err)
+	assert.Equal(t, "toolbox-outline", updated.Icon)
+
+	// Cleanup
+	err = tRepos.Entities.Delete(context.Background(), result.ID)
+	require.NoError(t, err)
+}
+
+func TestEntityRepository_Tree_CarriesIconFields(t *testing.T) {
+	ctx := context.Background()
+
+	et, err := tRepos.EntityTypes.Create(ctx, tGroup.ID, EntityTypeCreate{
+		Name: "Iconic Tote", IsLocation: true, IsContainer: true, Icon: "basket-outline",
+	})
+	require.NoError(t, err)
+
+	withOverride := entityFactory()
+	withOverride.EntityTypeID = et.ID
+	withOverride.Icon = "treasure-chest"
+	a, err := tRepos.Entities.Create(ctx, tGroup.ID, withOverride)
+	require.NoError(t, err)
+
+	noOverride := entityFactory()
+	noOverride.EntityTypeID = et.ID
+	b, err := tRepos.Entities.Create(ctx, tGroup.ID, noOverride)
+	require.NoError(t, err)
+
+	tree, err := tRepos.Entities.Tree(ctx, tGroup.ID, TreeQuery{WithItems: false})
+	require.NoError(t, err)
+
+	found := map[uuid.UUID]TreeItem{}
+	var walk func(items []*TreeItem)
+	walk = func(items []*TreeItem) {
+		for _, it := range items {
+			found[it.ID] = *it
+			walk(it.Children)
+		}
+	}
+	// Tree() returns []TreeItem.
+	for i := range tree {
+		found[tree[i].ID] = tree[i]
+		walk(tree[i].Children)
+	}
+
+	require.Contains(t, found, a.ID)
+	assert.Equal(t, "treasure-chest", found[a.ID].Icon)
+	assert.Equal(t, "basket-outline", found[a.ID].TypeIcon)
+	assert.True(t, found[a.ID].IsContainer)
+
+	require.Contains(t, found, b.ID)
+	assert.Empty(t, found[b.ID].Icon)
+	assert.Equal(t, "basket-outline", found[b.ID].TypeIcon)
+	assert.True(t, found[b.ID].IsContainer)
+
+	// WithItems=true path: a non-location item nested under location `a` must also
+	// carry its own icon fields through the item_tree UNION arm.
+	itemET, err := tRepos.EntityTypes.Create(ctx, tGroup.ID, EntityTypeCreate{
+		Name: "Iconic Widget", IsLocation: false, IsContainer: false, Icon: "widget-outline",
+	})
+	require.NoError(t, err)
+
+	nestedItem := entityFactory()
+	nestedItem.EntityTypeID = itemET.ID
+	nestedItem.ParentID = a.ID
+	nestedItem.Icon = "gem-outline"
+	c, err := tRepos.Entities.Create(ctx, tGroup.ID, nestedItem)
+	require.NoError(t, err)
+
+	treeWithItems, err := tRepos.Entities.Tree(ctx, tGroup.ID, TreeQuery{WithItems: true})
+	require.NoError(t, err)
+
+	foundWithItems := map[uuid.UUID]TreeItem{}
+	var walkWithItems func(items []*TreeItem)
+	walkWithItems = func(items []*TreeItem) {
+		for _, it := range items {
+			foundWithItems[it.ID] = *it
+			walkWithItems(it.Children)
+		}
+	}
+	for i := range treeWithItems {
+		foundWithItems[treeWithItems[i].ID] = treeWithItems[i]
+		walkWithItems(treeWithItems[i].Children)
+	}
+
+	require.Contains(t, foundWithItems, c.ID)
+	assert.Equal(t, "gem-outline", foundWithItems[c.ID].Icon)
+	assert.Equal(t, "widget-outline", foundWithItems[c.ID].TypeIcon)
+	assert.False(t, foundWithItems[c.ID].IsContainer)
+	// The parent location's fields must still be intact in the WithItems tree too.
+	require.Contains(t, foundWithItems, a.ID)
+	assert.Equal(t, "treasure-chest", foundWithItems[a.ID].Icon)
+	assert.Equal(t, "basket-outline", foundWithItems[a.ID].TypeIcon)
+	assert.True(t, foundWithItems[a.ID].IsContainer)
+
+	// Cleanup
+	require.NoError(t, tRepos.Entities.Delete(ctx, c.ID))
+	require.NoError(t, tRepos.Entities.Delete(ctx, a.ID))
+	require.NoError(t, tRepos.Entities.Delete(ctx, b.ID))
+}
+
+func TestEntityRepository_PathForEntity_CarriesIconFields(t *testing.T) {
+	ctx := context.Background()
+
+	et, err := tRepos.EntityTypes.Create(ctx, tGroup.ID, EntityTypeCreate{
+		Name: "Iconic Shelf", IsLocation: true, IsContainer: true, Icon: "bookshelf",
+	})
+	require.NoError(t, err)
+
+	parent := entityFactory()
+	parent.EntityTypeID = et.ID
+	parent.Icon = "safe"
+	p, err := tRepos.Entities.Create(ctx, tGroup.ID, parent)
+	require.NoError(t, err)
+
+	child := entityFactory()
+	child.EntityTypeID = et.ID
+	child.ParentID = p.ID
+	c, err := tRepos.Entities.Create(ctx, tGroup.ID, child)
+	require.NoError(t, err)
+
+	path, err := tRepos.Entities.PathForEntity(ctx, tGroup.ID, c.ID)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(path), 2)
+
+	// First element is the root ancestor (the parent), last is the entity itself.
+	assert.Equal(t, "safe", path[0].Icon)
+	assert.Equal(t, "bookshelf", path[0].TypeIcon)
+	assert.True(t, path[0].IsContainer)
+
+	// Cleanup
+	require.NoError(t, tRepos.Entities.Delete(ctx, c.ID))
+	require.NoError(t, tRepos.Entities.Delete(ctx, p.ID))
+}

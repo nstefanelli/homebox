@@ -10,6 +10,52 @@
         "version": "1.0"
     },
     "paths": {
+        "/v1/actions/analyze-photo": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Identifies a physical item from a photo using the configured vision AI provider",
+                "tags": [
+                    "Actions"
+                ],
+                "summary": "Analyze Item Photo",
+                "requestBody": {
+                    "content": {
+                        "multipart/form-data": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "file": {
+                                        "description": "Photo of a single item (JPEG/PNG/WebP)",
+                                        "type": "string",
+                                        "format": "binary"
+                                    }
+                                },
+                                "required": [
+                                    "file"
+                                ]
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/v1.AnalyzePhotoResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/v1/actions/create-missing-thumbnails": {
             "post": {
                 "security": [
@@ -2954,6 +3000,16 @@
                                 }
                             }
                         }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/octet-stream": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/validate.ErrorResponse"
+                                }
+                            }
+                        }
                     }
                 }
             },
@@ -3954,6 +4010,10 @@
                                 "$ref": "#/components/schemas/ent.EntityEdges"
                             }
                         ]
+                    },
+                    "icon": {
+                        "description": "Icon holds the value of the \"icon\" field.",
+                        "type": "string"
                     },
                     "id": {
                         "description": "ID of the ent.",
@@ -5262,6 +5322,19 @@
                     "entityTypeId": {
                         "type": "string"
                     },
+                    "icon": {
+                        "type": "string",
+                        "maxLength": 255
+                    },
+                    "manufacturer": {
+                        "type": "string",
+                        "maxLength": 255
+                    },
+                    "modelNumber": {
+                        "description": "Identifications",
+                        "type": "string",
+                        "maxLength": 255
+                    },
                     "name": {
                         "type": "string",
                         "maxLength": 255,
@@ -5372,6 +5445,9 @@
                         "items": {
                             "$ref": "#/components/schemas/repo.EntityFieldData"
                         }
+                    },
+                    "icon": {
+                        "type": "string"
                     },
                     "id": {
                         "type": "string"
@@ -5506,14 +5582,23 @@
             "repo.EntityPath": {
                 "type": "object",
                 "properties": {
+                    "icon": {
+                        "type": "string"
+                    },
                     "id": {
                         "type": "string"
+                    },
+                    "isContainer": {
+                        "type": "boolean"
                     },
                     "name": {
                         "type": "string"
                     },
                     "type": {
                         "$ref": "#/components/schemas/repo.EntityPathType"
+                    },
+                    "typeIcon": {
+                        "type": "string"
                     }
                 }
             },
@@ -5552,6 +5637,9 @@
                         ],
                         "x-omitempty": true,
                         "nullable": true
+                    },
+                    "icon": {
+                        "type": "string"
                     },
                     "id": {
                         "type": "string"
@@ -5990,6 +6078,10 @@
                         "items": {
                             "$ref": "#/components/schemas/repo.EntityFieldData"
                         }
+                    },
+                    "icon": {
+                        "type": "string",
+                        "maxLength": 255
                     },
                     "id": {
                         "type": "string"
@@ -6633,13 +6725,22 @@
                             "$ref": "#/components/schemas/repo.TreeItem"
                         }
                     },
+                    "icon": {
+                        "type": "string"
+                    },
                     "id": {
                         "type": "string"
+                    },
+                    "isContainer": {
+                        "type": "boolean"
                     },
                     "name": {
                         "type": "string"
                     },
                     "type": {
+                        "type": "string"
+                    },
+                    "typeIcon": {
                         "type": "string"
                     }
                 }
@@ -6797,6 +6898,9 @@
             "v1.APISummary": {
                 "type": "object",
                 "properties": {
+                    "aiPhotoAnalysis": {
+                        "type": "boolean"
+                    },
                     "allowRegistration": {
                         "type": "boolean"
                     },
@@ -6840,6 +6944,29 @@
                 "properties": {
                     "completed": {
                         "type": "integer"
+                    }
+                }
+            },
+            "v1.AnalyzePhotoResponse": {
+                "type": "object",
+                "properties": {
+                    "categoryHints": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "confidence": {
+                        "type": "number"
+                    },
+                    "lane": {
+                        "type": "string"
+                    },
+                    "products": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/repo.BarcodeProduct"
+                        }
                     }
                 }
             },

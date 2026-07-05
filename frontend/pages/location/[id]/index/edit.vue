@@ -25,6 +25,7 @@
   import FormCheckbox from "~/components/Form/Checkbox.vue";
   import LocationSelector from "~/components/Location/Selector.vue";
   import TagSelector from "~/components/Tag/Selector.vue";
+  import IconSelector from "~/components/Form/IconSelector.vue";
   import BaseCard from "@/components/Base/Card.vue";
   import { Card } from "~/components/ui/card";
   import DropZone from "~/components/global/DropZone.vue";
@@ -401,6 +402,11 @@
                 @entity-type-changed="id => (item.entityType = entityTypeStore.findById(id))"
               />
             </div>
+            <IconSelector
+              v-if="item.entityType?.isLocation || item.entityType?.isContainer"
+              v-model="item.icon"
+              :label="$t('locations.icon')"
+            />
           </div>
 
           <div class="border-t sm:p-0">

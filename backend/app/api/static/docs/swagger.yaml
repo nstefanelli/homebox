@@ -205,6 +205,9 @@ definitions:
         description: |-
           Edges holds the relations/edges for other nodes in the graph.
           The values are being populated by the EntityQuery when eager-loading is set.
+      icon:
+        description: Icon holds the value of the "icon" field.
+        type: string
       id:
         description: ID of the ent.
         type: string
@@ -1110,6 +1113,16 @@ definitions:
         type: string
       entityTypeId:
         type: string
+      icon:
+        maxLength: 255
+        type: string
+      manufacturer:
+        maxLength: 255
+        type: string
+      modelNumber:
+        description: Identifications
+        maxLength: 255
+        type: string
       name:
         maxLength: 255
         minLength: 1
@@ -1187,6 +1200,8 @@ definitions:
         items:
           $ref: '#/definitions/repo.EntityFieldData'
         type: array
+      icon:
+        type: string
       id:
         type: string
       imageId:
@@ -1280,12 +1295,18 @@ definitions:
     type: object
   repo.EntityPath:
     properties:
+      icon:
+        type: string
       id:
         type: string
+      isContainer:
+        type: boolean
       name:
         type: string
       type:
         $ref: '#/definitions/repo.EntityPathType'
+      typeIcon:
+        type: string
     type: object
   repo.EntityPathType:
     enum:
@@ -1311,6 +1332,8 @@ definitions:
         - $ref: '#/definitions/repo.EntityTypeSummary'
         x-nullable: true
         x-omitempty: true
+      icon:
+        type: string
       id:
         type: string
       imageId:
@@ -1615,6 +1638,9 @@ definitions:
         items:
           $ref: '#/definitions/repo.EntityFieldData'
         type: array
+      icon:
+        maxLength: 255
+        type: string
       id:
         type: string
       insured:
@@ -2053,11 +2079,17 @@ definitions:
         items:
           $ref: '#/definitions/repo.TreeItem'
         type: array
+      icon:
+        type: string
       id:
         type: string
+      isContainer:
+        type: boolean
       name:
         type: string
       type:
+        type: string
+      typeIcon:
         type: string
     type: object
   repo.UserOut:
@@ -2163,6 +2195,8 @@ definitions:
     - RoleOwner
   v1.APISummary:
     properties:
+      aiPhotoAnalysis:
+        type: boolean
       allowRegistration:
         type: boolean
       build:
@@ -2192,6 +2226,21 @@ definitions:
     properties:
       completed:
         type: integer
+    type: object
+  v1.AnalyzePhotoResponse:
+    properties:
+      categoryHints:
+        items:
+          type: string
+        type: array
+      confidence:
+        type: number
+      lane:
+        type: string
+      products:
+        items:
+          $ref: '#/definitions/repo.BarcodeProduct'
+        type: array
     type: object
   v1.Build:
     properties:
@@ -2396,6 +2445,30 @@ info:
   title: Homebox API
   version: "1.0"
 paths:
+  /v1/actions/analyze-photo:
+    post:
+      consumes:
+      - multipart/form-data
+      description: Identifies a physical item from a photo using the configured vision
+        AI provider
+      parameters:
+      - description: Photo of a single item (JPEG/PNG/WebP)
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/v1.AnalyzePhotoResponse'
+      security:
+      - Bearer: []
+      summary: Analyze Item Photo
+      tags:
+      - Actions
   /v1/actions/create-missing-thumbnails:
     post:
       description: Creates thumbnails for items that are missing them
@@ -4077,6 +4150,10 @@ paths:
           description: OK
         "400":
           description: Bad Request
+          schema:
+            $ref: '#/definitions/validate.ErrorResponse'
+        "404":
+          description: Not Found
           schema:
             $ref: '#/definitions/validate.ErrorResponse'
       security:
