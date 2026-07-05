@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-	"github.com/sysadminsmedia/homebox/backend/internal/data/repo"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/types"
 	"github.com/sysadminsmedia/homebox/backend/internal/sys/config"
 )
@@ -37,14 +36,38 @@ var validAIProviders = map[string]bool{
 	AIProviderAnthropic:        true,
 }
 
+// GroupIntegrationsStore is the narrow persistence seam IntegrationsService
+// needs — just the two group-integrations methods off repo.AllRepos.Groups,
+// rather than the whole *repo.AllRepos. Exported so callers that can't build
+// a full ent-backed AllRepos (e.g. the v1 handlers package, which has no DB
+// test fixture) can substitute a trivial fake satisfying just these two
+// methods instead of standing up a real database for a handler unit test.
+// *repo.GroupRepository satisfies this interface today.
+type GroupIntegrationsStore interface {
+	IntegrationsGet(ctx context.Context, gid uuid.UUID) (types.GroupIntegrations, error)
+	IntegrationsSet(ctx context.Context, gid uuid.UUID, data types.GroupIntegrations) error
+}
+
 // IntegrationsService resolves the effective AI/barcode integration config for
 // a group — group-stored settings override the server's env-configured
 // defaults on a per-field basis — and applies write-only updates to the
 // stored settings row (see Update for secret-handling semantics).
 type IntegrationsService struct {
-	repos           *repo.AllRepos
+	repos           GroupIntegrationsStore
 	fallbackAI      config.AIConf
 	fallbackBarcode config.BarcodeAPIConf
+}
+
+// NewIntegrationsService constructs an IntegrationsService directly from a
+// GroupIntegrationsStore, bypassing the full AllServices/AllRepos build path
+// in New below. Exported for tests that need an IntegrationsService without a
+// real database (see GroupIntegrationsStore's doc comment).
+func NewIntegrationsService(store GroupIntegrationsStore, fallbackAI config.AIConf, fallbackBarcode config.BarcodeAPIConf) *IntegrationsService {
+	return &IntegrationsService{
+		repos:           store,
+		fallbackAI:      fallbackAI,
+		fallbackBarcode: fallbackBarcode,
+	}
 }
 
 // EffectiveAI merges the group's stored AI settings over the env-configured
@@ -57,7 +80,7 @@ type IntegrationsService struct {
 //
 // TimeoutSeconds is never UI-managed — it always comes from the env fallback.
 func (svc *IntegrationsService) EffectiveAI(ctx context.Context, gid uuid.UUID) (config.AIConf, error) {
-	group, err := svc.repos.Groups.IntegrationsGet(ctx, gid)
+	group, err := svc.repos.IntegrationsGet(ctx, gid)
 	if err != nil {
 		return config.AIConf{}, err
 	}
@@ -85,7 +108,7 @@ func (svc *IntegrationsService) EffectiveAI(ctx context.Context, gid uuid.UUID) 
 // is no disable sentinel here — an absent token simply means that lookup lane
 // is skipped by callers, same as today.
 func (svc *IntegrationsService) EffectiveBarcode(ctx context.Context, gid uuid.UUID) (config.BarcodeAPIConf, error) {
-	group, err := svc.repos.Groups.IntegrationsGet(ctx, gid)
+	group, err := svc.repos.IntegrationsGet(ctx, gid)
 	if err != nil {
 		return config.BarcodeAPIConf{}, err
 	}
@@ -100,7 +123,7 @@ func (svc *IntegrationsService) EffectiveBarcode(ctx context.Context, gid uuid.U
 // (secrets included, in plaintext) for the GET/PUT handlers to redact and
 // merge respectively.
 func (svc *IntegrationsService) Raw(ctx context.Context, gid uuid.UUID) (types.GroupIntegrations, error) {
-	return svc.repos.Groups.IntegrationsGet(ctx, gid)
+	return svc.repos.IntegrationsGet(ctx, gid)
 }
 
 // Update applies a write-only merge of incoming onto the group's stored
@@ -123,7 +146,7 @@ func (svc *IntegrationsService) Update(ctx context.Context, gid uuid.UUID, incom
 		return fmt.Errorf("%w: %q", ErrInvalidAIProvider, incoming.AIProvider)
 	}
 
-	stored, err := svc.repos.Groups.IntegrationsGet(ctx, gid)
+	stored, err := svc.repos.IntegrationsGet(ctx, gid)
 	if err != nil {
 		return err
 	}
@@ -132,7 +155,7 @@ func (svc *IntegrationsService) Update(ctx context.Context, gid uuid.UUID, incom
 	merged.AIAPIKey = mergeSecret(incoming.AIAPIKey, stored.AIAPIKey)
 	merged.BarcodeTokenBarcodespider = mergeSecret(incoming.BarcodeTokenBarcodespider, stored.BarcodeTokenBarcodespider)
 
-	return svc.repos.Groups.IntegrationsSet(ctx, gid, merged)
+	return svc.repos.IntegrationsSet(ctx, gid, merged)
 }
 
 // mergeSecret applies the write-only secret semantics described on Update for

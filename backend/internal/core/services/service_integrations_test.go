@@ -25,11 +25,7 @@ func integrationsTestGroup(t *testing.T) uuid.UUID {
 }
 
 func newIntegrationsSvc(ai config.AIConf, barcode config.BarcodeAPIConf) *IntegrationsService {
-	return &IntegrationsService{
-		repos:           tRepos,
-		fallbackAI:      ai,
-		fallbackBarcode: barcode,
-	}
+	return NewIntegrationsService(tRepos.Groups, ai, barcode)
 }
 
 func Test_IntegrationsService_EffectiveAI(t *testing.T) {

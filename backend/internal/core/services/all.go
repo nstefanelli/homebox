@@ -138,11 +138,7 @@ func New(repos *repo.AllRepos, opts ...OptionsFunc) *AllServices {
 			pubSubConn: options.pubSubConn,
 			dialect:    options.dialect,
 		},
-		Currencies: currencies.NewCurrencyService(options.currencies),
-		Integrations: &IntegrationsService{
-			repos:           repos,
-			fallbackAI:      options.ai,
-			fallbackBarcode: options.barcode,
-		},
+		Currencies:   currencies.NewCurrencyService(options.currencies),
+		Integrations: NewIntegrationsService(repos.Groups, options.ai, options.barcode),
 	}
 }

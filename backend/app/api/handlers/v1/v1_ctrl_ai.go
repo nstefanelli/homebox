@@ -11,7 +11,9 @@ import (
 	"github.com/hay-kot/httpkit/server"
 	"github.com/rs/zerolog/log"
 
+	"github.com/sysadminsmedia/homebox/backend/internal/core/services"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/repo"
+	"github.com/sysadminsmedia/homebox/backend/internal/sys/config"
 	"github.com/sysadminsmedia/homebox/backend/internal/sys/validate"
 	"github.com/sysadminsmedia/homebox/backend/pkgs/ai"
 )
@@ -25,6 +27,33 @@ type AnalyzePhotoResponse struct {
 	Products      []repo.BarcodeProduct `json:"products"`
 }
 
+// resolveAIProvider resolves the effective (group-over-env) AI config for the
+// requesting group's tenant and constructs a provider from it — the runtime
+// gating this whole task rewires analyze-photo/analyze-photo-bulk around
+// (design spec §3). A "" effective provider (nothing configures AI, neither
+// group settings nor env) now yields a 503 at request time instead of the
+// route simply not existing (the old registration-time gating in routes.go).
+func (ctrl *V1Controller) resolveAIProvider(r *http.Request) (ai.Provider, config.AIConf, error) {
+	ctx := services.NewContext(r.Context())
+
+	conf, err := ctrl.svc.Integrations.EffectiveAI(ctx, ctx.GID)
+	if err != nil {
+		return nil, config.AIConf{}, err
+	}
+
+	if conf.Provider == "" {
+		return nil, config.AIConf{}, validate.NewRequestError(errors.New("ai not configured"), http.StatusServiceUnavailable)
+	}
+
+	provider, err := ctrl.aiProviderFactory(conf)
+	if err != nil {
+		log.Err(err).Msg("failed to construct AI provider from effective config")
+		return nil, config.AIConf{}, validate.NewRequestError(errors.New("ai provider configuration error"), http.StatusInternalServerError)
+	}
+
+	return provider, conf, nil
+}
+
 // HandleAnalyzePhoto godoc
 //
 //	@Summary		Analyze Item Photo
@@ -36,9 +65,14 @@ type AnalyzePhotoResponse struct {
 //	@Success		200		{object}	AnalyzePhotoResponse
 //	@Router			/v1/actions/analyze-photo [Post]
 //	@Security		Bearer
-func (ctrl *V1Controller) HandleAnalyzePhoto(provider ai.Provider) errchain.HandlerFunc {
+func (ctrl *V1Controller) HandleAnalyzePhoto() errchain.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) error {
-		imageBytes, mimeType, err := ctrl.readPhotoUpload(w, r)
+		provider, conf, err := ctrl.resolveAIProvider(r)
+		if err != nil {
+			return err
+		}
+
+		imageBytes, mimeType, err := ctrl.readPhotoUpload(w, r, conf.TimeoutSeconds)
 		if err != nil {
 			return err
 		}
@@ -55,8 +89,9 @@ func (ctrl *V1Controller) HandleAnalyzePhoto(provider ai.Provider) errchain.Hand
 
 // readPhotoUpload extends the request deadline past the global server
 // timeouts (cold vision-model loads take 30-60s+), parses the multipart
-// form, and returns the validated image bytes + mime type.
-func (ctrl *V1Controller) readPhotoUpload(w http.ResponseWriter, r *http.Request) ([]byte, string, error) {
+// form, and returns the validated image bytes + mime type. timeoutSeconds is
+// the effective (group-over-env) AI config's TimeoutSeconds for this request.
+func (ctrl *V1Controller) readPhotoUpload(w http.ResponseWriter, r *http.Request, timeoutSeconds int) ([]byte, string, error) {
 	// The global http.Server write/read timeouts (default 10s, see
 	// internal/sys/config Web.WriteTimeout) are sized for ordinary API
 	// requests. A cold vision-model load on the configured AI provider
@@ -64,7 +99,7 @@ func (ctrl *V1Controller) readPhotoUpload(w http.ResponseWriter, r *http.Request
 	// helper need a deadline that covers the provider's own timeout plus
 	// margin for upload/JSON overhead — otherwise the server aborts the
 	// connection mid-request long before the provider ever times out.
-	deadline := time.Now().Add(time.Duration(ctrl.config.AI.TimeoutSeconds+30) * time.Second)
+	deadline := time.Now().Add(time.Duration(timeoutSeconds+30) * time.Second)
 	rc := http.NewResponseController(w)
 	if err := rc.SetWriteDeadline(deadline); err != nil {
 		log.Warn().Err(err).Msg("failed to extend response deadline for analyze-photo")
@@ -121,9 +156,14 @@ type AnalyzeBulkResponse struct {
 //	@Success		200		{object}	AnalyzeBulkResponse
 //	@Router			/v1/actions/analyze-photo-bulk [Post]
 //	@Security		Bearer
-func (ctrl *V1Controller) HandleAnalyzeBulk(provider ai.Provider) errchain.HandlerFunc {
+func (ctrl *V1Controller) HandleAnalyzeBulk() errchain.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) error {
-		imageBytes, mimeType, err := ctrl.readPhotoUpload(w, r)
+		provider, conf, err := ctrl.resolveAIProvider(r)
+		if err != nil {
+			return err
+		}
+
+		imageBytes, mimeType, err := ctrl.readPhotoUpload(w, r, conf.TimeoutSeconds)
 		if err != nil {
 			return err
 		}
