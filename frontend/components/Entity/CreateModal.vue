@@ -196,7 +196,7 @@
         :trigger-search="triggerSearch"
       >
         <template #display="{ item }">
-          <span class="flex items-center gap-2">
+          <span v-if="item && typeof item === 'object'" class="flex items-center gap-2">
             <component
               :is="
                 resolveEntityIcon({
@@ -211,6 +211,16 @@
             />
             {{ asEntitySummary(item).name }}
           </span>
+          <template v-else>
+            <!--
+              Reproduces ItemSelector's own default fallback for the no-selection /
+              cleared-selection states (`displayValue(value) || localizedPlaceholder`
+              in components/Item/Selector.vue), since providing a #display slot at all
+              suppresses that default for BOTH the trigger button (item = "" or null)
+              and each CommandItem row (item = EntitySummary, handled above).
+            -->
+            {{ (typeof item === "string" ? item : "") || $t("components.item.selector.placeholder") }}
+          </template>
         </template>
       </ItemSelector>
       <FormTextField
