@@ -90,7 +90,8 @@ type GroupIntegrationsOut struct {
 }
 
 // redactIntegrations builds the GET/PUT response shape from the group's raw
-// stored settings plus the already-resolved effective AI/barcode config.
+// stored settings plus the already-resolved effective AI/barcode config and
+// the raw env-only AI fallback (services.IntegrationsService.EnvAI).
 //
 // Secret redaction considers BOTH sources: a secret field renders as
 // config.RedactedValue whenever either the group's own stored value OR the
@@ -102,7 +103,13 @@ type GroupIntegrationsOut struct {
 // only inspects the group's own stored row when it sees the echoed sentinel
 // come back — so this display choice can never cause an env-sourced secret to
 // be copied into group storage.
-func redactIntegrations(raw types.GroupIntegrations, effectiveAI config.AIConf, effectiveBarcode config.BarcodeAPIConf, isOwner bool) GroupIntegrationsOut {
+//
+// EnvAI* fields deliberately come from envAI (raw env config), NOT
+// effectiveAI: they back the "server default" hint (design spec §5), which
+// must keep showing the actual env fallback even after the group configures
+// its own override — otherwise the hint would relabel the group's own values
+// as "server default" the moment they set anything.
+func redactIntegrations(raw types.GroupIntegrations, effectiveAI config.AIConf, envAI config.AIConf, effectiveBarcode config.BarcodeAPIConf, isOwner bool) GroupIntegrationsOut {
 	redacted := raw
 	redacted.AIAPIKey = redactSecretField(raw.AIAPIKey, effectiveAI.APIKey)
 	redacted.BarcodeTokenBarcodespider = redactSecretField(raw.BarcodeTokenBarcodespider, effectiveBarcode.TokenBarcodespider)
@@ -112,9 +119,9 @@ func redactIntegrations(raw types.GroupIntegrations, effectiveAI config.AIConf, 
 		IsOwner:                 isOwner,
 		AIConfigured:            effectiveAI.Provider != "",
 		BarcodespiderConfigured: effectiveBarcode.TokenBarcodespider != "",
-		EnvAIProvider:           effectiveAI.Provider,
-		EnvAIBaseURL:            effectiveAI.BaseURL,
-		EnvAIModel:              effectiveAI.Model,
+		EnvAIProvider:           envAI.Provider,
+		EnvAIBaseURL:            envAI.BaseURL,
+		EnvAIModel:              envAI.Model,
 	}
 }
 
@@ -159,7 +166,7 @@ func (ctrl *V1Controller) HandleIntegrationsGet() errchain.HandlerFunc {
 			return GroupIntegrationsOut{}, err
 		}
 
-		return redactIntegrations(raw, effectiveAI, effectiveBarcode, isOwner), nil
+		return redactIntegrations(raw, effectiveAI, ctrl.svc.Integrations.EnvAI(), effectiveBarcode, isOwner), nil
 	}
 
 	return adapters.Command(fn, http.StatusOK)
@@ -210,7 +217,7 @@ func (ctrl *V1Controller) HandleIntegrationsUpdate() errchain.HandlerFunc {
 			return GroupIntegrationsOut{}, err
 		}
 
-		return redactIntegrations(raw, effectiveAI, effectiveBarcode, isOwner), nil
+		return redactIntegrations(raw, effectiveAI, ctrl.svc.Integrations.EnvAI(), effectiveBarcode, isOwner), nil
 	}
 
 	return adapters.Action(fn, http.StatusOK)

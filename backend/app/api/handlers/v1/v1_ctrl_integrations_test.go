@@ -12,9 +12,16 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/sysadminsmedia/homebox/backend/internal/core/services"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/types"
 	"github.com/sysadminsmedia/homebox/backend/internal/sys/config"
 	"github.com/sysadminsmedia/homebox/backend/pkgs/ai"
+)
+
+// Fixture literals shared across Test_redactIntegrations cases (goconst).
+const (
+	testEnvBaseURL = "http://env.local/v1"
+	testEnvModel   = "env-model"
 )
 
 // Test_redactIntegrations covers the pure redaction/shaping mapper behind
@@ -28,6 +35,7 @@ func Test_redactIntegrations(t *testing.T) {
 		name             string
 		raw              types.GroupIntegrations
 		effectiveAI      config.AIConf
+		envAI            config.AIConf
 		effectiveBarcode config.BarcodeAPIConf
 		isOwner          bool
 		want             GroupIntegrationsOut
@@ -45,7 +53,14 @@ func Test_redactIntegrations(t *testing.T) {
 			},
 		},
 		{
-			name: "group-stored secrets redact to sentinel, non-secrets pass through plain",
+			// Regression for the bug found in the S9 E2E pass: EnvAI* must
+			// come from the raw env config (envAI), not the group's own
+			// effective override — otherwise the "server default" hint
+			// relabels the group's own settings as the server default the
+			// moment it configures anything. effectiveAI and envAI are
+			// deliberately different providers/models here so a wiring
+			// mistake (using effectiveAI for EnvAI*) fails this assertion.
+			name: "group overrides the provider: EnvAI* still reflects the raw env fallback, not the group's override",
 			raw: types.GroupIntegrations{
 				AIProvider:                "anthropic",
 				AIBaseURL:                 "https://api.anthropic.com",
@@ -59,6 +74,12 @@ func Test_redactIntegrations(t *testing.T) {
 				BaseURL:  "https://api.anthropic.com",
 				APIKey:   "sk-super-secret",
 				Model:    "claude",
+			},
+			envAI: config.AIConf{
+				Provider: services.AIProviderOpenAICompatible,
+				BaseURL:  "http://172.27.10.57:11434/v1",
+				APIKey:   "env-api-key",
+				Model:    "qwen3-vl:32b",
 			},
 			effectiveBarcode: config.BarcodeAPIConf{
 				TokenBarcodespider: "bcs-secret-token",
@@ -76,19 +97,25 @@ func Test_redactIntegrations(t *testing.T) {
 				IsOwner:                 true,
 				AIConfigured:            true,
 				BarcodespiderConfigured: true,
-				EnvAIProvider:           "anthropic",
-				EnvAIBaseURL:            "https://api.anthropic.com",
-				EnvAIModel:              "claude",
+				EnvAIProvider:           services.AIProviderOpenAICompatible,
+				EnvAIBaseURL:            "http://172.27.10.57:11434/v1",
+				EnvAIModel:              "qwen3-vl:32b",
 			},
 		},
 		{
 			name: "env-fallback-only secrets still redact to sentinel even though the group row is empty",
 			raw:  types.GroupIntegrations{}, // group has never set anything
 			effectiveAI: config.AIConf{
-				Provider: "openai_compatible",
-				BaseURL:  "http://env.local/v1",
+				Provider: services.AIProviderOpenAICompatible,
+				BaseURL:  testEnvBaseURL,
 				APIKey:   "env-api-key", // sourced purely from env fallback
-				Model:    "env-model",
+				Model:    testEnvModel,
+			},
+			envAI: config.AIConf{
+				Provider: services.AIProviderOpenAICompatible,
+				BaseURL:  testEnvBaseURL,
+				APIKey:   "env-api-key",
+				Model:    testEnvModel,
 			},
 			effectiveBarcode: config.BarcodeAPIConf{
 				TokenBarcodespider: "env-bcs-token",
@@ -102,19 +129,27 @@ func Test_redactIntegrations(t *testing.T) {
 				IsOwner:                 false,
 				AIConfigured:            true,
 				BarcodespiderConfigured: true,
-				EnvAIProvider:           "openai_compatible",
-				EnvAIBaseURL:            "http://env.local/v1",
-				EnvAIModel:              "env-model",
+				EnvAIProvider:           services.AIProviderOpenAICompatible,
+				EnvAIBaseURL:            testEnvBaseURL,
+				EnvAIModel:              testEnvModel,
 			},
 		},
 		{
-			name: "disabled provider: AIConfigured false even though a group secret is still stored",
+			name: "disabled provider: AIConfigured false, but EnvAI* still shows what env alone would provide",
 			raw: types.GroupIntegrations{
 				AIProvider: "disabled",
 				AIAPIKey:   "leftover-key-from-before-disabling",
 			},
 			effectiveAI: config.AIConf{
 				// EffectiveAI zeroes Provider/BaseURL/APIKey/Model when disabled.
+			},
+			envAI: config.AIConf{
+				// The raw env fallback is untouched by the group's disable —
+				// the hint should still tell the owner what re-enabling
+				// "Inherit" would give them.
+				Provider: services.AIProviderOpenAICompatible,
+				BaseURL:  testEnvBaseURL,
+				Model:    testEnvModel,
 			},
 			isOwner: true,
 			want: GroupIntegrationsOut{
@@ -127,6 +162,9 @@ func Test_redactIntegrations(t *testing.T) {
 				IsOwner:                 true,
 				AIConfigured:            false,
 				BarcodespiderConfigured: false,
+				EnvAIProvider:           services.AIProviderOpenAICompatible,
+				EnvAIBaseURL:            testEnvBaseURL,
+				EnvAIModel:              testEnvModel,
 			},
 		},
 		{
@@ -159,7 +197,7 @@ func Test_redactIntegrations(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := redactIntegrations(tc.raw, tc.effectiveAI, tc.effectiveBarcode, tc.isOwner)
+			got := redactIntegrations(tc.raw, tc.effectiveAI, tc.envAI, tc.effectiveBarcode, tc.isOwner)
 			assert.Equal(t, tc.want, got)
 		})
 	}
@@ -230,7 +268,7 @@ func Test_testAIResponseForConfig(t *testing.T) {
 		},
 		{
 			name:        "provider configured -> not handled here, caller proceeds to Analyze",
-			conf:        config.AIConf{Provider: "openai_compatible", BaseURL: "http://localhost:1234"},
+			conf:        config.AIConf{Provider: services.AIProviderOpenAICompatible, BaseURL: "http://localhost:1234"},
 			wantHandled: false,
 			want:        TestConnectionResponse{},
 		},

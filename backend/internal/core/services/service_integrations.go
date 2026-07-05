@@ -119,6 +119,19 @@ func (svc *IntegrationsService) EffectiveBarcode(ctx context.Context, gid uuid.U
 	}, nil
 }
 
+// EnvAI returns the server's env-configured AI fallback exactly as loaded at
+// startup — no group override merged in. This is distinct from EffectiveAI:
+// callers building a "server default" hint (design spec §5 — "what the env
+// fallback provides") need the raw env values even when the calling group has
+// its own override in effect, whereas EffectiveAI intentionally returns the
+// group's values once it overrides. Using EffectiveAI here would relabel the
+// group's own override as "server default" the moment it configures anything
+// non-empty — no ctx/gid needed since this never touches the group's stored
+// row.
+func (svc *IntegrationsService) EnvAI() config.AIConf {
+	return svc.fallbackAI
+}
+
 // Raw returns the group's stored integration settings exactly as persisted
 // (secrets included, in plaintext) for the GET/PUT handlers to redact and
 // merge respectively.
