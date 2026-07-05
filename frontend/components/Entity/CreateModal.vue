@@ -685,6 +685,8 @@
           parentId: form.location?.id || null,
           entityTypeId: selectedEntityType.value?.id || "",
           tagIds: form.tags,
+          manufacturer: "",
+          modelNumber: "",
         });
 
         if (error) {
@@ -732,6 +734,8 @@
         entityTypeId: selectedEntityType.value?.id || "",
         quantity: 1,
         tagIds: form.tags,
+        manufacturer: "",
+        modelNumber: "",
       });
       error = result.error;
       data = result.data;
@@ -758,6 +762,8 @@
         description: form.description,
         tagIds: form.tags,
         entityTypeId: selectedEntityType.value?.id || "",
+        manufacturer: "",
+        modelNumber: "",
       };
 
       const result = await api.items.create(out);
