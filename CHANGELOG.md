@@ -2,6 +2,37 @@
 
 All notable changes to this fork are documented in this file. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Upstream is [sysadminsmedia/homebox](https://github.com/sysadminsmedia/homebox); this file only covers fork-specific work on top of v0.26.2.
 
+## v0.26.2-phase3.1 - 2026-07-05
+
+### Bulk tote cataloging
+
+- New `POST /v1/actions/analyze-photo-bulk` endpoint with shared upload preamble, backing multi-photo catalog sessions where users photograph multiple items in a container, review AI-generated candidates per item (edit hints, mark duplicates, uncheck unwanted candidates, or retry a card with a new photo), and batch-create entities into the target container.
+- Catalog-contents entry point on location and container pages — shows a dialog to upload photos, review candidates, and commit the batch.
+- Contents-snapshot photos on containers (separate from the container thumbnail) — uploaded during the final commit and stored with the same blob handling as entity attachments.
+- Bulk vision method `AnalyzeContents` on both AI adapters (OpenAI-compatible and Anthropic messages).
+
+### Integrations settings UI
+
+- New group-scoped integrations settings page (accessed via collection settings), with database-backed storage for AI provider, base URL, model, API key, barcodespider token, and OpenFoodFacts contact email.
+- Environment variables (`HBOX_AI_*`, `HBOX_BARCODESPIDER_*`, `HBOX_OPENFOODFACTS_*`) now serve as per-field fallback defaults; UI edits are persisted to the database and live-applied without restart.
+- Owner-only editing of settings; all secrets are write-only (never echoed back in GET responses).
+- Test Connection buttons for AI and barcodespider endpoints.
+- New `GET/PUT /v1/groups/integrations` endpoints with redaction and owner-only gating, plus runtime resolution of effective (DB-over-env) config. Goose migration `20260705130000` adds `groups.integrations` column.
+
+### Behavior changes
+
+- `/v1/actions/analyze-photo` and `/v1/actions/analyze-photo-bulk` now return `503 Service Unavailable` when AI is unconfigured, rather than `404`. Client can gate the UI accordingly.
+- Environment misconfiguration (missing required fields) now emits a warning at startup instead of aborting the server.
+- Shared `Dialog` component gained an optional `beforeClose` guard: a callback that can prevent dialog closure if it returns a falsy value.
+
+### Fixes
+
+- Bulk catalog analysis no longer sends `json_object` response format to the AI adapter — was guaranteed to 502 on Ollama with qwen3-vl.
+- Test-connection endpoints extend the request deadline past the global write timeout (they can be slow on cold model loads).
+- Bumped test AI fixture image from 1×1 to 64×64 pixels — the 1px image crashed qwen3-vl on Ollama.
+- Env hint field shows the raw environment defaults, not the effective (DB-over-env) config.
+- Close guard in bulk review dialog now covers the X button; snapshot uploads are idempotent across retries.
+
 ## v0.26.2-ai-icons.1 - 2026-07-05
 
 ### AI add-by-photo
