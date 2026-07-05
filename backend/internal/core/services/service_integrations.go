@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -9,6 +10,12 @@ import (
 	"github.com/sysadminsmedia/homebox/backend/internal/data/types"
 	"github.com/sysadminsmedia/homebox/backend/internal/sys/config"
 )
+
+// ErrInvalidAIProvider is returned by Update when the incoming AIProvider is
+// not one of validAIProviders. Exported (and wrapped, not just formatted) so
+// callers such as the v1 handler can distinguish this validation failure from
+// other errors via errors.Is and map it to a 400 instead of a 500.
+var ErrInvalidAIProvider = errors.New("invalid AI provider")
 
 // AI provider identifiers accepted in GroupIntegrations.AIProvider. Exported
 // so callers outside this package (handlers, tests) share one spelling rather
@@ -113,7 +120,7 @@ func (svc *IntegrationsService) Raw(ctx context.Context, gid uuid.UUID) (types.G
 // All other fields are overwritten directly from incoming (no merge).
 func (svc *IntegrationsService) Update(ctx context.Context, gid uuid.UUID, incoming types.GroupIntegrations) error {
 	if !validAIProviders[incoming.AIProvider] {
-		return fmt.Errorf("invalid AI provider %q", incoming.AIProvider)
+		return fmt.Errorf("%w: %q", ErrInvalidAIProvider, incoming.AIProvider)
 	}
 
 	stored, err := svc.repos.Groups.IntegrationsGet(ctx, gid)
