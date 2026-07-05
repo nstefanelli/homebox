@@ -2880,18 +2880,24 @@ func (r *EntityRepository) DeleteContainerByGroup(ctx context.Context, gid, id u
 // ============================================================================
 
 type TreeItem struct {
-	ID       uuid.UUID   `json:"id"`
-	Name     string      `json:"name"`
-	Type     string      `json:"type"`
-	Children []*TreeItem `json:"children"`
+	ID          uuid.UUID   `json:"id"`
+	Name        string      `json:"name"`
+	Type        string      `json:"type"`
+	Icon        string      `json:"icon"`
+	TypeIcon    string      `json:"typeIcon"`
+	IsContainer bool        `json:"isContainer"`
+	Children    []*TreeItem `json:"children"`
 }
 
 type FlatTreeItem struct {
-	ID       uuid.UUID
-	Name     string
-	Type     string
-	ParentID uuid.UUID
-	Level    int
+	ID          uuid.UUID
+	Name        string
+	Type        string
+	Icon        string
+	TypeIcon    string
+	IsContainer bool
+	ParentID    uuid.UUID
+	Level       int
 }
 
 type TreeQuery struct {
@@ -2984,13 +2990,16 @@ func (r *EntityRepository) Tree(ctx context.Context, gid uuid.UUID, tq TreeQuery
 	defer span.End()
 
 	query := `
-		WITH recursive entity_tree(id, NAME, parent_id, level, node_type) AS
+		WITH recursive entity_tree(id, NAME, parent_id, level, node_type, icon, type_icon, is_container) AS
 		(
 			SELECT  e.id,
 					e.NAME,
 					e.entity_children AS parent_id,
 					0 AS level,
-					CASE WHEN et.is_location THEN 'location' ELSE 'item' END AS node_type
+					CASE WHEN et.is_location THEN 'location' ELSE 'item' END AS node_type,
+					COALESCE(e.icon, '') AS icon,
+					COALESCE(et.icon, '') AS type_icon,
+					COALESCE(et.is_container, false) AS is_container
 			FROM    entities e
 			JOIN    entity_types et ON et.id = e.entity_type_entities
 			WHERE   e.entity_children IS NULL
@@ -3002,7 +3011,10 @@ func (r *EntityRepository) Tree(ctx context.Context, gid uuid.UUID, tq TreeQuery
 					c.NAME,
 					c.entity_children AS parent_id,
 					level + 1,
-					CASE WHEN ct.is_location THEN 'location' ELSE 'item' END AS node_type
+					CASE WHEN ct.is_location THEN 'location' ELSE 'item' END AS node_type,
+					COALESCE(c.icon, '') AS icon,
+					COALESCE(ct.icon, '') AS type_icon,
+					COALESCE(ct.is_container, false) AS is_container
 			FROM   entities c
 			JOIN   entity_types ct ON ct.id = c.entity_type_entities
 			JOIN   entity_tree p
@@ -3015,7 +3027,10 @@ func (r *EntityRepository) Tree(ctx context.Context, gid uuid.UUID, tq TreeQuery
 				 NAME,
 				 level,
 				 parent_id,
-				 node_type
+				 node_type,
+				 icon,
+				 type_icon,
+				 is_container
 		FROM    (
 					SELECT  *
 					FROM    entity_tree
@@ -3028,13 +3043,16 @@ func (r *EntityRepository) Tree(ctx context.Context, gid uuid.UUID, tq TreeQuery
 				 lower(NAME)`
 
 	if tq.WithItems {
-		itemQuery := `, item_tree(id, NAME, parent_id, level, node_type) AS
+		itemQuery := `, item_tree(id, NAME, parent_id, level, node_type, icon, type_icon, is_container) AS
 		(
 			SELECT  e.id,
 					e.NAME,
 					e.entity_children as parent_id,
 					0 AS level,
-					'item' AS node_type
+					'item' AS node_type,
+					COALESCE(e.icon, '') AS icon,
+					COALESCE(et.icon, '') AS type_icon,
+					COALESCE(et.is_container, false) AS is_container
 			FROM    entities e
 			JOIN    entity_types et ON et.id = e.entity_type_entities
 			WHERE   et.is_location = false
@@ -3046,7 +3064,10 @@ func (r *EntityRepository) Tree(ctx context.Context, gid uuid.UUID, tq TreeQuery
 					c.NAME,
 					c.entity_children AS parent_id,
 					level + 1,
-					'item' AS node_type
+					'item' AS node_type,
+					COALESCE(c.icon, '') AS icon,
+					COALESCE(ct.icon, '') AS type_icon,
+					COALESCE(ct.is_container, false) AS is_container
 			FROM    entities c
 			JOIN    entity_types ct ON ct.id = c.entity_type_entities
 			JOIN    item_tree p
@@ -3080,7 +3101,7 @@ func (r *EntityRepository) Tree(ctx context.Context, gid uuid.UUID, tq TreeQuery
 	var flatItems []FlatTreeItem
 	for rows.Next() {
 		var item FlatTreeItem
-		if err := rows.Scan(&item.ID, &item.Name, &item.Level, &item.ParentID, &item.Type); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.Level, &item.ParentID, &item.Type, &item.Icon, &item.TypeIcon, &item.IsContainer); err != nil {
 			recordSpanError(querySpan, err)
 			querySpan.End()
 			recordSpanError(span, err)
@@ -3118,10 +3139,13 @@ func ConvertEntitiesToTree(items []FlatTreeItem) []TreeItem {
 
 	for _, item := range items {
 		node := &TreeItem{
-			ID:       item.ID,
-			Name:     item.Name,
-			Type:     item.Type,
-			Children: []*TreeItem{},
+			ID:          item.ID,
+			Name:        item.Name,
+			Type:        item.Type,
+			Icon:        item.Icon,
+			TypeIcon:    item.TypeIcon,
+			IsContainer: item.IsContainer,
+			Children:    []*TreeItem{},
 		}
 
 		itemMap[item.ID] = node

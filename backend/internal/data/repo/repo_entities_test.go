@@ -841,3 +841,95 @@ func TestEntityRepository_IconPersistsThroughCreateAndUpdate(t *testing.T) {
 	err = tRepos.Entities.Delete(context.Background(), result.ID)
 	require.NoError(t, err)
 }
+
+func TestEntityRepository_Tree_CarriesIconFields(t *testing.T) {
+	ctx := context.Background()
+
+	et, err := tRepos.EntityTypes.Create(ctx, tGroup.ID, EntityTypeCreate{
+		Name: "Iconic Tote", IsLocation: true, IsContainer: true, Icon: "basket-outline",
+	})
+	require.NoError(t, err)
+
+	withOverride := entityFactory()
+	withOverride.EntityTypeID = et.ID
+	withOverride.Icon = "treasure-chest"
+	a, err := tRepos.Entities.Create(ctx, tGroup.ID, withOverride)
+	require.NoError(t, err)
+
+	noOverride := entityFactory()
+	noOverride.EntityTypeID = et.ID
+	b, err := tRepos.Entities.Create(ctx, tGroup.ID, noOverride)
+	require.NoError(t, err)
+
+	tree, err := tRepos.Entities.Tree(ctx, tGroup.ID, TreeQuery{WithItems: false})
+	require.NoError(t, err)
+
+	found := map[uuid.UUID]TreeItem{}
+	var walk func(items []*TreeItem)
+	walk = func(items []*TreeItem) {
+		for _, it := range items {
+			found[it.ID] = *it
+			walk(it.Children)
+		}
+	}
+	// Tree() returns []TreeItem.
+	for i := range tree {
+		found[tree[i].ID] = tree[i]
+		walk(tree[i].Children)
+	}
+
+	require.Contains(t, found, a.ID)
+	assert.Equal(t, "treasure-chest", found[a.ID].Icon)
+	assert.Equal(t, "basket-outline", found[a.ID].TypeIcon)
+	assert.True(t, found[a.ID].IsContainer)
+
+	require.Contains(t, found, b.ID)
+	assert.Empty(t, found[b.ID].Icon)
+	assert.Equal(t, "basket-outline", found[b.ID].TypeIcon)
+	assert.True(t, found[b.ID].IsContainer)
+
+	// WithItems=true path: a non-location item nested under location `a` must also
+	// carry its own icon fields through the item_tree UNION arm.
+	itemET, err := tRepos.EntityTypes.Create(ctx, tGroup.ID, EntityTypeCreate{
+		Name: "Iconic Widget", IsLocation: false, IsContainer: false, Icon: "widget-outline",
+	})
+	require.NoError(t, err)
+
+	nestedItem := entityFactory()
+	nestedItem.EntityTypeID = itemET.ID
+	nestedItem.ParentID = a.ID
+	nestedItem.Icon = "gem-outline"
+	c, err := tRepos.Entities.Create(ctx, tGroup.ID, nestedItem)
+	require.NoError(t, err)
+
+	treeWithItems, err := tRepos.Entities.Tree(ctx, tGroup.ID, TreeQuery{WithItems: true})
+	require.NoError(t, err)
+
+	foundWithItems := map[uuid.UUID]TreeItem{}
+	var walkWithItems func(items []*TreeItem)
+	walkWithItems = func(items []*TreeItem) {
+		for _, it := range items {
+			foundWithItems[it.ID] = *it
+			walkWithItems(it.Children)
+		}
+	}
+	for i := range treeWithItems {
+		foundWithItems[treeWithItems[i].ID] = treeWithItems[i]
+		walkWithItems(treeWithItems[i].Children)
+	}
+
+	require.Contains(t, foundWithItems, c.ID)
+	assert.Equal(t, "gem-outline", foundWithItems[c.ID].Icon)
+	assert.Equal(t, "widget-outline", foundWithItems[c.ID].TypeIcon)
+	assert.False(t, foundWithItems[c.ID].IsContainer)
+	// The parent location's fields must still be intact in the WithItems tree too.
+	require.Contains(t, foundWithItems, a.ID)
+	assert.Equal(t, "treasure-chest", foundWithItems[a.ID].Icon)
+	assert.Equal(t, "basket-outline", foundWithItems[a.ID].TypeIcon)
+	assert.True(t, foundWithItems[a.ID].IsContainer)
+
+	// Cleanup
+	require.NoError(t, tRepos.Entities.Delete(ctx, c.ID))
+	require.NoError(t, tRepos.Entities.Delete(ctx, a.ID))
+	require.NoError(t, tRepos.Entities.Delete(ctx, b.ID))
+}
