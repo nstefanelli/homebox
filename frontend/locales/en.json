@@ -196,6 +196,7 @@
                 "toast": {
                     "already_creating": "Already creating an {type}",
                     "ai_failed": "Couldn't identify the item from that photo — try again or enter it manually.",
+                    "ai_hint_tag_failed": "Couldn't create that tag — add it manually.",
                     "create_failed": "Couldn't create {type}",
                     "create_success": "{type} created",
                     "failed_load_parent": "Failed to load parent item - please select manually",
@@ -216,6 +217,7 @@
                 "product_tooltip_scan_barcode": "Autofill with a barcode from 📷",
                 "product_tooltip_ai_photo": "Autofill from a photo using AI",
                 "ai_badge": "AI guess — please verify",
+                "ai_hints_label": "Suggested tags:",
                 "ai_loading": "Analyzing photo…",
                 "ai_loading_slow": "Still working — the vision model may be loading (first request after idle can take a minute)…",
                 "rotate_photo": "Rotate photo",

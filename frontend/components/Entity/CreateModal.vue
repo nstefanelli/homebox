@@ -250,6 +250,21 @@
         :max-length="255"
       />
       <TagSelector v-model="form.tags" :tags="tags ?? []" />
+      <div v-if="categoryHints.length > 0" class="flex flex-wrap items-center gap-1">
+        <span class="text-xs text-muted-foreground">
+          {{ $t("components.entity.create_modal.ai_hints_label") }}
+        </span>
+        <Button
+          v-for="hint in categoryHints"
+          :key="hint"
+          type="button"
+          variant="outline"
+          size="sm"
+          @click="applyHint(hint)"
+        >
+          {{ hint }}
+        </Button>
+      </div>
       <PhotoUploader
         :label="
           $t('components.entity.create_modal.entity_photo', {
@@ -317,6 +332,7 @@
   import MdiLoading from "~icons/mdi/loading";
   import { Badge } from "~/components/ui/badge";
   import { detectProductBarcode } from "~~/lib/barcode/from-file";
+  import { matchHintToTag } from "~~/lib/ai/hints";
   import { AttachmentTypes } from "~~/lib/api/types/non-generated";
   import { useDialog, useDialogHotkey } from "~/components/ui/dialog-provider";
   import TagSelector from "~/components/Tag/Selector.vue";
@@ -627,6 +643,29 @@
 
   function cancelAiAnalyze() {
     aiAbort?.abort();
+  }
+
+  async function applyHint(hint: string) {
+    const existing = matchHintToTag(hint, tags.value);
+    if (existing) {
+      if (!form.tags.includes(existing.id)) {
+        form.tags = [...form.tags, existing.id];
+      }
+    } else {
+      const { error, data } = await api.tags.create({
+        name: hint.trim(),
+        color: "",
+        description: "",
+        icon: "",
+      });
+      if (error) {
+        toast.error(t("components.entity.create_modal.toast.ai_hint_tag_failed"));
+        return;
+      }
+      form.tags = [...form.tags, data.id];
+      await tagStore.refresh();
+    }
+    categoryHints.value = categoryHints.value.filter(h => h !== hint);
   }
 
   async function onAiPhotoSelected(e: Event) {
