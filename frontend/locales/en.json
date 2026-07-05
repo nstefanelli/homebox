@@ -303,7 +303,8 @@
             },
             "create_item": "Create Item",
             "print_containers": "Print container labels",
-            "print_include_items": "Include items"
+            "print_include_items": "Include items",
+            "print_nothing_to_print": "No containers to print here — check \"Include items\" to print item labels instead."
         },
         "quick_menu": {
             "no_results": "No results found.",

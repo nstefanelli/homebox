@@ -327,6 +327,15 @@
       );
     }
 
+    // An empty queue makes queueMode fall through to the generator's default
+    // asset-range view (all entities in the collection) -- surprising when the
+    // user asked to print "this location's containers" and there are none.
+    // Warn and stay put instead of silently navigating to an unrelated screen.
+    if (entries.length === 0) {
+      toast.warning(t("components.location.print_nothing_to_print"));
+      return;
+    }
+
     printQueue.set(entries);
     navigateTo("/reports/label-generator");
   }
