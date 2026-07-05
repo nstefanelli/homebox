@@ -3709,6 +3709,10 @@
                         }
                     ]
                 },
+                "icon": {
+                    "description": "Icon holds the value of the \"icon\" field.",
+                    "type": "string"
+                },
                 "id": {
                     "description": "ID of the ent.",
                     "type": "string"
@@ -5016,6 +5020,10 @@
                 "entityTypeId": {
                     "type": "string"
                 },
+                "icon": {
+                    "type": "string",
+                    "maxLength": 255
+                },
                 "manufacturer": {
                     "type": "string",
                     "maxLength": 255
@@ -5135,6 +5143,9 @@
                     "items": {
                         "$ref": "#/definitions/repo.EntityFieldData"
                     }
+                },
+                "icon": {
+                    "type": "string"
                 },
                 "id": {
                     "type": "string"
@@ -5269,14 +5280,23 @@
         "repo.EntityPath": {
             "type": "object",
             "properties": {
+                "icon": {
+                    "type": "string"
+                },
                 "id": {
                     "type": "string"
+                },
+                "isContainer": {
+                    "type": "boolean"
                 },
                 "name": {
                     "type": "string"
                 },
                 "type": {
                     "$ref": "#/definitions/repo.EntityPathType"
+                },
+                "typeIcon": {
+                    "type": "string"
                 }
             }
         },
@@ -5315,6 +5335,9 @@
                     ],
                     "x-nullable": true,
                     "x-omitempty": true
+                },
+                "icon": {
+                    "type": "string"
                 },
                 "id": {
                     "type": "string"
@@ -5753,6 +5776,10 @@
                     "items": {
                         "$ref": "#/definitions/repo.EntityFieldData"
                     }
+                },
+                "icon": {
+                    "type": "string",
+                    "maxLength": 255
                 },
                 "id": {
                     "type": "string"
@@ -6396,13 +6423,22 @@
                         "$ref": "#/definitions/repo.TreeItem"
                     }
                 },
+                "icon": {
+                    "type": "string"
+                },
                 "id": {
                     "type": "string"
+                },
+                "isContainer": {
+                    "type": "boolean"
                 },
                 "name": {
                     "type": "string"
                 },
                 "type": {
+                    "type": "string"
+                },
+                "typeIcon": {
                     "type": "string"
                 }
             }

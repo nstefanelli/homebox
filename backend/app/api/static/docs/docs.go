@@ -3712,6 +3712,10 @@ const docTemplate = `{
                         }
                     ]
                 },
+                "icon": {
+                    "description": "Icon holds the value of the \"icon\" field.",
+                    "type": "string"
+                },
                 "id": {
                     "description": "ID of the ent.",
                     "type": "string"
@@ -5019,6 +5023,10 @@ const docTemplate = `{
                 "entityTypeId": {
                     "type": "string"
                 },
+                "icon": {
+                    "type": "string",
+                    "maxLength": 255
+                },
                 "manufacturer": {
                     "type": "string",
                     "maxLength": 255
@@ -5138,6 +5146,9 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/repo.EntityFieldData"
                     }
+                },
+                "icon": {
+                    "type": "string"
                 },
                 "id": {
                     "type": "string"
@@ -5272,14 +5283,23 @@ const docTemplate = `{
         "repo.EntityPath": {
             "type": "object",
             "properties": {
+                "icon": {
+                    "type": "string"
+                },
                 "id": {
                     "type": "string"
+                },
+                "isContainer": {
+                    "type": "boolean"
                 },
                 "name": {
                     "type": "string"
                 },
                 "type": {
                     "$ref": "#/definitions/repo.EntityPathType"
+                },
+                "typeIcon": {
+                    "type": "string"
                 }
             }
         },
@@ -5318,6 +5338,9 @@ const docTemplate = `{
                     ],
                     "x-nullable": true,
                     "x-omitempty": true
+                },
+                "icon": {
+                    "type": "string"
                 },
                 "id": {
                     "type": "string"
@@ -5756,6 +5779,10 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/repo.EntityFieldData"
                     }
+                },
+                "icon": {
+                    "type": "string",
+                    "maxLength": 255
                 },
                 "id": {
                     "type": "string"
@@ -6399,13 +6426,22 @@ const docTemplate = `{
                         "$ref": "#/definitions/repo.TreeItem"
                     }
                 },
+                "icon": {
+                    "type": "string"
+                },
                 "id": {
                     "type": "string"
+                },
+                "isContainer": {
+                    "type": "boolean"
                 },
                 "name": {
                     "type": "string"
                 },
                 "type": {
+                    "type": "string"
+                },
+                "typeIcon": {
                     "type": "string"
                 }
             }

@@ -881,6 +881,7 @@
           tagIds: form.tags,
           manufacturer: "",
           modelNumber: "",
+          icon: "",
         });
 
         if (error) {
@@ -934,6 +935,7 @@
         tagIds: form.tags,
         manufacturer: "",
         modelNumber: "",
+        icon: "",
       });
       error = result.error;
       data = result.data;
@@ -962,6 +964,7 @@
         modelNumber: form.modelNumber,
         tagIds: form.tags,
         entityTypeId: selectedEntityType.value?.id || "",
+        icon: "",
       };
 
       const result = await api.items.create(out);

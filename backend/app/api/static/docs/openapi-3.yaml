@@ -2421,6 +2421,9 @@ components:
             The values are being populated by the EntityQuery when eager-loading is set.
           allOf:
             - $ref: "#/components/schemas/ent.EntityEdges"
+        icon:
+          description: Icon holds the value of the "icon" field.
+          type: string
         id:
           description: ID of the ent.
           type: string
@@ -3341,6 +3344,9 @@ components:
           maxLength: 1000
         entityTypeId:
           type: string
+        icon:
+          type: string
+          maxLength: 255
         manufacturer:
           type: string
           maxLength: 255
@@ -3423,6 +3429,8 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/repo.EntityFieldData"
+        icon:
+          type: string
         id:
           type: string
         imageId:
@@ -3516,12 +3524,18 @@ components:
     repo.EntityPath:
       type: object
       properties:
+        icon:
+          type: string
         id:
           type: string
+        isContainer:
+          type: boolean
         name:
           type: string
         type:
           $ref: "#/components/schemas/repo.EntityPathType"
+        typeIcon:
+          type: string
     repo.EntityPathType:
       type: string
       enum:
@@ -3547,6 +3561,8 @@ components:
             - $ref: "#/components/schemas/repo.EntityTypeSummary"
           x-omitempty: true
           nullable: true
+        icon:
+          type: string
         id:
           type: string
         imageId:
@@ -3853,6 +3869,9 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/repo.EntityFieldData"
+        icon:
+          type: string
+          maxLength: 255
         id:
           type: string
         insured:
@@ -4289,11 +4308,17 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/repo.TreeItem"
+        icon:
+          type: string
         id:
           type: string
+        isContainer:
+          type: boolean
         name:
           type: string
         type:
+          type: string
+        typeIcon:
           type: string
     repo.UserOut:
       type: object

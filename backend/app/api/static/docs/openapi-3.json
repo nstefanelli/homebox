@@ -4011,6 +4011,10 @@
                             }
                         ]
                     },
+                    "icon": {
+                        "description": "Icon holds the value of the \"icon\" field.",
+                        "type": "string"
+                    },
                     "id": {
                         "description": "ID of the ent.",
                         "type": "string"
@@ -5318,6 +5322,10 @@
                     "entityTypeId": {
                         "type": "string"
                     },
+                    "icon": {
+                        "type": "string",
+                        "maxLength": 255
+                    },
                     "manufacturer": {
                         "type": "string",
                         "maxLength": 255
@@ -5437,6 +5445,9 @@
                         "items": {
                             "$ref": "#/components/schemas/repo.EntityFieldData"
                         }
+                    },
+                    "icon": {
+                        "type": "string"
                     },
                     "id": {
                         "type": "string"
@@ -5571,14 +5582,23 @@
             "repo.EntityPath": {
                 "type": "object",
                 "properties": {
+                    "icon": {
+                        "type": "string"
+                    },
                     "id": {
                         "type": "string"
+                    },
+                    "isContainer": {
+                        "type": "boolean"
                     },
                     "name": {
                         "type": "string"
                     },
                     "type": {
                         "$ref": "#/components/schemas/repo.EntityPathType"
+                    },
+                    "typeIcon": {
+                        "type": "string"
                     }
                 }
             },
@@ -5617,6 +5637,9 @@
                         ],
                         "x-omitempty": true,
                         "nullable": true
+                    },
+                    "icon": {
+                        "type": "string"
                     },
                     "id": {
                         "type": "string"
@@ -6055,6 +6078,10 @@
                         "items": {
                             "$ref": "#/components/schemas/repo.EntityFieldData"
                         }
+                    },
+                    "icon": {
+                        "type": "string",
+                        "maxLength": 255
                     },
                     "id": {
                         "type": "string"
@@ -6698,13 +6725,22 @@
                             "$ref": "#/components/schemas/repo.TreeItem"
                         }
                     },
+                    "icon": {
+                        "type": "string"
+                    },
                     "id": {
                         "type": "string"
+                    },
+                    "isContainer": {
+                        "type": "boolean"
                     },
                     "name": {
                         "type": "string"
                     },
                     "type": {
+                        "type": "string"
+                    },
+                    "typeIcon": {
                         "type": "string"
                     }
                 }

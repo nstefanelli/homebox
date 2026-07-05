@@ -205,6 +205,9 @@ definitions:
         description: |-
           Edges holds the relations/edges for other nodes in the graph.
           The values are being populated by the EntityQuery when eager-loading is set.
+      icon:
+        description: Icon holds the value of the "icon" field.
+        type: string
       id:
         description: ID of the ent.
         type: string
@@ -1110,6 +1113,9 @@ definitions:
         type: string
       entityTypeId:
         type: string
+      icon:
+        maxLength: 255
+        type: string
       manufacturer:
         maxLength: 255
         type: string
@@ -1194,6 +1200,8 @@ definitions:
         items:
           $ref: '#/definitions/repo.EntityFieldData'
         type: array
+      icon:
+        type: string
       id:
         type: string
       imageId:
@@ -1287,12 +1295,18 @@ definitions:
     type: object
   repo.EntityPath:
     properties:
+      icon:
+        type: string
       id:
         type: string
+      isContainer:
+        type: boolean
       name:
         type: string
       type:
         $ref: '#/definitions/repo.EntityPathType'
+      typeIcon:
+        type: string
     type: object
   repo.EntityPathType:
     enum:
@@ -1318,6 +1332,8 @@ definitions:
         - $ref: '#/definitions/repo.EntityTypeSummary'
         x-nullable: true
         x-omitempty: true
+      icon:
+        type: string
       id:
         type: string
       imageId:
@@ -1622,6 +1638,9 @@ definitions:
         items:
           $ref: '#/definitions/repo.EntityFieldData'
         type: array
+      icon:
+        maxLength: 255
+        type: string
       id:
         type: string
       insured:
@@ -2060,11 +2079,17 @@ definitions:
         items:
           $ref: '#/definitions/repo.TreeItem'
         type: array
+      icon:
+        type: string
       id:
         type: string
+      isContainer:
+        type: boolean
       name:
         type: string
       type:
+        type: string
+      typeIcon:
         type: string
     type: object
   repo.UserOut:
