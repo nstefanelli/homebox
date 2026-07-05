@@ -17,6 +17,13 @@ import (
 // real value.
 const redactedValue = "[REDACTED]"
 
+// RedactedValue is the exported form of redactedValue. Packages outside config
+// that need to recognize the sentinel — e.g. the group-integrations service's
+// write-only secret merge, which treats an incoming field equal to this exact
+// literal as "keep the currently stored secret" — import this constant rather
+// than hardcoding the literal a second time.
+const RedactedValue = redactedValue
+
 // redactURLUserinfo returns raw with any password component of an embedded
 // userinfo section replaced by the redaction sentinel. The username is left
 // visible so operators can still recognize which account is configured. Inputs

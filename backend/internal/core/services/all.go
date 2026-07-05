@@ -17,6 +17,7 @@ type AllServices struct {
 	BackgroundService *BackgroundService
 	Exports           *ExportService
 	Currencies        *currencies.CurrencyRegistry
+	Integrations      *IntegrationsService
 }
 
 type OptionsFunc func(*options)
@@ -31,6 +32,8 @@ type options struct {
 	pubSubConn           string
 	dialect              string
 	mailer               *mailer.Mailer
+	ai                   config.AIConf
+	barcode              config.BarcodeAPIConf
 }
 
 func WithAutoIncrementAssetID(v bool) func(*options) {
@@ -71,6 +74,15 @@ func WithExportPlumbing(bus *eventbus.EventBus, db *ent.Client, storage config.S
 func WithMailer(m *mailer.Mailer) func(*options) {
 	return func(o *options) {
 		o.mailer = m
+	}
+}
+
+// WithIntegrationsConfig hands IntegrationsService the env-configured AI and
+// barcode blocks to use as the per-field fallback beneath group settings.
+func WithIntegrationsConfig(ai config.AIConf, barcode config.BarcodeAPIConf) func(*options) {
+	return func(o *options) {
+		o.ai = ai
+		o.barcode = barcode
 	}
 }
 
@@ -127,5 +139,10 @@ func New(repos *repo.AllRepos, opts ...OptionsFunc) *AllServices {
 			dialect:    options.dialect,
 		},
 		Currencies: currencies.NewCurrencyService(options.currencies),
+		Integrations: &IntegrationsService{
+			repos:           repos,
+			fallbackAI:      options.ai,
+			fallbackBarcode: options.barcode,
+		},
 	}
 }
