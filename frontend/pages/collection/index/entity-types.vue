@@ -56,7 +56,10 @@
   watch(
     () => createForm.isLocation,
     v => {
-      if (!v) createForm.isContainer = false;
+      if (!v) {
+        createForm.isContainer = false;
+        createForm.icon = "";
+      }
     }
   );
 
@@ -100,7 +103,10 @@
   watch(
     () => updateForm.isLocation,
     v => {
-      if (!v) updateForm.isContainer = false;
+      if (!v) {
+        updateForm.isContainer = false;
+        updateForm.icon = "";
+      }
     }
   );
 
