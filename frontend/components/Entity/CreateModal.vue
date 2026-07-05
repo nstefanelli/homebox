@@ -37,7 +37,13 @@
             </Tooltip>
             <Tooltip>
               <TooltipTrigger>
-                <Button variant="outline" :disabled="loading" size="icon" data-pos="end" @click="openBarcodeDialog()">
+                <Button
+                  variant="outline"
+                  :disabled="loading"
+                  size="icon"
+                  :data-pos="aiPhotoEnabled ? undefined : 'end'"
+                  @click="openBarcodeDialog()"
+                >
                   <MdiBarcode class="size-5" />
                 </Button>
               </TooltipTrigger>
@@ -45,13 +51,53 @@
                 <p>{{ $t("components.entity.create_modal.product_tooltip_input_barcode") }}</p>
               </TooltipContent>
             </Tooltip>
+            <Tooltip v-if="aiPhotoEnabled">
+              <TooltipTrigger>
+                <Button
+                  variant="outline"
+                  :disabled="loading || aiLoading"
+                  size="icon"
+                  data-pos="end"
+                  @click="openAiPhotoPicker()"
+                >
+                  <MdiCameraOutline class="size-5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>{{ $t("components.entity.create_modal.product_tooltip_ai_photo") }}</p>
+              </TooltipContent>
+            </Tooltip>
           </ButtonGroup>
         </TooltipProvider>
       </div>
     </template>
 
+    <input
+      ref="aiPhotoInput"
+      type="file"
+      accept="image/*"
+      capture="environment"
+      class="hidden"
+      @change="onAiPhotoSelected"
+    />
+
     <form class="flex min-w-0 flex-col gap-2" @submit.prevent="create()">
       <LocationSelector v-model="form.location" />
+
+      <div v-if="aiLoading" class="flex items-center gap-2 text-sm text-muted-foreground">
+        <MdiLoading class="size-4 animate-spin" />
+        <span>{{
+          aiLoadingSlow
+            ? $t("components.entity.create_modal.ai_loading_slow")
+            : $t("components.entity.create_modal.ai_loading")
+        }}</span>
+        <Button type="button" variant="ghost" size="sm" @click="cancelAiAnalyze()">
+          {{ $t("global.cancel") }}
+        </Button>
+      </div>
+      <Badge v-if="aiPrefill" variant="secondary" class="self-start">
+        {{ $t("components.entity.create_modal.ai_badge") }}
+      </Badge>
 
       <!-- Template Info Display - Collapsible banner with distinct styling -->
       <div v-if="templateData" class="rounded-lg border-l-4 border-l-primary bg-primary/5 p-3">
@@ -267,6 +313,10 @@
   import MdiFileDocumentOutline from "~icons/mdi/file-document-outline";
   import MdiChevronDown from "~icons/mdi/chevron-down";
   import MdiClose from "~icons/mdi/close";
+  import MdiCameraOutline from "~icons/mdi/camera-outline";
+  import MdiLoading from "~icons/mdi/loading";
+  import { Badge } from "~/components/ui/badge";
+  import { detectProductBarcode } from "~~/lib/barcode/from-file";
   import { AttachmentTypes } from "~~/lib/api/types/non-generated";
   import { useDialog, useDialogHotkey } from "~/components/ui/dialog-provider";
   import TagSelector from "~/components/Tag/Selector.vue";
@@ -301,6 +351,23 @@
   const entityTypeStore = useEntityTypeStore();
 
   const api = useUserApi();
+  // Capability status is unauthenticated (mirrors LabelMaker.vue) -- useUserApi's
+  // client has no status() endpoint, so a dedicated public client is used here
+  // rather than overloading the authenticated `api` variable.
+  const pubApi = usePublicApi();
+
+  const { data: status } = useAsyncData(async () => {
+    const { data } = await pubApi.status();
+    return data;
+  });
+  const aiPhotoEnabled = computed(() => status.value?.aiPhotoAnalysis || false);
+
+  const aiPhotoInput = ref<HTMLInputElement | null>(null);
+  const aiLoading = ref(false);
+  const aiLoadingSlow = ref(false);
+  const aiPrefill = ref(false);
+  const categoryHints = ref<string[]>([]);
+  let aiAbort: AbortController | null = null;
 
   const locationsStore = useLocationStore();
   const locations = computed(() => locationsStore.allLocations);
@@ -554,6 +621,64 @@
     }
   }
 
+  function openAiPhotoPicker() {
+    aiPhotoInput.value?.click();
+  }
+
+  function cancelAiAnalyze() {
+    aiAbort?.abort();
+  }
+
+  async function onAiPhotoSelected(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file || aiLoading.value) {
+      return;
+    }
+
+    aiLoading.value = true;
+    aiLoadingSlow.value = false;
+    aiPrefill.value = false;
+    categoryHints.value = [];
+    const slowTimer = setTimeout(() => {
+      aiLoadingSlow.value = true;
+    }, 10_000);
+    aiAbort = new AbortController();
+
+    try {
+      // Lane 1: barcode visible in the photo -> existing UPC pipeline, authoritative.
+      const barcode = await detectProductBarcode(file);
+      if (barcode) {
+        const { data, error } = await api.products.searchFromBarcode(barcode);
+        if (!error && data && data.length > 0) {
+          applyProductPrefill(data[0]!);
+          return;
+        }
+        // UPC miss: fall through to the vision lane with the same photo.
+      }
+
+      // Lane 2: vision analysis.
+      const { data, error } = await api.actions.analyzePhoto(file, aiAbort.signal);
+      if (error || !data || data.products.length === 0) {
+        toast.error(t("components.entity.create_modal.toast.ai_failed"));
+        return;
+      }
+      applyProductPrefill(data.products[0]!);
+      aiPrefill.value = true;
+      categoryHints.value = data.categoryHints ?? [];
+    } catch (err) {
+      if (!(err instanceof DOMException && err.name === "AbortError")) {
+        toast.error(t("components.entity.create_modal.toast.ai_failed"));
+      }
+    } finally {
+      clearTimeout(slowTimer);
+      aiLoading.value = false;
+      aiLoadingSlow.value = false;
+      aiAbort = null;
+    }
+  }
+
   onMounted(() => {
     const cleanup = registerOpenDialogCallback(DialogID.CreateEntity, async params => {
       subItemCreate.value = false;
@@ -562,6 +687,8 @@
       form.parentId = null;
       form.manufacturer = "";
       form.modelNumber = "";
+      aiPrefill.value = false;
+      categoryHints.value = [];
 
       if (params.baseType === "item") {
         selectedEntityType.value = entityTypes.value.find(t => !t.isLocation) || null;
@@ -677,6 +804,8 @@
       templateData.value = null;
       templateUserSelected.value = false;
       showTemplateDetails.value = false;
+      aiPrefill.value = false;
+      categoryHints.value = [];
       focused.value = false;
       loading.value = false;
 
@@ -740,6 +869,8 @@
       templateData.value = null;
       templateUserSelected.value = false;
       showTemplateDetails.value = false;
+      aiPrefill.value = false;
+      categoryHints.value = [];
       focused.value = false;
       loading.value = false;
 
@@ -851,6 +982,8 @@
     templateData.value = null;
     templateUserSelected.value = false;
     showTemplateDetails.value = false;
+    aiPrefill.value = false;
+    categoryHints.value = [];
     focused.value = false;
     loading.value = false;
 
