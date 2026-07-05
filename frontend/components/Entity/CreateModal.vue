@@ -278,6 +278,11 @@
         :max-length="255"
       />
       <TagSelector v-model="form.tags" :tags="tags ?? []" />
+      <IconSelector
+        v-if="selectedEntityType?.isLocation"
+        v-model="form.icon"
+        :label="$t('components.entity.create_modal.entity_icon')"
+      />
       <div v-if="categoryHints.length > 0" class="flex flex-wrap items-center gap-1">
         <span class="text-xs text-muted-foreground">
           {{ $t("components.entity.create_modal.ai_hints_label") }}
@@ -366,6 +371,7 @@
   import { AttachmentTypes } from "~~/lib/api/types/non-generated";
   import { useDialog, useDialogHotkey } from "~/components/ui/dialog-provider";
   import TagSelector from "~/components/Tag/Selector.vue";
+  import IconSelector from "@/components/Form/IconSelector.vue";
   import ItemSelector from "~/components/Item/Selector.vue";
   import TemplateSelector from "~/components/Template/Selector.vue";
   import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "~/components/ui/tooltip";
@@ -520,6 +526,7 @@
     description: "",
     manufacturer: "",
     modelNumber: "",
+    icon: "",
     color: "",
     tags: [] as string[],
     photos: [] as PhotoPreview[],
@@ -764,6 +771,7 @@
       form.parentId = null;
       form.manufacturer = "";
       form.modelNumber = "";
+      form.icon = "";
       aiPrefill.value = false;
       categoryHints.value = [];
 
@@ -874,6 +882,7 @@
       form.description = "";
       form.manufacturer = "";
       form.modelNumber = "";
+      form.icon = "";
       form.color = "";
       form.photos = [];
       form.tags = [];
@@ -940,6 +949,7 @@
       form.description = "";
       form.manufacturer = "";
       form.modelNumber = "";
+      form.icon = "";
       form.color = "";
       form.photos = [];
       form.tags = [];
@@ -972,7 +982,7 @@
         tagIds: form.tags,
         manufacturer: "",
         modelNumber: "",
-        icon: "",
+        icon: form.icon,
       });
       error = result.error;
       data = result.data;
@@ -1001,7 +1011,7 @@
         modelNumber: form.modelNumber,
         tagIds: form.tags,
         entityTypeId: selectedEntityType.value?.id || "",
-        icon: "",
+        icon: form.icon,
       };
 
       const result = await api.items.create(out);
@@ -1055,6 +1065,7 @@
     form.description = "";
     form.manufacturer = "";
     form.modelNumber = "";
+    form.icon = "";
     form.color = "";
     form.photos = [];
     form.tags = [];
