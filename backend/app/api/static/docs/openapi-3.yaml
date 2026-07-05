@@ -36,6 +36,35 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/v1.AnalyzePhotoResponse"
+  /v1/actions/analyze-photo-bulk:
+    post:
+      security:
+        - Bearer: []
+      description: Identifies every distinct item in a photo of an open container
+        using the configured vision AI provider
+      tags:
+        - Actions
+      summary: Analyze Container Contents Photo
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  description: Photo of an open container/shelf (JPEG/PNG/WebP)
+                  type: string
+                  format: binary
+              required:
+                - file
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/v1.AnalyzeBulkResponse"
   /v1/actions/create-missing-thumbnails:
     post:
       security:
@@ -4455,6 +4484,15 @@ components:
       properties:
         completed:
           type: integer
+    v1.AnalyzeBulkResponse:
+      type: object
+      properties:
+        candidates:
+          type: array
+          items:
+            $ref: "#/components/schemas/v1.BulkItemCandidate"
+        lane:
+          type: string
     v1.AnalyzePhotoResponse:
       type: object
       properties:
@@ -4479,6 +4517,25 @@ components:
           type: string
         version:
           type: string
+    v1.BulkItemCandidate:
+      type: object
+      properties:
+        categoryHints:
+          type: array
+          items:
+            type: string
+        confidence:
+          type: number
+        description:
+          type: string
+        manufacturer:
+          type: string
+        modelNumber:
+          type: string
+        name:
+          type: string
+        quantity:
+          type: number
     v1.ChangePassword:
       type: object
       properties:

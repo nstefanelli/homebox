@@ -1360,6 +1360,11 @@ export interface ActionAmountResult {
   completed: number;
 }
 
+export interface AnalyzeBulkResponse {
+  candidates: BulkItemCandidate[];
+  lane: string;
+}
+
 export interface AnalyzePhotoResponse {
   categoryHints: string[];
   confidence: number;
@@ -1371,6 +1376,16 @@ export interface Build {
   buildTime: string;
   commit: string;
   version: string;
+}
+
+export interface BulkItemCandidate {
+  categoryHints: string[];
+  confidence: number;
+  description: string;
+  manufacturer: string;
+  modelNumber: string;
+  name: string;
+  quantity: number;
 }
 
 export interface ChangePassword {

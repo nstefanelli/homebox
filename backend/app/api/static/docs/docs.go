@@ -55,6 +55,43 @@ const docTemplate = `{
                 }
             }
         },
+        "/v1/actions/analyze-photo-bulk": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Identifies every distinct item in a photo of an open container using the configured vision AI provider",
+                "consumes": [
+                    "multipart/form-data"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Actions"
+                ],
+                "summary": "Analyze Container Contents Photo",
+                "parameters": [
+                    {
+                        "type": "file",
+                        "description": "Photo of an open container/shelf (JPEG/PNG/WebP)",
+                        "name": "file",
+                        "in": "formData",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/v1.AnalyzeBulkResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/v1/actions/create-missing-thumbnails": {
             "post": {
                 "security": [
@@ -6648,6 +6685,20 @@ const docTemplate = `{
                 }
             }
         },
+        "v1.AnalyzeBulkResponse": {
+            "type": "object",
+            "properties": {
+                "candidates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/v1.BulkItemCandidate"
+                    }
+                },
+                "lane": {
+                    "type": "string"
+                }
+            }
+        },
         "v1.AnalyzePhotoResponse": {
             "type": "object",
             "properties": {
@@ -6682,6 +6733,35 @@ const docTemplate = `{
                 },
                 "version": {
                     "type": "string"
+                }
+            }
+        },
+        "v1.BulkItemCandidate": {
+            "type": "object",
+            "properties": {
+                "categoryHints": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "confidence": {
+                    "type": "number"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "manufacturer": {
+                    "type": "string"
+                },
+                "modelNumber": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "quantity": {
+                    "type": "number"
                 }
             }
         },

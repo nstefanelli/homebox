@@ -2227,6 +2227,15 @@ definitions:
       completed:
         type: integer
     type: object
+  v1.AnalyzeBulkResponse:
+    properties:
+      candidates:
+        items:
+          $ref: '#/definitions/v1.BulkItemCandidate'
+        type: array
+      lane:
+        type: string
+    type: object
   v1.AnalyzePhotoResponse:
     properties:
       categoryHints:
@@ -2250,6 +2259,25 @@ definitions:
         type: string
       version:
         type: string
+    type: object
+  v1.BulkItemCandidate:
+    properties:
+      categoryHints:
+        items:
+          type: string
+        type: array
+      confidence:
+        type: number
+      description:
+        type: string
+      manufacturer:
+        type: string
+      modelNumber:
+        type: string
+      name:
+        type: string
+      quantity:
+        type: number
     type: object
   v1.ChangePassword:
     properties:
@@ -2467,6 +2495,30 @@ paths:
       security:
       - Bearer: []
       summary: Analyze Item Photo
+      tags:
+      - Actions
+  /v1/actions/analyze-photo-bulk:
+    post:
+      consumes:
+      - multipart/form-data
+      description: Identifies every distinct item in a photo of an open container
+        using the configured vision AI provider
+      parameters:
+      - description: Photo of an open container/shelf (JPEG/PNG/WebP)
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/v1.AnalyzeBulkResponse'
+      security:
+      - Bearer: []
+      summary: Analyze Container Contents Photo
       tags:
       - Actions
   /v1/actions/create-missing-thumbnails:
