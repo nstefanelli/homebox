@@ -829,6 +829,8 @@
     },
     "pages": {
         "location": {
+            "catalog_contents": "Catalog contents",
+            "catalog_success": "{count} items cataloged",
             "container_item_count": "{count} items",
             "containers_here": "Containers here ({count})",
             "empty_container": "Empty container",
