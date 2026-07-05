@@ -664,6 +664,18 @@
   }
 
   function applyProductPrefill(product: BarcodeProduct) {
+    // A product prefill (AI or barcode) carries manufacturer/modelNumber, but the
+    // template creation DTO (api.templates.createItem's request) has no such
+    // fields -- so an active template would silently swallow them when create()
+    // routes through the template path instead of the plain-item path. Product
+    // prefill wins: clear any active template so create() takes the plain-item
+    // path that carries manufacturer/model. clearTemplate() only touches
+    // template state + form.quantity, so it's safe regardless of ordering
+    // relative to the field assignments below.
+    if (templateData.value) {
+      clearTemplate();
+    }
+
     form.name = product.item.name;
     form.description = product.item.description;
     form.manufacturer = product.manufacturer || product.item.manufacturer || "";
@@ -800,10 +812,12 @@
 
         if (params.product) {
           applyProductPrefill(params.product);
+        } else {
+          // Restore last used template if available -- but only when there's no
+          // product prefill, since a restored template would silently swallow
+          // the prefilled manufacturer/modelNumber (see applyProductPrefill).
+          await restoreLastTemplate();
         }
-
-        // Restore last used template if available
-        await restoreLastTemplate();
       } else {
         selectedEntityType.value = entityTypes.value.find(t => t.isLocation) || null;
       }
@@ -927,7 +941,7 @@
           tagIds: form.tags,
           manufacturer: "",
           modelNumber: "",
-          icon: "",
+          icon: form.icon,
         });
 
         if (error) {
