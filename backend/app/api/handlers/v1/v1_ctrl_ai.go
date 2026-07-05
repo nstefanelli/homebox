@@ -38,43 +38,9 @@ type AnalyzePhotoResponse struct {
 //	@Security		Bearer
 func (ctrl *V1Controller) HandleAnalyzePhoto(provider ai.Provider) errchain.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) error {
-		// The global http.Server write/read timeouts (default 10s, see
-		// internal/sys/config Web.WriteTimeout) are sized for ordinary API
-		// requests. A cold vision-model load on the configured AI provider
-		// can legitimately take 30-60s+ (see spec Q5), so this route alone
-		// needs a deadline that covers the provider's own timeout plus
-		// margin for upload/JSON overhead — otherwise the server aborts the
-		// connection mid-request long before the provider ever times out.
-		deadline := time.Now().Add(time.Duration(ctrl.config.AI.TimeoutSeconds+30) * time.Second)
-		rc := http.NewResponseController(w)
-		if err := rc.SetWriteDeadline(deadline); err != nil {
-			log.Warn().Err(err).Msg("failed to extend response deadline for analyze-photo")
-		}
-		if err := rc.SetReadDeadline(deadline); err != nil {
-			log.Warn().Err(err).Msg("failed to extend response deadline for analyze-photo")
-		}
-
-		err := r.ParseMultipartForm(ctrl.maxUploadSize << 20)
+		imageBytes, mimeType, err := ctrl.readPhotoUpload(w, r)
 		if err != nil {
-			return validate.NewRequestError(errors.New("failed to parse multipart form"), http.StatusBadRequest)
-		}
-
-		file, _, err := r.FormFile("file")
-		if err != nil {
-			return validate.NewRequestError(errors.New("no image provided"), http.StatusBadRequest)
-		}
-		defer func() { _ = file.Close() }()
-
-		imageBytes, err := io.ReadAll(io.LimitReader(file, ctrl.maxUploadSize<<20))
-		if err != nil {
-			return validate.NewRequestError(errors.New("failed to read image"), http.StatusBadRequest)
-		}
-
-		mimeType := http.DetectContentType(imageBytes)
-		switch mimeType {
-		case "image/jpeg", "image/png", "image/webp":
-		default:
-			return validate.NewRequestError(errors.New("file is not a supported image (jpeg/png/webp)"), http.StatusBadRequest)
+			return err
 		}
 
 		result, err := provider.Analyze(r.Context(), imageBytes, mimeType)
@@ -84,6 +50,103 @@ func (ctrl *V1Controller) HandleAnalyzePhoto(provider ai.Provider) errchain.Hand
 		}
 
 		return server.JSON(w, http.StatusOK, analyzePhotoResponse(result, imageBytes, mimeType))
+	}
+}
+
+// readPhotoUpload extends the request deadline past the global server
+// timeouts (cold vision-model loads take 30-60s+), parses the multipart
+// form, and returns the validated image bytes + mime type.
+func (ctrl *V1Controller) readPhotoUpload(w http.ResponseWriter, r *http.Request) ([]byte, string, error) {
+	// The global http.Server write/read timeouts (default 10s, see
+	// internal/sys/config Web.WriteTimeout) are sized for ordinary API
+	// requests. A cold vision-model load on the configured AI provider
+	// can legitimately take 30-60s+ (see spec Q5), so routes using this
+	// helper need a deadline that covers the provider's own timeout plus
+	// margin for upload/JSON overhead — otherwise the server aborts the
+	// connection mid-request long before the provider ever times out.
+	deadline := time.Now().Add(time.Duration(ctrl.config.AI.TimeoutSeconds+30) * time.Second)
+	rc := http.NewResponseController(w)
+	if err := rc.SetWriteDeadline(deadline); err != nil {
+		log.Warn().Err(err).Msg("failed to extend response deadline for analyze-photo")
+	}
+	if err := rc.SetReadDeadline(deadline); err != nil {
+		log.Warn().Err(err).Msg("failed to extend response deadline for analyze-photo")
+	}
+
+	if err := r.ParseMultipartForm(ctrl.maxUploadSize << 20); err != nil {
+		return nil, "", validate.NewRequestError(errors.New("failed to parse multipart form"), http.StatusBadRequest)
+	}
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		return nil, "", validate.NewRequestError(errors.New("no image provided"), http.StatusBadRequest)
+	}
+	defer func() { _ = file.Close() }()
+
+	imageBytes, err := io.ReadAll(io.LimitReader(file, ctrl.maxUploadSize<<20))
+	if err != nil {
+		return nil, "", validate.NewRequestError(errors.New("failed to read image"), http.StatusBadRequest)
+	}
+	mimeType := http.DetectContentType(imageBytes)
+	switch mimeType {
+	case "image/jpeg", "image/png", "image/webp":
+	default:
+		return nil, "", validate.NewRequestError(errors.New("file is not a supported image (jpeg/png/webp)"), http.StatusBadRequest)
+	}
+	return imageBytes, mimeType, nil
+}
+
+type BulkItemCandidate struct {
+	Name          string   `json:"name"`
+	Description   string   `json:"description"`
+	Manufacturer  string   `json:"manufacturer"`
+	ModelNumber   string   `json:"modelNumber"`
+	Quantity      float64  `json:"quantity"`
+	CategoryHints []string `json:"categoryHints"`
+	Confidence    float64  `json:"confidence"`
+}
+
+type AnalyzeBulkResponse struct {
+	Lane       string              `json:"lane"`
+	Candidates []BulkItemCandidate `json:"candidates"`
+}
+
+// HandleAnalyzeBulk godoc
+//
+//	@Summary		Analyze Container Contents Photo
+//	@Description	Identifies every distinct item in a photo of an open container using the configured vision AI provider
+//	@Tags			Actions
+//	@Accept			multipart/form-data
+//	@Produce		json
+//	@Param			file	formData	file	true	"Photo of an open container/shelf (JPEG/PNG/WebP)"
+//	@Success		200		{object}	AnalyzeBulkResponse
+//	@Router			/v1/actions/analyze-photo-bulk [Post]
+//	@Security		Bearer
+func (ctrl *V1Controller) HandleAnalyzeBulk(provider ai.Provider) errchain.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) error {
+		imageBytes, mimeType, err := ctrl.readPhotoUpload(w, r)
+		if err != nil {
+			return err
+		}
+
+		results, err := provider.AnalyzeContents(r.Context(), imageBytes, mimeType)
+		if err != nil {
+			log.Err(err).Msg("vision provider bulk analyze failed")
+			return validate.NewRequestError(errors.New("vision provider error"), http.StatusBadGateway)
+		}
+
+		candidates := make([]BulkItemCandidate, 0, len(results))
+		for _, res := range results {
+			hints := res.CategoryHints
+			if hints == nil {
+				hints = []string{}
+			}
+			candidates = append(candidates, BulkItemCandidate{
+				Name: res.Name, Description: res.Description,
+				Manufacturer: res.Manufacturer, ModelNumber: res.ModelNumber,
+				Quantity: res.Quantity, CategoryHints: hints, Confidence: res.Confidence,
+			})
+		}
+		return server.JSON(w, http.StatusOK, AnalyzeBulkResponse{Lane: "vision-bulk", Candidates: candidates})
 	}
 }
 

@@ -120,3 +120,63 @@ func TestHandleAnalyzePhoto_ProviderErrorIsBadGateway(t *testing.T) {
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "model exploded", "provider internals must not leak to the client-facing error")
 }
+
+func bulkRequest(t *testing.T, content []byte) *http.Request {
+	t.Helper()
+	req := multipartPhotoRequest(t, "file", content)
+	req.URL.Path = "/v1/actions/analyze-photo-bulk"
+	return req
+}
+
+func TestHandleAnalyzeBulk_Success(t *testing.T) {
+	ctrl := testAIController()
+	stub := stubProvider{res: ai.AnalyzeResult{
+		Name: "Camping Stove", Description: "Green stove.", Manufacturer: "Coleman",
+		Quantity: 1, CategoryHints: []string{"camping"}, Confidence: 0.9,
+	}}
+
+	rec := httptest.NewRecorder()
+	err := ctrl.HandleAnalyzeBulk(stub)(rec, bulkRequest(t, tinyPNG(t)))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp AnalyzeBulkResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, "vision-bulk", resp.Lane)
+	require.Len(t, resp.Candidates, 1)
+	assert.Equal(t, "Camping Stove", resp.Candidates[0].Name)
+	assert.Equal(t, float64(1), resp.Candidates[0].Quantity)
+	assert.Equal(t, []string{"camping"}, resp.Candidates[0].CategoryHints)
+}
+
+// emptyBulkStub returns zero candidates from AnalyzeContents. stubProvider
+// always wraps its single res in a one-element slice, so a dedicated stub is
+// needed here to exercise the "provider found nothing" path.
+type emptyBulkStub struct{ stubProvider }
+
+func (emptyBulkStub) AnalyzeContents(_ context.Context, _ []byte, _ string) ([]ai.AnalyzeResult, error) {
+	return []ai.AnalyzeResult{}, nil
+}
+
+func TestHandleAnalyzeBulk_EmptyResultIsOK(t *testing.T) {
+	ctrl := testAIController()
+
+	rec := httptest.NewRecorder()
+	err := ctrl.HandleAnalyzeBulk(emptyBulkStub{})(rec, bulkRequest(t, tinyPNG(t)))
+	require.NoError(t, err)
+
+	var resp AnalyzeBulkResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.NotNil(t, resp.Candidates)
+	assert.Empty(t, resp.Candidates)
+}
+
+func TestHandleAnalyzeBulk_ProviderErrorIsBadGateway(t *testing.T) {
+	ctrl := testAIController()
+	stub := stubProvider{err: errors.New("model exploded")}
+
+	rec := httptest.NewRecorder()
+	err := ctrl.HandleAnalyzeBulk(stub)(rec, bulkRequest(t, tinyPNG(t)))
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "model exploded")
+}

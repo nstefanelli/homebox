@@ -169,6 +169,7 @@ func (a *app) mountRoutes(r *chi.Mux, chain *errchain.ErrChain, repos *repo.AllR
 
 		if aiProvider != nil {
 			r.Post("/actions/analyze-photo", chain.ToHandlerFunc(v1Ctrl.HandleAnalyzePhoto(aiProvider), userMW...))
+			r.Post("/actions/analyze-photo-bulk", chain.ToHandlerFunc(v1Ctrl.HandleAnalyzeBulk(aiProvider), userMW...))
 		}
 
 		// Tags endpoints
