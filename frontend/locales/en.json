@@ -184,6 +184,8 @@
                 "entity_name": "{type} Name",
                 "entity_quantity": "{type} Quantity",
                 "entity_description": "{type} Description",
+                "entity_manufacturer": "Manufacturer",
+                "entity_model_number": "Model Number",
                 "entity_photo": "{type} Photo 📷",
                 "upload_photos": "Upload Photos",
                 "uploaded": "Uploaded Photo",

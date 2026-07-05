@@ -191,6 +191,18 @@
         "
         :max-length="1000"
       />
+      <FormTextField
+        v-if="!selectedEntityType?.isLocation"
+        v-model="form.manufacturer"
+        :label="$t('components.entity.create_modal.entity_manufacturer')"
+        :max-length="255"
+      />
+      <FormTextField
+        v-if="!selectedEntityType?.isLocation"
+        v-model="form.modelNumber"
+        :label="$t('components.entity.create_modal.entity_model_number')"
+        :max-length="255"
+      />
       <TagSelector v-model="form.tags" :tags="tags ?? []" />
       <PhotoUploader
         :label="
@@ -238,6 +250,7 @@
   import { Button, ButtonGroup } from "~/components/ui/button";
   import BaseModal from "@/components/App/CreateModal.vue";
   import type {
+    BarcodeProduct,
     EntityCreate,
     EntityTemplateOut,
     EntityTemplateSummary,
@@ -385,6 +398,8 @@
     quantity: 1,
     count: 1,
     description: "",
+    manufacturer: "",
+    modelNumber: "",
     color: "",
     tags: [] as string[],
     photos: [] as PhotoPreview[],
@@ -521,12 +536,32 @@
     }
   }
 
+  function applyProductPrefill(product: BarcodeProduct) {
+    form.name = product.item.name;
+    form.description = product.item.description;
+    form.manufacturer = product.manufacturer || product.item.manufacturer || "";
+    form.modelNumber = product.modelNumber || product.item.modelNumber || "";
+
+    if (product.imageURL) {
+      appendPhotos([
+        {
+          photoName: "product_view.jpg",
+          fileBase64: product.imageBase64,
+          primary: form.photos.length === 0,
+          file: dataURLtoFile(product.imageBase64, "product_view.jpg"),
+        },
+      ]);
+    }
+  }
+
   onMounted(() => {
     const cleanup = registerOpenDialogCallback(DialogID.CreateEntity, async params => {
       subItemCreate.value = false;
       let parentItemLocationId = null;
       parent.value = {};
       form.parentId = null;
+      form.manufacturer = "";
+      form.modelNumber = "";
 
       if (params.baseType === "item") {
         selectedEntityType.value = entityTypes.value.find(t => !t.isLocation) || null;
@@ -552,19 +587,7 @@
         }
 
         if (params.product) {
-          form.name = params.product.item.name;
-          form.description = params.product.item.description;
-
-          if (params.product.imageURL) {
-            appendPhotos([
-              {
-                photoName: "product_view.jpg",
-                fileBase64: params.product.imageBase64,
-                primary: form.photos.length === 0,
-                file: dataURLtoFile(params.product.imageBase64, "product_view.jpg"),
-              },
-            ]);
-          }
+          applyProductPrefill(params.product);
         }
 
         // Restore last used template if available
@@ -645,6 +668,8 @@
       form.quantity = 1;
       form.count = 1;
       form.description = "";
+      form.manufacturer = "";
+      form.modelNumber = "";
       form.color = "";
       form.photos = [];
       form.tags = [];
@@ -706,6 +731,8 @@
       form.quantity = 1;
       form.count = 1;
       form.description = "";
+      form.manufacturer = "";
+      form.modelNumber = "";
       form.color = "";
       form.photos = [];
       form.tags = [];
@@ -760,10 +787,10 @@
         name: form.name,
         quantity: form.quantity,
         description: form.description,
+        manufacturer: form.manufacturer,
+        modelNumber: form.modelNumber,
         tagIds: form.tags,
         entityTypeId: selectedEntityType.value?.id || "",
-        manufacturer: "",
-        modelNumber: "",
       };
 
       const result = await api.items.create(out);
@@ -815,6 +842,8 @@
     form.name = "";
     form.quantity = 1;
     form.description = "";
+    form.manufacturer = "";
+    form.modelNumber = "";
     form.color = "";
     form.photos = [];
     form.tags = [];
