@@ -20,6 +20,7 @@ import (
 	_ "gocloud.dev/blob/gcsblob"
 	_ "gocloud.dev/blob/memblob"
 	_ "gocloud.dev/blob/s3blob"
+	"gocloud.dev/gcerrors"
 )
 
 // HandleEntityTemplatesGetAll godoc
@@ -318,6 +319,7 @@ func (ctrl *V1Controller) HandleEntityTemplatePhotoUpload() errchain.HandlerFunc
 //	@Param		id	path	string	true	"Template ID"
 //	@Success	200
 //	@Failure	400	{object}	validate.ErrorResponse
+//	@Failure	404	{object}	validate.ErrorResponse
 //	@Router		/v1/templates/{id}/photo [GET]
 //	@Security	Bearer
 func (ctrl *V1Controller) HandleEntityTemplatePhotoGet() errchain.HandlerFunc {
@@ -344,6 +346,9 @@ func (ctrl *V1Controller) HandleEntityTemplatePhotoGet() errchain.HandlerFunc {
 
 		fileReader, err := bucket.NewReader(r.Context(), ctrl.repo.Attachments.GetFullPath(tmpl.PhotoPath), nil)
 		if err != nil {
+			if gcerrors.Code(err) == gcerrors.NotFound {
+				return validate.NewRequestError(err, http.StatusNotFound)
+			}
 			return validate.NewRequestError(err, http.StatusInternalServerError)
 		}
 		defer func() { _ = fileReader.Close() }()
