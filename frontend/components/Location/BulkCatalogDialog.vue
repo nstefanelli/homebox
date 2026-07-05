@@ -120,7 +120,7 @@
               }}</Badge>
               <template v-if="c.status === 'failed'">
                 <Badge variant="destructive">{{ $t("components.location.bulk_catalog.failed") }}</Badge>
-                <Button type="button" variant="outline" size="sm" @click="commitOne(c)">{{
+                <Button type="button" variant="outline" size="sm" :disabled="committing" @click="commitOne(c)">{{
                   $t("components.location.bulk_catalog.retry")
                 }}</Button>
               </template>
@@ -346,9 +346,12 @@
   }
 
   // Shared by both dismissal guards below: candidates that would be silently
-  // discarded if the dialog closed right now.
+  // discarded if the dialog closed right now. This includes "failed" (not
+  // just "pending") -- a checked candidate that failed to create is still
+  // queued for retry (see the Retry button), so closing without confirming
+  // would silently drop it same as an un-submitted "pending" one.
   function pendingUnconfirmed() {
-    return candidates.value.filter(c => c.status === "pending" && c.checked);
+    return candidates.value.filter(c => c.checked && (c.status === "pending" || c.status === "failed"));
   }
 
   // Same confirmation prompt for every dismissal path, so "x" button, Escape,
@@ -368,6 +371,12 @@
   // event.defaultPrevented immediately after emitting.
   async function guardClose(event: KeyboardEvent | PointerDownOutsideEvent) {
     if (committing.value) {
+      // Ignore dismissal entirely while a commit is in flight -- without
+      // preventDefault here, an Escape/outside-click mid-commit would fall
+      // through to the dialog's default (uncancellable) close behavior
+      // instead of being blocked, tearing the dialog down out from under an
+      // in-progress sequential create/upload loop.
+      event.preventDefault();
       return;
     }
     const pending = pendingUnconfirmed();
@@ -390,7 +399,9 @@
   // in that case) -- see task report for the full dismissal-path analysis.
   async function guardBeforeClose(): Promise<boolean> {
     if (committing.value) {
-      return true;
+      // Same rationale as guardClose: block the "x" button entirely while a
+      // commit is in flight rather than let it tear the dialog down mid-batch.
+      return false;
     }
     const pending = pendingUnconfirmed();
     if (pending.length === 0) {

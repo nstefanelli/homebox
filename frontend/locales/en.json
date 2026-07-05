@@ -313,7 +313,7 @@
                 "created": "Created",
                 "failed": "Failed",
                 "retry": "Retry",
-                "create_n": "Create {n} items",
+                "create_n": "{n, plural, =1 {Create 1 item} other {Create {n} items}}",
                 "analyze_failed": "Couldn't analyze that photo — try again.",
                 "created_summary": "{created} items created{failed, plural, =0 {} other {, {failed} failed}}",
                 "discard_confirm": "Discard {n} unreviewed candidates?"
@@ -887,7 +887,7 @@
             "env_hint_with_model": "Server default: {provider} @ {baseUrl} — {model}",
             "model_label": "Model",
             "off_contact_label": "OpenFoodFacts Contact",
-            "owner_only_notice": "Only the group owner can view and edit integration settings.",
+            "owner_only_notice": "Only the group owner can edit integration settings. Other members can view them.",
             "provider_anthropic": "Anthropic",
             "provider_disabled": "Disabled",
             "provider_inherit": "Inherit server default",

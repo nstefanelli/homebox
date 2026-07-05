@@ -428,8 +428,6 @@ export interface EntGroup {
   edges: EntGroupEdges;
   /** ID of the ent. */
   id: string;
-  /** Integrations holds the value of the "integrations" field. */
-  integrations: TypesGroupIntegrations;
   /** Name holds the value of the "name" field. */
   name: string;
   /** UpdatedAt holds the value of the "updated_at" field. */
