@@ -2,6 +2,11 @@
 
 All notable changes to this fork are documented in this file. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Upstream is [sysadminsmedia/homebox](https://github.com/sysadminsmedia/homebox); this file only covers fork-specific work on top of v0.26.2.
 
+## v0.26.2-phase3.3 - 2026-07-06
+
+### Fixed
+- Multi-page label sheets printed page 2+ shifted ~0.25in up, misaligning the labels against the physical Avery stock. Sections flowed continuously so a full sheet plus the next section's top padding straddled the page boundary. Now forces `break-before: page` on every sheet after the first so each starts at the exact same physical position.
+
 ## v0.26.2-phase3.2 - 2026-07-06
 
 ### Fixed
