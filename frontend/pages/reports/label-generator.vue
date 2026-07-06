@@ -330,6 +330,26 @@
     },
   });
 
+  // The sheet renders at the full physical page width (e.g. 8.5in) with the
+  // label margins baked into its own padding. Without an explicit `@page` rule
+  // the browser reserves its own default print margins, so the full-width sheet
+  // no longer fits the printable area — Safari clips the outer label columns
+  // left and right, Chrome shrinks-to-fit. Emitting `@page { size; margin: 0 }`
+  // sized to the current sheet makes it print 1:1, edge to edge. Empty until a
+  // sheet is generated (size 0 would be an invalid rule).
+  const printPageRule = computed(() => {
+    const p = out.value.page;
+    if (!p.width || !p.height) return "";
+    const m = out.value.measure;
+    return `@page { size: ${p.width}${m} ${p.height}${m}; margin: 0; }`;
+  });
+
+  // Function form so unhead re-evaluates when the sheet is (re)generated —
+  // passing the ComputedRef as a nested value does not get unwrapped.
+  useHead(() => ({
+    style: printPageRule.value ? [{ id: "label-page-rule", innerHTML: printPageRule.value }] : [],
+  }));
+
   function calcPages() {
     // Set Out Dimensions
     const measureRegex = /in|cm|mm/;
