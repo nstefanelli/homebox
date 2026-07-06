@@ -611,6 +611,12 @@
         rowGap: `${currentPreset ? out.gapY : 0}${out.measure}`,
         background: `white`,
         color: `black`,
+        // Force every sheet after the first onto a fresh physical page. Without
+        // this the sections flow continuously: a full 11in section plus the next
+        // one's top padding straddle the page boundary, so page 2+ prints its
+        // labels shifted ~0.25in up and they no longer register on the Avery
+        // stock. break-before (not break-after) avoids a trailing blank page.
+        breakBefore: pi > 0 ? 'page' : 'auto',
       }"
     >
       <div
