@@ -86,6 +86,20 @@ func (_u *EntityTypeUpdate) SetNillableIsLocation(v *bool) *EntityTypeUpdate {
 	return _u
 }
 
+// SetIsContainer sets the "is_container" field.
+func (_u *EntityTypeUpdate) SetIsContainer(v bool) *EntityTypeUpdate {
+	_u.mutation.SetIsContainer(v)
+	return _u
+}
+
+// SetNillableIsContainer sets the "is_container" field if the given value is not nil.
+func (_u *EntityTypeUpdate) SetNillableIsContainer(v *bool) *EntityTypeUpdate {
+	if v != nil {
+		_u.SetIsContainer(*v)
+	}
+	return _u
+}
+
 // SetIcon sets the "icon" field.
 func (_u *EntityTypeUpdate) SetIcon(v string) *EntityTypeUpdate {
 	_u.mutation.SetIcon(v)
@@ -275,6 +289,9 @@ func (_u *EntityTypeUpdate) sqlSave(ctx context.Context) (_node int, err error) 
 	if value, ok := _u.mutation.IsLocation(); ok {
 		_spec.SetField(entitytype.FieldIsLocation, field.TypeBool, value)
 	}
+	if value, ok := _u.mutation.IsContainer(); ok {
+		_spec.SetField(entitytype.FieldIsContainer, field.TypeBool, value)
+	}
 	if value, ok := _u.mutation.Icon(); ok {
 		_spec.SetField(entitytype.FieldIcon, field.TypeString, value)
 	}
@@ -454,6 +471,20 @@ func (_u *EntityTypeUpdateOne) SetIsLocation(v bool) *EntityTypeUpdateOne {
 func (_u *EntityTypeUpdateOne) SetNillableIsLocation(v *bool) *EntityTypeUpdateOne {
 	if v != nil {
 		_u.SetIsLocation(*v)
+	}
+	return _u
+}
+
+// SetIsContainer sets the "is_container" field.
+func (_u *EntityTypeUpdateOne) SetIsContainer(v bool) *EntityTypeUpdateOne {
+	_u.mutation.SetIsContainer(v)
+	return _u
+}
+
+// SetNillableIsContainer sets the "is_container" field if the given value is not nil.
+func (_u *EntityTypeUpdateOne) SetNillableIsContainer(v *bool) *EntityTypeUpdateOne {
+	if v != nil {
+		_u.SetIsContainer(*v)
 	}
 	return _u
 }
@@ -676,6 +707,9 @@ func (_u *EntityTypeUpdateOne) sqlSave(ctx context.Context) (_node *EntityType, 
 	}
 	if value, ok := _u.mutation.IsLocation(); ok {
 		_spec.SetField(entitytype.FieldIsLocation, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.IsContainer(); ok {
+		_spec.SetField(entitytype.FieldIsContainer, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.Icon(); ok {
 		_spec.SetField(entitytype.FieldIcon, field.TypeString, value)

@@ -22,6 +22,7 @@ import (
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/predicate"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/tag"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/user"
+	"github.com/sysadminsmedia/homebox/backend/internal/data/types"
 )
 
 // GroupUpdate is the builder for updating Group entities.
@@ -68,6 +69,26 @@ func (_u *GroupUpdate) SetNillableCurrency(v *string) *GroupUpdate {
 	if v != nil {
 		_u.SetCurrency(*v)
 	}
+	return _u
+}
+
+// SetIntegrations sets the "integrations" field.
+func (_u *GroupUpdate) SetIntegrations(v types.GroupIntegrations) *GroupUpdate {
+	_u.mutation.SetIntegrations(v)
+	return _u
+}
+
+// SetNillableIntegrations sets the "integrations" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableIntegrations(v *types.GroupIntegrations) *GroupUpdate {
+	if v != nil {
+		_u.SetIntegrations(*v)
+	}
+	return _u
+}
+
+// ClearIntegrations clears the value of the "integrations" field.
+func (_u *GroupUpdate) ClearIntegrations() *GroupUpdate {
+	_u.mutation.ClearIntegrations()
 	return _u
 }
 
@@ -430,6 +451,12 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.Currency(); ok {
 		_spec.SetField(group.FieldCurrency, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.Integrations(); ok {
+		_spec.SetField(group.FieldIntegrations, field.TypeJSON, value)
+	}
+	if _u.mutation.IntegrationsCleared() {
+		_spec.ClearField(group.FieldIntegrations, field.TypeJSON)
 	}
 	if _u.mutation.UsersCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -857,6 +884,26 @@ func (_u *GroupUpdateOne) SetNillableCurrency(v *string) *GroupUpdateOne {
 	return _u
 }
 
+// SetIntegrations sets the "integrations" field.
+func (_u *GroupUpdateOne) SetIntegrations(v types.GroupIntegrations) *GroupUpdateOne {
+	_u.mutation.SetIntegrations(v)
+	return _u
+}
+
+// SetNillableIntegrations sets the "integrations" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableIntegrations(v *types.GroupIntegrations) *GroupUpdateOne {
+	if v != nil {
+		_u.SetIntegrations(*v)
+	}
+	return _u
+}
+
+// ClearIntegrations clears the value of the "integrations" field.
+func (_u *GroupUpdateOne) ClearIntegrations() *GroupUpdateOne {
+	_u.mutation.ClearIntegrations()
+	return _u
+}
+
 // AddUserIDs adds the "users" edge to the User entity by IDs.
 func (_u *GroupUpdateOne) AddUserIDs(ids ...uuid.UUID) *GroupUpdateOne {
 	_u.mutation.AddUserIDs(ids...)
@@ -1246,6 +1293,12 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if value, ok := _u.mutation.Currency(); ok {
 		_spec.SetField(group.FieldCurrency, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.Integrations(); ok {
+		_spec.SetField(group.FieldIntegrations, field.TypeJSON, value)
+	}
+	if _u.mutation.IntegrationsCleared() {
+		_spec.ClearField(group.FieldIntegrations, field.TypeJSON)
 	}
 	if _u.mutation.UsersCleared() {
 		edge := &sqlgraph.EdgeSpec{

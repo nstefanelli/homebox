@@ -38,7 +38,7 @@ func (a *app) debugRouter() *http.ServeMux {
 }
 
 // registerRoutes registers all the routes for the API
-func (a *app) mountRoutes(r *chi.Mux, chain *errchain.ErrChain, repos *repo.AllRepos) {
+func (a *app) mountRoutes(r *chi.Mux, chain *errchain.ErrChain, repos *repo.AllRepos) error {
 	registerMimes()
 
 	// Serve doc.json dynamically so the Swagger UI "Base URL" reflects the
@@ -128,6 +128,11 @@ func (a *app) mountRoutes(r *chi.Mux, chain *errchain.ErrChain, repos *repo.AllR
 		r.Put("/groups", chain.ToHandlerFunc(v1Ctrl.HandleGroupUpdate(), userMW...))
 		r.Delete("/groups", chain.ToHandlerFunc(v1Ctrl.HandleGroupDelete(), userMW...))
 
+		r.Get("/groups/integrations", chain.ToHandlerFunc(v1Ctrl.HandleIntegrationsGet(), userMW...))
+		r.Put("/groups/integrations", chain.ToHandlerFunc(v1Ctrl.HandleIntegrationsUpdate(), userMW...))
+		r.Post("/groups/integrations/test-ai", chain.ToHandlerFunc(v1Ctrl.HandleIntegrationsTestAI(), userMW...))
+		r.Post("/groups/integrations/test-barcode", chain.ToHandlerFunc(v1Ctrl.HandleIntegrationsTestBarcode(), userMW...))
+
 		r.Get("/groups/members", chain.ToHandlerFunc(v1Ctrl.HandleGroupMembersGetAll(), userMW...))
 		r.Delete("/groups/members/{user_id}", chain.ToHandlerFunc(v1Ctrl.HandleGroupMemberRemove(), userMW...))
 
@@ -156,6 +161,9 @@ func (a *app) mountRoutes(r *chi.Mux, chain *errchain.ErrChain, repos *repo.AllR
 		r.Post("/actions/set-primary-photos", chain.ToHandlerFunc(v1Ctrl.HandleSetPrimaryPhotos(), userMW...))
 		r.Post("/actions/create-missing-thumbnails", chain.ToHandlerFunc(v1Ctrl.HandleCreateMissingThumbnails(), userMW...))
 		r.Post("/actions/wipe-inventory", chain.ToHandlerFunc(v1Ctrl.HandleWipeInventory(), userMW...))
+
+		r.Post("/actions/analyze-photo", chain.ToHandlerFunc(v1Ctrl.HandleAnalyzePhoto(), userMW...))
+		r.Post("/actions/analyze-photo-bulk", chain.ToHandlerFunc(v1Ctrl.HandleAnalyzeBulk(), userMW...))
 
 		// Tags endpoints
 		r.Get("/tags", chain.ToHandlerFunc(v1Ctrl.HandleTagsGetAll(), userMW...))
@@ -205,6 +213,10 @@ func (a *app) mountRoutes(r *chi.Mux, chain *errchain.ErrChain, repos *repo.AllR
 		r.Put("/templates/{id}", chain.ToHandlerFunc(v1Ctrl.HandleEntityTemplatesUpdate(), userMW...))
 		r.Delete("/templates/{id}", chain.ToHandlerFunc(v1Ctrl.HandleEntityTemplatesDelete(), userMW...))
 		r.Post("/templates/{id}/create-item", chain.ToHandlerFunc(v1Ctrl.HandleEntityTemplatesCreateItem(), userMW...))
+		r.Post("/templates/{id}/batch-create", chain.ToHandlerFunc(v1Ctrl.HandleEntityTemplatesBatchCreate(), userMW...))
+		r.Post("/templates/{id}/photo", chain.ToHandlerFunc(v1Ctrl.HandleEntityTemplatePhotoUpload(), userMW...))
+		r.Get("/templates/{id}/photo", chain.ToHandlerFunc(v1Ctrl.HandleEntityTemplatePhotoGet(), userMW...))
+		r.Delete("/templates/{id}/photo", chain.ToHandlerFunc(v1Ctrl.HandleEntityTemplatePhotoDelete(), userMW...))
 
 		// Maintenance
 		r.Get("/maintenance", chain.ToHandlerFunc(v1Ctrl.HandleMaintenanceGetAll(), userMW...))
@@ -225,7 +237,7 @@ func (a *app) mountRoutes(r *chi.Mux, chain *errchain.ErrChain, repos *repo.AllR
 			a.mwRoles(RoleModeOr, authroles.RoleUser.String(), authroles.RoleAttachments.String()),
 		}
 
-		r.Get("/products/search-from-barcode", chain.ToHandlerFunc(v1Ctrl.HandleProductSearchFromBarcode(a.conf.Barcode), userMW...))
+		r.Get("/products/search-from-barcode", chain.ToHandlerFunc(v1Ctrl.HandleProductSearchFromBarcode(), userMW...))
 
 		r.Get("/qrcode", chain.ToHandlerFunc(v1Ctrl.HandleGenerateQRCode(), assetMW...))
 		r.Get(
@@ -254,6 +266,8 @@ func (a *app) mountRoutes(r *chi.Mux, chain *errchain.ErrChain, repos *repo.AllR
 	})
 
 	r.NotFound(chain.ToHandlerFunc(notFoundHandler()))
+
+	return nil
 }
 
 func registerMimes() {

@@ -17,6 +17,13 @@ import (
 // real value.
 const redactedValue = "[REDACTED]"
 
+// RedactedValue is the exported form of redactedValue. Packages outside config
+// that need to recognize the sentinel — e.g. the group-integrations service's
+// write-only secret merge, which treats an incoming field equal to this exact
+// literal as "keep the currently stored secret" — import this constant rather
+// than hardcoding the literal a second time.
+const RedactedValue = redactedValue
+
 // redactURLUserinfo returns raw with any password component of an embedded
 // userinfo section replaced by the redaction sentinel. The username is left
 // visible so operators can still recognize which account is configured. Inputs
@@ -59,6 +66,7 @@ type Config struct {
 	LabelMaker LabelMakerConf `yaml:"labelmaker"`
 	Thumbnail  Thumbnail      `yaml:"thumbnail"`
 	Barcode    BarcodeAPIConf `yaml:"barcode"`
+	AI         AIConf         `yaml:"ai"`
 	Otel       OTelConfig     `yaml:"otel"`
 	Auth       AuthConfig     `yaml:"auth"`
 	Notifier   NotifierConf   `yaml:"notifier"`
@@ -158,6 +166,23 @@ func (c BarcodeAPIConf) MarshalJSON() ([]byte, error) {
 	a := alias(c)
 	if a.TokenBarcodespider != "" {
 		a.TokenBarcodespider = redactedValue
+	}
+	return json.Marshal(a)
+}
+
+type AIConf struct {
+	Provider       string `yaml:"provider"` // "" (disabled) | "openai_compatible" | "anthropic"
+	BaseURL        string `yaml:"base_url"`
+	APIKey         string `yaml:"api_key"`
+	Model          string `yaml:"model"`
+	TimeoutSeconds int    `yaml:"timeout_seconds" conf:"default:120"`
+}
+
+func (c AIConf) MarshalJSON() ([]byte, error) {
+	type alias AIConf
+	a := alias(c)
+	if a.APIKey != "" {
+		a.APIKey = redactedValue
 	}
 	return json.Marshal(a)
 }

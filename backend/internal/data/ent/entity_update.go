@@ -259,6 +259,26 @@ func (_u *EntityUpdate) ClearManufacturer() *EntityUpdate {
 	return _u
 }
 
+// SetIcon sets the "icon" field.
+func (_u *EntityUpdate) SetIcon(v string) *EntityUpdate {
+	_u.mutation.SetIcon(v)
+	return _u
+}
+
+// SetNillableIcon sets the "icon" field if the given value is not nil.
+func (_u *EntityUpdate) SetNillableIcon(v *string) *EntityUpdate {
+	if v != nil {
+		_u.SetIcon(*v)
+	}
+	return _u
+}
+
+// ClearIcon clears the value of the "icon" field.
+func (_u *EntityUpdate) ClearIcon() *EntityUpdate {
+	_u.mutation.ClearIcon()
+	return _u
+}
+
 // SetLifetimeWarranty sets the "lifetime_warranty" field.
 func (_u *EntityUpdate) SetLifetimeWarranty(v bool) *EntityUpdate {
 	_u.mutation.SetLifetimeWarranty(v)
@@ -772,6 +792,11 @@ func (_u *EntityUpdate) check() error {
 			return &ValidationError{Name: "manufacturer", err: fmt.Errorf(`ent: validator failed for field "Entity.manufacturer": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.Icon(); ok {
+		if err := entity.IconValidator(v); err != nil {
+			return &ValidationError{Name: "icon", err: fmt.Errorf(`ent: validator failed for field "Entity.icon": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.WarrantyDetails(); ok {
 		if err := entity.WarrantyDetailsValidator(v); err != nil {
 			return &ValidationError{Name: "warranty_details", err: fmt.Errorf(`ent: validator failed for field "Entity.warranty_details": %w`, err)}
@@ -865,6 +890,12 @@ func (_u *EntityUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.ManufacturerCleared() {
 		_spec.ClearField(entity.FieldManufacturer, field.TypeString)
+	}
+	if value, ok := _u.mutation.Icon(); ok {
+		_spec.SetField(entity.FieldIcon, field.TypeString, value)
+	}
+	if _u.mutation.IconCleared() {
+		_spec.ClearField(entity.FieldIcon, field.TypeString)
 	}
 	if value, ok := _u.mutation.LifetimeWarranty(); ok {
 		_spec.SetField(entity.FieldLifetimeWarranty, field.TypeBool, value)
@@ -1479,6 +1510,26 @@ func (_u *EntityUpdateOne) ClearManufacturer() *EntityUpdateOne {
 	return _u
 }
 
+// SetIcon sets the "icon" field.
+func (_u *EntityUpdateOne) SetIcon(v string) *EntityUpdateOne {
+	_u.mutation.SetIcon(v)
+	return _u
+}
+
+// SetNillableIcon sets the "icon" field if the given value is not nil.
+func (_u *EntityUpdateOne) SetNillableIcon(v *string) *EntityUpdateOne {
+	if v != nil {
+		_u.SetIcon(*v)
+	}
+	return _u
+}
+
+// ClearIcon clears the value of the "icon" field.
+func (_u *EntityUpdateOne) ClearIcon() *EntityUpdateOne {
+	_u.mutation.ClearIcon()
+	return _u
+}
+
 // SetLifetimeWarranty sets the "lifetime_warranty" field.
 func (_u *EntityUpdateOne) SetLifetimeWarranty(v bool) *EntityUpdateOne {
 	_u.mutation.SetLifetimeWarranty(v)
@@ -2005,6 +2056,11 @@ func (_u *EntityUpdateOne) check() error {
 			return &ValidationError{Name: "manufacturer", err: fmt.Errorf(`ent: validator failed for field "Entity.manufacturer": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.Icon(); ok {
+		if err := entity.IconValidator(v); err != nil {
+			return &ValidationError{Name: "icon", err: fmt.Errorf(`ent: validator failed for field "Entity.icon": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.WarrantyDetails(); ok {
 		if err := entity.WarrantyDetailsValidator(v); err != nil {
 			return &ValidationError{Name: "warranty_details", err: fmt.Errorf(`ent: validator failed for field "Entity.warranty_details": %w`, err)}
@@ -2115,6 +2171,12 @@ func (_u *EntityUpdateOne) sqlSave(ctx context.Context) (_node *Entity, err erro
 	}
 	if _u.mutation.ManufacturerCleared() {
 		_spec.ClearField(entity.FieldManufacturer, field.TypeString)
+	}
+	if value, ok := _u.mutation.Icon(); ok {
+		_spec.SetField(entity.FieldIcon, field.TypeString, value)
+	}
+	if _u.mutation.IconCleared() {
+		_spec.ClearField(entity.FieldIcon, field.TypeString)
 	}
 	if value, ok := _u.mutation.LifetimeWarranty(); ok {
 		_spec.SetField(entity.FieldLifetimeWarranty, field.TypeBool, value)

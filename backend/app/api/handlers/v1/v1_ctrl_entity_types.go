@@ -1,12 +1,14 @@
 package v1
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/google/uuid"
 	"github.com/hay-kot/httpkit/errchain"
 	"github.com/sysadminsmedia/homebox/backend/internal/core/services"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/repo"
+	"github.com/sysadminsmedia/homebox/backend/internal/sys/validate"
 	"github.com/sysadminsmedia/homebox/backend/internal/web/adapters"
 )
 
@@ -34,10 +36,16 @@ func (ctrl *V1Controller) HandleEntityTypeGetAll() errchain.HandlerFunc {
 //	@Produce	json
 //	@Param		payload	body		repo.EntityTypeCreate	true	"Entity Type Data"
 //	@Success	201		{object}	repo.EntityTypeSummary
+//	@Failure	400	{object}	validate.ErrorResponse
 //	@Router		/v1/entity-types [POST]
 //	@Security	Bearer
 func (ctrl *V1Controller) HandleEntityTypeCreate() errchain.HandlerFunc {
 	fn := func(r *http.Request, body repo.EntityTypeCreate) (repo.EntityTypeSummary, error) {
+		if body.IsContainer && !body.IsLocation {
+			return repo.EntityTypeSummary{}, validate.NewRequestError(
+				errors.New("container entity types must also be locations"), http.StatusBadRequest)
+		}
+
 		auth := services.NewContext(r.Context())
 		return ctrl.repo.EntityTypes.Create(r.Context(), auth.GID, body)
 	}
@@ -53,10 +61,16 @@ func (ctrl *V1Controller) HandleEntityTypeCreate() errchain.HandlerFunc {
 //	@Param		id		path		string					true	"Entity Type ID"
 //	@Param		payload	body		repo.EntityTypeUpdate	true	"Entity Type Data"
 //	@Success	200		{object}	repo.EntityTypeSummary
+//	@Failure	400	{object}	validate.ErrorResponse
 //	@Router		/v1/entity-types/{id} [PUT]
 //	@Security	Bearer
 func (ctrl *V1Controller) HandleEntityTypeUpdate() errchain.HandlerFunc {
 	fn := func(r *http.Request, ID uuid.UUID, body repo.EntityTypeUpdate) (repo.EntityTypeSummary, error) {
+		if body.IsContainer && !body.IsLocation {
+			return repo.EntityTypeSummary{}, validate.NewRequestError(
+				errors.New("container entity types must also be locations"), http.StatusBadRequest)
+		}
+
 		auth := services.NewContext(r.Context())
 		body.ID = ID
 		return ctrl.repo.EntityTypes.Update(r.Context(), auth.GID, body)

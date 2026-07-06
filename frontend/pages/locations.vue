@@ -1,6 +1,8 @@
 <script setup lang="ts">
   import { useI18n } from "vue-i18n";
   import { useTreeState } from "~~/components/Location/Tree/tree-state";
+  import { useLabelPrintQueue } from "~~/stores/labels";
+  import { useLabelSelection } from "~~/stores/labelSelection";
   import MdiCollapseAllOutline from "~icons/mdi/collapse-all-outline";
   import MdiExpandAllOutline from "~icons/mdi/expand-all-outline";
   import MdiPackageVariant from "~icons/mdi/package-variant";
@@ -26,6 +28,16 @@
   });
 
   const api = useUserApi();
+
+  const selection = useLabelSelection();
+  const printQueue = useLabelPrintQueue();
+  onUnmounted(() => selection.clear());
+
+  function printSelected() {
+    printQueue.set(Object.values(selection.selected));
+    selection.clear();
+    navigateTo("/reports/label-generator");
+  }
 
   const { data: tree } = useAsyncData(async () => {
     const { data, error } = await api.items.getTree({
@@ -114,7 +126,7 @@
   <BaseContainer>
     <div class="mb-2 flex justify-between">
       <BaseSectionHeader> {{ $t("menu.locations") }} </BaseSectionHeader>
-      <div>
+      <div class="flex items-center gap-2">
         <TooltipProvider :delay-duration="0">
           <ButtonGroup>
             <Tooltip>
@@ -154,6 +166,12 @@
             </Tooltip>
           </ButtonGroup>
         </TooltipProvider>
+        <Button variant="outline" @click="selection.selectMode = !selection.selectMode">
+          {{ $t("locations.select_labels") }}
+        </Button>
+        <Button v-if="selection.selectMode && selection.count > 0" @click="printSelected">
+          {{ $t("locations.print_selected", { count: selection.count }) }}
+        </Button>
       </div>
     </div>
     <BaseCard>

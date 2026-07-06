@@ -31,6 +31,7 @@ import (
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/templatefield"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/user"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/usergroup"
+	"github.com/sysadminsmedia/homebox/backend/internal/data/types"
 )
 
 const (
@@ -2630,6 +2631,7 @@ type EntityMutation struct {
 	serial_number               *string
 	model_number                *string
 	manufacturer                *string
+	icon                        *string
 	lifetime_warranty           *bool
 	warranty_expires            *time.Time
 	warranty_details            *string
@@ -3393,6 +3395,55 @@ func (m *EntityMutation) ManufacturerCleared() bool {
 func (m *EntityMutation) ResetManufacturer() {
 	m.manufacturer = nil
 	delete(m.clearedFields, entity.FieldManufacturer)
+}
+
+// SetIcon sets the "icon" field.
+func (m *EntityMutation) SetIcon(s string) {
+	m.icon = &s
+}
+
+// Icon returns the value of the "icon" field in the mutation.
+func (m *EntityMutation) Icon() (r string, exists bool) {
+	v := m.icon
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldIcon returns the old "icon" field's value of the Entity entity.
+// If the Entity object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EntityMutation) OldIcon(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldIcon is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldIcon requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldIcon: %w", err)
+	}
+	return oldValue.Icon, nil
+}
+
+// ClearIcon clears the value of the "icon" field.
+func (m *EntityMutation) ClearIcon() {
+	m.icon = nil
+	m.clearedFields[entity.FieldIcon] = struct{}{}
+}
+
+// IconCleared returns if the "icon" field was cleared in this mutation.
+func (m *EntityMutation) IconCleared() bool {
+	_, ok := m.clearedFields[entity.FieldIcon]
+	return ok
+}
+
+// ResetIcon resets all changes to the "icon" field.
+func (m *EntityMutation) ResetIcon() {
+	m.icon = nil
+	delete(m.clearedFields, entity.FieldIcon)
 }
 
 // SetLifetimeWarranty sets the "lifetime_warranty" field.
@@ -4307,7 +4358,7 @@ func (m *EntityMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *EntityMutation) Fields() []string {
-	fields := make([]string, 0, 24)
+	fields := make([]string, 0, 25)
 	if m.created_at != nil {
 		fields = append(fields, entity.FieldCreatedAt)
 	}
@@ -4349,6 +4400,9 @@ func (m *EntityMutation) Fields() []string {
 	}
 	if m.manufacturer != nil {
 		fields = append(fields, entity.FieldManufacturer)
+	}
+	if m.icon != nil {
+		fields = append(fields, entity.FieldIcon)
 	}
 	if m.lifetime_warranty != nil {
 		fields = append(fields, entity.FieldLifetimeWarranty)
@@ -4416,6 +4470,8 @@ func (m *EntityMutation) Field(name string) (ent.Value, bool) {
 		return m.ModelNumber()
 	case entity.FieldManufacturer:
 		return m.Manufacturer()
+	case entity.FieldIcon:
+		return m.Icon()
 	case entity.FieldLifetimeWarranty:
 		return m.LifetimeWarranty()
 	case entity.FieldWarrantyExpires:
@@ -4473,6 +4529,8 @@ func (m *EntityMutation) OldField(ctx context.Context, name string) (ent.Value, 
 		return m.OldModelNumber(ctx)
 	case entity.FieldManufacturer:
 		return m.OldManufacturer(ctx)
+	case entity.FieldIcon:
+		return m.OldIcon(ctx)
 	case entity.FieldLifetimeWarranty:
 		return m.OldLifetimeWarranty(ctx)
 	case entity.FieldWarrantyExpires:
@@ -4599,6 +4657,13 @@ func (m *EntityMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetManufacturer(v)
+		return nil
+	case entity.FieldIcon:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetIcon(v)
 		return nil
 	case entity.FieldLifetimeWarranty:
 		v, ok := value.(bool)
@@ -4769,6 +4834,9 @@ func (m *EntityMutation) ClearedFields() []string {
 	if m.FieldCleared(entity.FieldManufacturer) {
 		fields = append(fields, entity.FieldManufacturer)
 	}
+	if m.FieldCleared(entity.FieldIcon) {
+		fields = append(fields, entity.FieldIcon)
+	}
 	if m.FieldCleared(entity.FieldWarrantyExpires) {
 		fields = append(fields, entity.FieldWarrantyExpires)
 	}
@@ -4821,6 +4889,9 @@ func (m *EntityMutation) ClearField(name string) error {
 		return nil
 	case entity.FieldManufacturer:
 		m.ClearManufacturer()
+		return nil
+	case entity.FieldIcon:
+		m.ClearIcon()
 		return nil
 	case entity.FieldWarrantyExpires:
 		m.ClearWarrantyExpires()
@@ -4892,6 +4963,9 @@ func (m *EntityMutation) ResetField(name string) error {
 		return nil
 	case entity.FieldManufacturer:
 		m.ResetManufacturer()
+		return nil
+	case entity.FieldIcon:
+		m.ResetIcon()
 		return nil
 	case entity.FieldLifetimeWarranty:
 		m.ResetLifetimeWarranty()
@@ -6120,6 +6194,8 @@ type EntityTemplateMutation struct {
 	include_warranty_fields   *bool
 	include_purchase_fields   *bool
 	include_sold_fields       *bool
+	photo_path                *string
+	photo_mime_type           *string
 	default_tag_ids           *[]uuid.UUID
 	appenddefault_tag_ids     []uuid.UUID
 	clearedFields             map[string]struct{}
@@ -6926,6 +7002,104 @@ func (m *EntityTemplateMutation) ResetIncludeSoldFields() {
 	m.include_sold_fields = nil
 }
 
+// SetPhotoPath sets the "photo_path" field.
+func (m *EntityTemplateMutation) SetPhotoPath(s string) {
+	m.photo_path = &s
+}
+
+// PhotoPath returns the value of the "photo_path" field in the mutation.
+func (m *EntityTemplateMutation) PhotoPath() (r string, exists bool) {
+	v := m.photo_path
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPhotoPath returns the old "photo_path" field's value of the EntityTemplate entity.
+// If the EntityTemplate object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EntityTemplateMutation) OldPhotoPath(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPhotoPath is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPhotoPath requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPhotoPath: %w", err)
+	}
+	return oldValue.PhotoPath, nil
+}
+
+// ClearPhotoPath clears the value of the "photo_path" field.
+func (m *EntityTemplateMutation) ClearPhotoPath() {
+	m.photo_path = nil
+	m.clearedFields[entitytemplate.FieldPhotoPath] = struct{}{}
+}
+
+// PhotoPathCleared returns if the "photo_path" field was cleared in this mutation.
+func (m *EntityTemplateMutation) PhotoPathCleared() bool {
+	_, ok := m.clearedFields[entitytemplate.FieldPhotoPath]
+	return ok
+}
+
+// ResetPhotoPath resets all changes to the "photo_path" field.
+func (m *EntityTemplateMutation) ResetPhotoPath() {
+	m.photo_path = nil
+	delete(m.clearedFields, entitytemplate.FieldPhotoPath)
+}
+
+// SetPhotoMimeType sets the "photo_mime_type" field.
+func (m *EntityTemplateMutation) SetPhotoMimeType(s string) {
+	m.photo_mime_type = &s
+}
+
+// PhotoMimeType returns the value of the "photo_mime_type" field in the mutation.
+func (m *EntityTemplateMutation) PhotoMimeType() (r string, exists bool) {
+	v := m.photo_mime_type
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPhotoMimeType returns the old "photo_mime_type" field's value of the EntityTemplate entity.
+// If the EntityTemplate object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EntityTemplateMutation) OldPhotoMimeType(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPhotoMimeType is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPhotoMimeType requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPhotoMimeType: %w", err)
+	}
+	return oldValue.PhotoMimeType, nil
+}
+
+// ClearPhotoMimeType clears the value of the "photo_mime_type" field.
+func (m *EntityTemplateMutation) ClearPhotoMimeType() {
+	m.photo_mime_type = nil
+	m.clearedFields[entitytemplate.FieldPhotoMimeType] = struct{}{}
+}
+
+// PhotoMimeTypeCleared returns if the "photo_mime_type" field was cleared in this mutation.
+func (m *EntityTemplateMutation) PhotoMimeTypeCleared() bool {
+	_, ok := m.clearedFields[entitytemplate.FieldPhotoMimeType]
+	return ok
+}
+
+// ResetPhotoMimeType resets all changes to the "photo_mime_type" field.
+func (m *EntityTemplateMutation) ResetPhotoMimeType() {
+	m.photo_mime_type = nil
+	delete(m.clearedFields, entitytemplate.FieldPhotoMimeType)
+}
+
 // SetDefaultTagIds sets the "default_tag_ids" field.
 func (m *EntityTemplateMutation) SetDefaultTagIds(u []uuid.UUID) {
 	m.default_tag_ids = &u
@@ -7157,7 +7331,7 @@ func (m *EntityTemplateMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *EntityTemplateMutation) Fields() []string {
-	fields := make([]string, 0, 17)
+	fields := make([]string, 0, 19)
 	if m.created_at != nil {
 		fields = append(fields, entitytemplate.FieldCreatedAt)
 	}
@@ -7206,6 +7380,12 @@ func (m *EntityTemplateMutation) Fields() []string {
 	if m.include_sold_fields != nil {
 		fields = append(fields, entitytemplate.FieldIncludeSoldFields)
 	}
+	if m.photo_path != nil {
+		fields = append(fields, entitytemplate.FieldPhotoPath)
+	}
+	if m.photo_mime_type != nil {
+		fields = append(fields, entitytemplate.FieldPhotoMimeType)
+	}
 	if m.default_tag_ids != nil {
 		fields = append(fields, entitytemplate.FieldDefaultTagIds)
 	}
@@ -7249,6 +7429,10 @@ func (m *EntityTemplateMutation) Field(name string) (ent.Value, bool) {
 		return m.IncludePurchaseFields()
 	case entitytemplate.FieldIncludeSoldFields:
 		return m.IncludeSoldFields()
+	case entitytemplate.FieldPhotoPath:
+		return m.PhotoPath()
+	case entitytemplate.FieldPhotoMimeType:
+		return m.PhotoMimeType()
 	case entitytemplate.FieldDefaultTagIds:
 		return m.DefaultTagIds()
 	}
@@ -7292,6 +7476,10 @@ func (m *EntityTemplateMutation) OldField(ctx context.Context, name string) (ent
 		return m.OldIncludePurchaseFields(ctx)
 	case entitytemplate.FieldIncludeSoldFields:
 		return m.OldIncludeSoldFields(ctx)
+	case entitytemplate.FieldPhotoPath:
+		return m.OldPhotoPath(ctx)
+	case entitytemplate.FieldPhotoMimeType:
+		return m.OldPhotoMimeType(ctx)
 	case entitytemplate.FieldDefaultTagIds:
 		return m.OldDefaultTagIds(ctx)
 	}
@@ -7415,6 +7603,20 @@ func (m *EntityTemplateMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetIncludeSoldFields(v)
 		return nil
+	case entitytemplate.FieldPhotoPath:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPhotoPath(v)
+		return nil
+	case entitytemplate.FieldPhotoMimeType:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPhotoMimeType(v)
+		return nil
 	case entitytemplate.FieldDefaultTagIds:
 		v, ok := value.([]uuid.UUID)
 		if !ok {
@@ -7488,6 +7690,12 @@ func (m *EntityTemplateMutation) ClearedFields() []string {
 	if m.FieldCleared(entitytemplate.FieldDefaultWarrantyDetails) {
 		fields = append(fields, entitytemplate.FieldDefaultWarrantyDetails)
 	}
+	if m.FieldCleared(entitytemplate.FieldPhotoPath) {
+		fields = append(fields, entitytemplate.FieldPhotoPath)
+	}
+	if m.FieldCleared(entitytemplate.FieldPhotoMimeType) {
+		fields = append(fields, entitytemplate.FieldPhotoMimeType)
+	}
 	if m.FieldCleared(entitytemplate.FieldDefaultTagIds) {
 		fields = append(fields, entitytemplate.FieldDefaultTagIds)
 	}
@@ -7525,6 +7733,12 @@ func (m *EntityTemplateMutation) ClearField(name string) error {
 		return nil
 	case entitytemplate.FieldDefaultWarrantyDetails:
 		m.ClearDefaultWarrantyDetails()
+		return nil
+	case entitytemplate.FieldPhotoPath:
+		m.ClearPhotoPath()
+		return nil
+	case entitytemplate.FieldPhotoMimeType:
+		m.ClearPhotoMimeType()
 		return nil
 	case entitytemplate.FieldDefaultTagIds:
 		m.ClearDefaultTagIds()
@@ -7584,6 +7798,12 @@ func (m *EntityTemplateMutation) ResetField(name string) error {
 		return nil
 	case entitytemplate.FieldIncludeSoldFields:
 		m.ResetIncludeSoldFields()
+		return nil
+	case entitytemplate.FieldPhotoPath:
+		m.ResetPhotoPath()
+		return nil
+	case entitytemplate.FieldPhotoMimeType:
+		m.ResetPhotoMimeType()
 		return nil
 	case entitytemplate.FieldDefaultTagIds:
 		m.ResetDefaultTagIds()
@@ -7723,6 +7943,7 @@ type EntityTypeMutation struct {
 	name                    *string
 	description             *string
 	is_location             *bool
+	is_container            *bool
 	icon                    *string
 	clearedFields           map[string]struct{}
 	group                   *uuid.UUID
@@ -8034,6 +8255,42 @@ func (m *EntityTypeMutation) ResetIsLocation() {
 	m.is_location = nil
 }
 
+// SetIsContainer sets the "is_container" field.
+func (m *EntityTypeMutation) SetIsContainer(b bool) {
+	m.is_container = &b
+}
+
+// IsContainer returns the value of the "is_container" field in the mutation.
+func (m *EntityTypeMutation) IsContainer() (r bool, exists bool) {
+	v := m.is_container
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldIsContainer returns the old "is_container" field's value of the EntityType entity.
+// If the EntityType object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EntityTypeMutation) OldIsContainer(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldIsContainer is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldIsContainer requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldIsContainer: %w", err)
+	}
+	return oldValue.IsContainer, nil
+}
+
+// ResetIsContainer resets all changes to the "is_container" field.
+func (m *EntityTypeMutation) ResetIsContainer() {
+	m.is_container = nil
+}
+
 // SetIcon sets the "icon" field.
 func (m *EntityTypeMutation) SetIcon(s string) {
 	m.icon = &s
@@ -8249,7 +8506,7 @@ func (m *EntityTypeMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *EntityTypeMutation) Fields() []string {
-	fields := make([]string, 0, 6)
+	fields := make([]string, 0, 7)
 	if m.created_at != nil {
 		fields = append(fields, entitytype.FieldCreatedAt)
 	}
@@ -8264,6 +8521,9 @@ func (m *EntityTypeMutation) Fields() []string {
 	}
 	if m.is_location != nil {
 		fields = append(fields, entitytype.FieldIsLocation)
+	}
+	if m.is_container != nil {
+		fields = append(fields, entitytype.FieldIsContainer)
 	}
 	if m.icon != nil {
 		fields = append(fields, entitytype.FieldIcon)
@@ -8286,6 +8546,8 @@ func (m *EntityTypeMutation) Field(name string) (ent.Value, bool) {
 		return m.Description()
 	case entitytype.FieldIsLocation:
 		return m.IsLocation()
+	case entitytype.FieldIsContainer:
+		return m.IsContainer()
 	case entitytype.FieldIcon:
 		return m.Icon()
 	}
@@ -8307,6 +8569,8 @@ func (m *EntityTypeMutation) OldField(ctx context.Context, name string) (ent.Val
 		return m.OldDescription(ctx)
 	case entitytype.FieldIsLocation:
 		return m.OldIsLocation(ctx)
+	case entitytype.FieldIsContainer:
+		return m.OldIsContainer(ctx)
 	case entitytype.FieldIcon:
 		return m.OldIcon(ctx)
 	}
@@ -8352,6 +8616,13 @@ func (m *EntityTypeMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetIsLocation(v)
+		return nil
+	case entitytype.FieldIsContainer:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetIsContainer(v)
 		return nil
 	case entitytype.FieldIcon:
 		v, ok := value.(string)
@@ -8438,6 +8709,9 @@ func (m *EntityTypeMutation) ResetField(name string) error {
 		return nil
 	case entitytype.FieldIsLocation:
 		m.ResetIsLocation()
+		return nil
+	case entitytype.FieldIsContainer:
+		m.ResetIsContainer()
 		return nil
 	case entitytype.FieldIcon:
 		m.ResetIcon()
@@ -9504,6 +9778,7 @@ type GroupMutation struct {
 	updated_at               *time.Time
 	name                     *string
 	currency                 *string
+	integrations             *types.GroupIntegrations
 	clearedFields            map[string]struct{}
 	users                    map[uuid.UUID]struct{}
 	removedusers             map[uuid.UUID]struct{}
@@ -9780,6 +10055,55 @@ func (m *GroupMutation) OldCurrency(ctx context.Context) (v string, err error) {
 // ResetCurrency resets all changes to the "currency" field.
 func (m *GroupMutation) ResetCurrency() {
 	m.currency = nil
+}
+
+// SetIntegrations sets the "integrations" field.
+func (m *GroupMutation) SetIntegrations(ti types.GroupIntegrations) {
+	m.integrations = &ti
+}
+
+// Integrations returns the value of the "integrations" field in the mutation.
+func (m *GroupMutation) Integrations() (r types.GroupIntegrations, exists bool) {
+	v := m.integrations
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldIntegrations returns the old "integrations" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldIntegrations(ctx context.Context) (v types.GroupIntegrations, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldIntegrations is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldIntegrations requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldIntegrations: %w", err)
+	}
+	return oldValue.Integrations, nil
+}
+
+// ClearIntegrations clears the value of the "integrations" field.
+func (m *GroupMutation) ClearIntegrations() {
+	m.integrations = nil
+	m.clearedFields[group.FieldIntegrations] = struct{}{}
+}
+
+// IntegrationsCleared returns if the "integrations" field was cleared in this mutation.
+func (m *GroupMutation) IntegrationsCleared() bool {
+	_, ok := m.clearedFields[group.FieldIntegrations]
+	return ok
+}
+
+// ResetIntegrations resets all changes to the "integrations" field.
+func (m *GroupMutation) ResetIntegrations() {
+	m.integrations = nil
+	delete(m.clearedFields, group.FieldIntegrations)
 }
 
 // AddUserIDs adds the "users" edge to the User entity by ids.
@@ -10248,7 +10572,7 @@ func (m *GroupMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *GroupMutation) Fields() []string {
-	fields := make([]string, 0, 4)
+	fields := make([]string, 0, 5)
 	if m.created_at != nil {
 		fields = append(fields, group.FieldCreatedAt)
 	}
@@ -10260,6 +10584,9 @@ func (m *GroupMutation) Fields() []string {
 	}
 	if m.currency != nil {
 		fields = append(fields, group.FieldCurrency)
+	}
+	if m.integrations != nil {
+		fields = append(fields, group.FieldIntegrations)
 	}
 	return fields
 }
@@ -10277,6 +10604,8 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
 		return m.Name()
 	case group.FieldCurrency:
 		return m.Currency()
+	case group.FieldIntegrations:
+		return m.Integrations()
 	}
 	return nil, false
 }
@@ -10294,6 +10623,8 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldName(ctx)
 	case group.FieldCurrency:
 		return m.OldCurrency(ctx)
+	case group.FieldIntegrations:
+		return m.OldIntegrations(ctx)
 	}
 	return nil, fmt.Errorf("unknown Group field %s", name)
 }
@@ -10331,6 +10662,13 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetCurrency(v)
 		return nil
+	case group.FieldIntegrations:
+		v, ok := value.(types.GroupIntegrations)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetIntegrations(v)
+		return nil
 	}
 	return fmt.Errorf("unknown Group field %s", name)
 }
@@ -10360,7 +10698,11 @@ func (m *GroupMutation) AddField(name string, value ent.Value) error {
 // ClearedFields returns all nullable fields that were cleared during this
 // mutation.
 func (m *GroupMutation) ClearedFields() []string {
-	return nil
+	var fields []string
+	if m.FieldCleared(group.FieldIntegrations) {
+		fields = append(fields, group.FieldIntegrations)
+	}
+	return fields
 }
 
 // FieldCleared returns a boolean indicating if a field with the given name was
@@ -10373,6 +10715,11 @@ func (m *GroupMutation) FieldCleared(name string) bool {
 // ClearField clears the value of the field with the given name. It returns an
 // error if the field is not defined in the schema.
 func (m *GroupMutation) ClearField(name string) error {
+	switch name {
+	case group.FieldIntegrations:
+		m.ClearIntegrations()
+		return nil
+	}
 	return fmt.Errorf("unknown Group nullable field %s", name)
 }
 
@@ -10391,6 +10738,9 @@ func (m *GroupMutation) ResetField(name string) error {
 		return nil
 	case group.FieldCurrency:
 		m.ResetCurrency()
+		return nil
+	case group.FieldIntegrations:
+		m.ResetIntegrations()
 		return nil
 	}
 	return fmt.Errorf("unknown Group field %s", name)

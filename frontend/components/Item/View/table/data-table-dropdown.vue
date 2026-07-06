@@ -16,12 +16,14 @@
   import { useDialog } from "@/components/ui/dialog-provider";
   import { DialogID } from "~/components/ui/dialog-provider/utils";
   import { formatValueAsCsvField } from "~/lib/utils";
+  import { useLabelPrintQueue } from "~~/stores/labels";
 
   const { t } = useI18n();
   const api = useUserApi();
   const confirm = useConfirm();
   const preferences = useViewPreferences();
   const { openDialog } = useDialog();
+  const printQueue = useLabelPrintQueue();
 
   const props = defineProps<{
     item?: EntitySummary;
@@ -131,6 +133,22 @@
 
     resetSelection();
   };
+
+  function printLabels() {
+    const rows = props.multi ? props.multi.items.map(r => r.original) : [props.item!];
+    printQueue.set(
+      rows.map(e => ({
+        id: e.id,
+        kind: "item" as const,
+        name: e.name,
+        parentPath: e.parent?.name ?? "",
+        assetId: e.assetId,
+        url: `${window.location.origin}/a/${e.assetId}`,
+      }))
+    );
+    resetSelection();
+    navigateTo("/reports/label-generator");
+  }
 
   const duplicateItems = async (ids: string[]) => {
     // Process items sequentially to avoid database locking issues
@@ -250,6 +268,10 @@
             ? t("components.item.view.table.dropdown.delete_selected")
             : t("components.item.view.table.dropdown.delete_item")
         }}
+      </DropdownMenuItem>
+      <!-- print labels -->
+      <DropdownMenuItem @click="printLabels">
+        {{ t("components.item.view.table.dropdown.print_labels") }}
       </DropdownMenuItem>
       <!-- download -->
       <DropdownMenuSeparator v-if="multi && view === 'table'" />

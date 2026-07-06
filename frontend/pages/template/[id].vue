@@ -19,6 +19,7 @@
   import Markdown from "~/components/global/Markdown.vue";
   import LocationSelector from "~/components/Location/Selector.vue";
   import TagSelector from "~/components/Tag/Selector.vue";
+  import TemplatePhotoSection from "~/components/Template/PhotoSection.vue";
   import { useTagStore } from "~/stores/tags";
   import type { EntityOut } from "~~/lib/api/types/data-contracts";
 
@@ -136,6 +137,12 @@
   }
 
   const NIL_UUID = "00000000-0000-0000-0000-000000000000";
+
+  const photoSectionProps = computed(() => {
+    const id = template.value?.id;
+    if (!id) return null;
+    return { templateId: id, photoPath: template.value?.photoPath };
+  });
 </script>
 
 <template>
@@ -206,6 +213,9 @@
             </div>
           </div>
         </div>
+
+        <Separator class="my-2" />
+        <TemplatePhotoSection v-if="photoSectionProps" v-bind="photoSectionProps" @updated="refresh" />
 
         <Separator class="my-2" />
         <div class="flex items-center justify-between">

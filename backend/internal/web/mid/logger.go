@@ -28,6 +28,16 @@ func (s *spy) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return hj.Hijack()
 }
 
+// Unwrap exposes the underlying ResponseWriter so http.ResponseController
+// (e.g. SetWriteDeadline/SetReadDeadline, used by handlers like
+// analyze-photo that need a longer-than-default deadline) can reach past
+// this wrapper to the real writer. Embedding http.ResponseWriter only
+// promotes its three core methods, not optional ones like these, so
+// without Unwrap those calls silently no-op with http.ErrNotSupported.
+func (s *spy) Unwrap() http.ResponseWriter {
+	return s.ResponseWriter
+}
+
 func Logger(l zerolog.Logger) func(http.Handler) http.Handler {
 	return func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

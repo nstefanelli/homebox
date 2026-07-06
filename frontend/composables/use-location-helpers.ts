@@ -5,6 +5,9 @@ export interface FlatTreeItem {
   id: string;
   name: string;
   treeString: string;
+  icon: string;
+  typeIcon: string;
+  isContainer: boolean;
 }
 
 function flatTree(tree: TreeItem[]): FlatTreeItem[] {
@@ -23,6 +26,9 @@ function flatTree(tree: TreeItem[]): FlatTreeItem[] {
         id: item.id,
         name: item.name,
         treeString: display + item.name,
+        icon: item.icon,
+        typeIcon: item.typeIcon,
+        isContainer: item.isContainer,
       });
       if (item.children) {
         flatten(item.children, display + item.name + " > ");

@@ -184,11 +184,20 @@
                 "entity_name": "{type} Name",
                 "entity_quantity": "{type} Quantity",
                 "entity_description": "{type} Description",
+                "entity_manufacturer": "Manufacturer",
+                "entity_model_number": "Model Number",
+                "entity_icon": "Icon",
                 "entity_photo": "{type} Photo 📷",
                 "upload_photos": "Upload Photos",
                 "uploaded": "Uploaded Photo",
+                "container_count": "Number of containers",
+                "batch_created": "Created {count} containers",
+                "batch_failed": "Failed to create containers",
+                "print_labels": "Print labels",
                 "toast": {
                     "already_creating": "Already creating an {type}",
+                    "ai_failed": "Couldn't identify the item from that photo — try again or enter it manually.",
+                    "ai_hint_tag_failed": "Couldn't create that tag — add it manually.",
                     "create_failed": "Couldn't create {type}",
                     "create_success": "{type} created",
                     "failed_load_parent": "Failed to load parent item - please select manually",
@@ -207,6 +216,11 @@
                 "parent_item": "Parent Item",
                 "product_tooltip_input_barcode": "Autofill with a manually provided barcode",
                 "product_tooltip_scan_barcode": "Autofill with a barcode from 📷",
+                "product_tooltip_ai_photo": "Autofill from a photo using AI",
+                "ai_badge": "AI guess — please verify",
+                "ai_hints_label": "Suggested tags:",
+                "ai_loading": "Analyzing photo…",
+                "ai_loading_slow": "Still working — the vision model may be loading (first request after idle can take a minute)…",
                 "rotate_photo": "Rotate photo",
                 "set_as_primary_photo": "Set as { isPrimary, select, true {non-} false {} other {}}primary photo",
                 "item_selector_no_results_text": "Type to search…"
@@ -271,6 +285,7 @@
                         "error_duplicating": "Error Duplicating Item",
                         "open_menu": "Open menu",
                         "open_multi_tab_warning": "For security reasons browsers do not allow multiple tabs to be opened at once by default, to change this please follow the documentation:",
+                        "print_labels": "Print labels",
                         "toggle_expand": "Toggle Expand",
                         "view_item": "View item",
                         "view_items": "View items"
@@ -286,6 +301,23 @@
             }
         },
         "location": {
+            "bulk_catalog": {
+                "title": "Catalog contents of {name}",
+                "add_photo": "Add photo",
+                "photo_group": "Photo {n}",
+                "no_items_found": "No items identified in that photo — try a closer shot or better lighting.",
+                "card_name": "Name",
+                "card_description": "Description",
+                "card_quantity": "Qty",
+                "possible_duplicate": "Possible duplicate",
+                "created": "Created",
+                "failed": "Failed",
+                "retry": "Retry",
+                "create_n": "{n, plural, =1 {Create 1 item} other {Create {n} items}}",
+                "analyze_failed": "Couldn't analyze that photo — try again.",
+                "created_summary": "{created} items created{failed, plural, =0 {} other {, {failed} failed}}",
+                "discard_confirm": "Discard {n} unreviewed candidates?"
+            },
             "selector": {
                 "clear": "Clear Location Selection",
                 "no_location_found": "No location found",
@@ -296,7 +328,10 @@
             "tree": {
                 "no_locations": "No locations available. Use the Create button to add a new location."
             },
-            "create_item": "Create Item"
+            "create_item": "Create Item",
+            "print_containers": "Print container labels",
+            "print_include_items": "Include items",
+            "print_nothing_to_print": "No containers to print here — check \"Include items\" to print item labels instead."
         },
         "quick_menu": {
             "no_results": "No results found.",
@@ -364,6 +399,13 @@
                 "template_name": "Template Name"
             },
             "hide_defaults": "Hide defaults",
+            "photo": {
+                "delete_failed": "Failed to remove photo",
+                "hint": "Copied to every item created from this template. Catalog imports don't include photos — add one once here.",
+                "remove": "Remove photo",
+                "title": "Template photo",
+                "upload_failed": "Failed to upload photo"
+            },
             "save_as_template": "Save as Template",
             "selector": {
                 "clear": "Clear Template Selection",
@@ -393,12 +435,16 @@
                 "title": "Create Entity Type",
                 "name_label": "Name",
                 "is_container_location_type_label": "Is a container / location type",
+                "is_container_label": "Is a container (movable tote/bin — contents follow when moved)",
+                "icon_label": "Icon",
                 "button": "Create"
             },
             "update_dialog": {
                 "title": "Update Entity Type",
                 "name_label": "Name",
                 "is_container_location_type_label": "Is a container / location type",
+                "is_container_label": "Is a container (movable tote/bin — contents follow when moved)",
+                "icon_label": "Icon",
                 "button": "Update"
             },
             "page": {
@@ -410,6 +456,7 @@
             "card": {
                 "default_template": "Default template: {name}",
                 "badge_container": "Container",
+                "badge_is_container": "Movable Container",
                 "tooltip": {
                 "edit": "Edit",
                 "delete": "Delete"
@@ -717,8 +764,11 @@
         "collapse_tree": "Collapse Tree",
         "expand_tree": "Expand Tree",
         "hide_items": "Hide Items",
+        "icon": "Icon",
         "location_items_delete_confirm": "Are you sure you want to delete this location and all of its items? This action cannot be undone.",
         "no_results": "No Locations Found",
+        "print_selected": "Print {count} labels",
+        "select_labels": "Select for labels",
         "show_items": "Show Items",
         "toast": {
             "failed_delete_location": "Failed to delete location",
@@ -778,7 +828,20 @@
         "templates": "Templates"
     },
     "pages": {
+        "location": {
+            "catalog_contents": "Catalog contents",
+            "catalog_success": "{count} items cataloged",
+            "container_item_count": "{count} items",
+            "containers_here": "Containers here ({count})",
+            "empty_container": "Empty container",
+            "empty_success": "Contents moved",
+            "move": "Move",
+            "move_success": "Moved"
+        },
         "templates": {
+            "import_catalog": "Import container catalog",
+            "import_done": "Catalog imported: {created} created, {skipped} already existed",
+            "importing": "Importing…",
             "no_templates": "No templates yet.",
             "title": "Templates"
         }
@@ -814,6 +877,35 @@
         "group_settings": "Group Settings",
         "group_settings_sub": "Shared Group Settings. You may need to refresh your browser for some settings to apply.",
         "inactive": "Inactive",
+        "integrations": {
+            "ai_section_title": "AI Photo Analysis",
+            "api_key_label": "API Key",
+            "barcode_token_label": "Barcodespider Token",
+            "base_url_label": "Base URL",
+            "clear_field": "Clear",
+            "env_hint": "Server default: {provider} @ {baseUrl}",
+            "env_hint_with_model": "Server default: {provider} @ {baseUrl} — {model}",
+            "model_label": "Model",
+            "off_contact_label": "OpenFoodFacts Contact",
+            "owner_only_notice": "Only the group owner can edit integration settings. Other members can view them.",
+            "provider_anthropic": "Anthropic",
+            "provider_disabled": "Disabled",
+            "provider_inherit": "Inherit server default",
+            "provider_label": "Provider",
+            "provider_openai_compatible": "OpenAI-compatible",
+            "save": "Save Integrations",
+            "secret_saved_placeholder": "•••••••• saved — type to replace",
+            "subtitle": "Configure AI photo analysis and barcode lookup for this collection.",
+            "test": "Test",
+            "title": "Integrations",
+            "toast": {
+                "failed_load": "Failed to load integrations settings",
+                "failed_save": "Failed to save integrations settings",
+                "saved": "Integrations settings saved",
+                "test_failed": "Test failed"
+            },
+            "upc_section_title": "Barcode Lookup"
+        },
         "language": "Language",
         "legacy_image_fit": "{ currentValue, select, true {Disable Legacy Fit: Fit Image with Bars} false {Enable Legacy Fit: Fill Image with Crop} other {Not Hit}}",
         "moved_notice_body": "Notifiers, invites, and currency settings have been moved to the collection pages.",
@@ -863,6 +955,7 @@
             "asset_start": "Asset Start",
             "base_url": "Base URL",
             "bordered_labels": "Bordered Labels",
+            "clear_queue": "Clear queue",
             "generate_page": "Generate Page",
             "input_placeholder": "Type here",
             "instruction_1": "The HomeBox Label Generator is a tool to help you print labels for your HomeBox inventory. These are intended to\n be print-ahead labels so you can print many labels and have them ready to apply",
@@ -877,8 +970,17 @@
             "page_right_padding": "Page Right Padding",
             "page_top_padding": "Page Top Padding",
             "page_width": "Page Width",
+            "presets": {
+                "title": "Label preset",
+                "avery_5160": "Avery 5160 — 30 per sheet (2⅝\" × 1\")",
+                "avery_8160": "Avery 8160 — 30 per sheet (2⅝\" × 1\", inkjet)",
+                "avery_5163": "Avery 5163 — 10 per sheet (4\" × 2\")",
+                "avery_22806": "Avery 22806 — 12 per sheet (2\" × 2\")",
+                "custom": "Custom dimensions"
+            },
             "print_location_row": "Print Location Row",
             "qr_code_example": "QR Code Example",
+            "queue_count": "{count} labels queued for printing",
             "replace_homebox_behavior": "Replace \"HomeBox\" text behavior",
             "replace_homebox_behavior_always_replace": "Always Replace \"HomeBox\"",
             "replace_homebox_behavior_item_no_location": "Replace \"HomeBox\" when item has no location",

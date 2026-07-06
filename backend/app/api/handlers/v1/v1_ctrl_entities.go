@@ -53,6 +53,8 @@ func startEntityCtrlSpan(ctx context.Context, name string, attrs ...attribute.Ke
 //	@Param		pageSize	query		int			false	"items per page"
 //	@Param		tags		query		[]string	false	"tags Ids"		collectionFormat(multi)
 //	@Param		parentIds	query		[]string	false	"parent Ids"	collectionFormat(multi)
+//	@Param		isLocation	query		bool		false	"filter by location entity types"
+//	@Param		isContainer	query		bool		false	"filter by container entity types"
 //	@Success	200			{object}	repo.EntityListResult
 //	@Router		/v1/entities [GET]
 //	@Security	Bearer
@@ -93,6 +95,12 @@ func (ctrl *V1Controller) HandleEntitiesGetAll() errchain.HandlerFunc {
 			v.IsLocation = &isLoc
 		}
 
+		// Parse isContainer filter: "true" = container types only, "false" = non-containers, absent = any
+		if isContStr := params.Get("isContainer"); isContStr != "" {
+			isCont := queryBool(isContStr)
+			v.IsContainer = &isCont
+		}
+
 		v.FilterChildren = queryBool(params.Get("filterChildren"))
 
 		if strings.HasPrefix(v.Search, "#") {
@@ -124,6 +132,8 @@ func (ctrl *V1Controller) HandleEntitiesGetAll() errchain.HandlerFunc {
 			attribute.String("query.order_by", query.OrderBy),
 			attribute.Bool("query.is_location.set", query.IsLocation != nil),
 			attribute.Bool("query.is_location.value", query.IsLocation != nil && *query.IsLocation),
+			attribute.Bool("query.is_container.set", query.IsContainer != nil),
+			attribute.Bool("query.is_container.value", query.IsContainer != nil && *query.IsContainer),
 			attribute.Bool("query.asset_id.set", !query.AssetID.Nil()),
 		)
 		defer span.End()

@@ -111,8 +111,13 @@ type (
 		Name        string    `json:"name"`
 		Description string    `json:"description"`
 		Notes       string    `json:"notes"`
-		CreatedAt   time.Time `json:"createdAt"`
-		UpdatedAt   time.Time `json:"updatedAt"`
+
+		// Template photo (copied as the primary photo to entities created from this template)
+		PhotoPath     string `json:"photoPath"`
+		PhotoMimeType string `json:"photoMimeType"`
+
+		CreatedAt time.Time `json:"createdAt"`
+		UpdatedAt time.Time `json:"updatedAt"`
 
 		// Default values for entities
 		DefaultQuantity         float64 `json:"defaultQuantity"`
@@ -202,6 +207,8 @@ func (r *EntityTemplatesRepository) mapTemplateOut(ctx context.Context, template
 		Name:                    template.Name,
 		Description:             template.Description,
 		Notes:                   template.Notes,
+		PhotoPath:               template.PhotoPath,
+		PhotoMimeType:           template.PhotoMimeType,
 		CreatedAt:               template.CreatedAt,
 		UpdatedAt:               template.UpdatedAt,
 		DefaultQuantity:         template.DefaultQuantity,
@@ -430,6 +437,47 @@ func (r *EntityTemplatesRepository) Update(ctx context.Context, gid uuid.UUID, d
 
 	r.publishMutationEvent(gid)
 	return r.GetOne(ctx, gid, template.ID)
+}
+
+// SetPhoto records the storage path of the template's photo.
+func (r *EntityTemplatesRepository) SetPhoto(ctx context.Context, gid uuid.UUID, id uuid.UUID, path string, mimeType string) error {
+	n, err := r.db.EntityTemplate.Update().
+		Where(
+			entitytemplate.ID(id),
+			entitytemplate.HasGroupWith(group.ID(gid)),
+		).
+		SetPhotoPath(path).
+		SetPhotoMimeType(mimeType).
+		Save(ctx)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return &ent.NotFoundError{}
+	}
+	r.publishMutationEvent(gid)
+	return nil
+}
+
+// ClearPhoto removes the photo reference from the template. The blob is left in
+// storage: paths are content-addressed and may be shared with entity attachments.
+func (r *EntityTemplatesRepository) ClearPhoto(ctx context.Context, gid uuid.UUID, id uuid.UUID) error {
+	n, err := r.db.EntityTemplate.Update().
+		Where(
+			entitytemplate.ID(id),
+			entitytemplate.HasGroupWith(group.ID(gid)),
+		).
+		ClearPhotoPath().
+		ClearPhotoMimeType().
+		Save(ctx)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return &ent.NotFoundError{}
+	}
+	r.publishMutationEvent(gid)
+	return nil
 }
 
 // Delete deletes a template

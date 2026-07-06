@@ -1,7 +1,10 @@
 package repo
 
 import (
+	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/google/uuid"
@@ -120,4 +123,81 @@ func TestEntityTemplatesRepository_Delete(t *testing.T) {
 
 	_, err = tRepos.EntityTemplates.GetOne(context.Background(), tGroup.ID, created.ID)
 	require.Error(t, err)
+}
+
+func TestEntityTemplatesRepository_SetAndClearPhoto(t *testing.T) {
+	created, err := tRepos.EntityTemplates.Create(context.Background(), tGroup.ID, templateFactory())
+	require.NoError(t, err)
+	defer func() { _ = tRepos.EntityTemplates.Delete(context.Background(), tGroup.ID, created.ID) }()
+
+	err = tRepos.EntityTemplates.SetPhoto(context.Background(), tGroup.ID, created.ID, "grp/documents/abc123", "image/jpeg")
+	require.NoError(t, err)
+
+	got, err := tRepos.EntityTemplates.GetOne(context.Background(), tGroup.ID, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "grp/documents/abc123", got.PhotoPath)
+	assert.Equal(t, "image/jpeg", got.PhotoMimeType)
+
+	err = tRepos.EntityTemplates.ClearPhoto(context.Background(), tGroup.ID, created.ID)
+	require.NoError(t, err)
+
+	got, err = tRepos.EntityTemplates.GetOne(context.Background(), tGroup.ID, created.ID)
+	require.NoError(t, err)
+	assert.Empty(t, got.PhotoPath)
+}
+
+// TestEntityRepository_Delete_PreservesBlobReferencedByTemplatePhoto is a
+// regression test: deleting the last entity attachment row for a
+// content-addressed blob must not delete the underlying file when an
+// entity_templates.photo_path row still references that same path.
+func TestEntityRepository_Delete_PreservesBlobReferencedByTemplatePhoto(t *testing.T) {
+	itemET := useItemEntityType(t)
+
+	uploadRes, err := tRepos.Attachments.UploadFileByGroupID(context.Background(), tGroup.ID, ItemCreateAttachment{
+		Title:   "template-photo.jpg",
+		Content: bytes.NewReader([]byte("fake-template-photo-bytes")),
+	})
+	require.NoError(t, err)
+
+	template, err := tRepos.EntityTemplates.Create(context.Background(), tGroup.ID, templateFactory())
+	require.NoError(t, err)
+	defer func() { _ = tRepos.EntityTemplates.Delete(context.Background(), tGroup.ID, template.ID) }()
+
+	err = tRepos.EntityTemplates.SetPhoto(context.Background(), tGroup.ID, template.ID, uploadRes.Path, uploadRes.ContentType)
+	require.NoError(t, err)
+
+	out, err := tRepos.Entities.CreateFromTemplate(context.Background(), tGroup.ID, EntityCreateFromTemplate{
+		Name:          fk.Str(10),
+		Description:   fk.Str(20),
+		Quantity:      1,
+		EntityTypeID:  itemET.ID,
+		PhotoPath:     uploadRes.Path,
+		PhotoMimeType: uploadRes.ContentType,
+	})
+	require.NoError(t, err)
+
+	// Sanity check the photo threaded through to the new entity's attachment.
+	require.Len(t, out.Attachments, 1)
+	assert.Equal(t, uploadRes.Path, out.Attachments[0].Path)
+
+	// Delete the entity. This removes the last attachment row for this blob
+	// path, but the template still references it via photo_path.
+	err = tRepos.Entities.Delete(context.Background(), out.ID)
+	require.NoError(t, err)
+
+	// The blob must still be on disk because entity_templates.photo_path
+	// still points at it.
+	onDiskPath := filepath.Join(os.TempDir(), uploadRes.Path)
+	_, statErr := os.Stat(onDiskPath)
+	require.NoError(t, statErr, "expected blob at %s to still exist because template %s still references it", onDiskPath, template.ID)
+}
+
+func TestAttachmentRepo_UploadFileByGroupID(t *testing.T) {
+	res, err := tRepos.Attachments.UploadFileByGroupID(context.Background(), tGroup.ID, ItemCreateAttachment{
+		Title:   "tote.jpg",
+		Content: bytes.NewReader([]byte("fake-image-bytes")),
+	})
+	require.NoError(t, err)
+	assert.NotEmpty(t, res.Path)
+	assert.NotEmpty(t, res.ContentType)
 }

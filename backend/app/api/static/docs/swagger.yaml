@@ -205,6 +205,9 @@ definitions:
         description: |-
           Edges holds the relations/edges for other nodes in the graph.
           The values are being populated by the EntityQuery when eager-loading is set.
+      icon:
+        description: Icon holds the value of the "icon" field.
+        type: string
       id:
         description: ID of the ent.
         type: string
@@ -424,6 +427,13 @@ definitions:
       notes:
         description: Notes holds the value of the "notes" field.
         type: string
+      photo_mime_type:
+        description: PhotoMimeType holds the value of the "photo_mime_type" field.
+        type: string
+      photo_path:
+        description: Storage path of the template photo; copied as primary photo to
+          created entities
+        type: string
       updated_at:
         description: UpdatedAt holds the value of the "updated_at" field.
         type: string
@@ -464,6 +474,9 @@ definitions:
       id:
         description: ID of the ent.
         type: string
+      is_container:
+        description: Container types are movable holders (totes/bins); requires is_location
+        type: boolean
       is_location:
         description: IsLocation holds the value of the "is_location" field.
         type: boolean
@@ -1100,6 +1113,16 @@ definitions:
         type: string
       entityTypeId:
         type: string
+      icon:
+        maxLength: 255
+        type: string
+      manufacturer:
+        maxLength: 255
+        type: string
+      modelNumber:
+        description: Identifications
+        maxLength: 255
+        type: string
       name:
         maxLength: 255
         minLength: 1
@@ -1177,6 +1200,8 @@ definitions:
         items:
           $ref: '#/definitions/repo.EntityFieldData'
         type: array
+      icon:
+        type: string
       id:
         type: string
       imageId:
@@ -1270,12 +1295,18 @@ definitions:
     type: object
   repo.EntityPath:
     properties:
+      icon:
+        type: string
       id:
         type: string
+      isContainer:
+        type: boolean
       name:
         type: string
       type:
         $ref: '#/definitions/repo.EntityPathType'
+      typeIcon:
+        type: string
     type: object
   repo.EntityPathType:
     enum:
@@ -1301,6 +1332,8 @@ definitions:
         - $ref: '#/definitions/repo.EntityTypeSummary'
         x-nullable: true
         x-omitempty: true
+      icon:
+        type: string
       id:
         type: string
       imageId:
@@ -1451,6 +1484,12 @@ definitions:
         type: string
       notes:
         type: string
+      photoMimeType:
+        type: string
+      photoPath:
+        description: Template photo (copied as the primary photo to entities created
+          from this template)
+        type: string
       updatedAt:
         type: string
     type: object
@@ -1539,6 +1578,8 @@ definitions:
         type: string
       icon:
         type: string
+      isContainer:
+        type: boolean
       isLocation:
         type: boolean
       name:
@@ -1558,6 +1599,8 @@ definitions:
         type: string
       id:
         type: string
+      isContainer:
+        type: boolean
       isLocation:
         type: boolean
       name:
@@ -1573,6 +1616,8 @@ definitions:
         type: string
       id:
         type: string
+      isContainer:
+        type: boolean
       isLocation:
         type: boolean
       name:
@@ -1593,6 +1638,9 @@ definitions:
         items:
           $ref: '#/definitions/repo.EntityFieldData'
         type: array
+      icon:
+        maxLength: 255
+        type: string
       id:
         type: string
       insured:
@@ -2031,11 +2079,17 @@ definitions:
         items:
           $ref: '#/definitions/repo.TreeItem'
         type: array
+      icon:
+        type: string
       id:
         type: string
+      isContainer:
+        type: boolean
       name:
         type: string
       type:
+        type: string
+      typeIcon:
         type: string
     type: object
   repo.UserOut:
@@ -2129,6 +2183,23 @@ definitions:
     - TypeNumber
     - TypeBoolean
     - TypeTime
+  types.GroupIntegrations:
+    properties:
+      aiApiKey:
+        type: string
+      aiBaseUrl:
+        type: string
+      aiModel:
+        type: string
+      aiProvider:
+        description: '"" inherit env | "disabled" force off | "openai_compatible"
+          | "anthropic"'
+        type: string
+      barcodeTokenBarcodespider:
+        type: string
+      openFoodFactsContact:
+        type: string
+    type: object
   usergroup.Role:
     enum:
     - user
@@ -2141,6 +2212,8 @@ definitions:
     - RoleOwner
   v1.APISummary:
     properties:
+      aiPhotoAnalysis:
+        type: boolean
       allowRegistration:
         type: boolean
       build:
@@ -2171,6 +2244,30 @@ definitions:
       completed:
         type: integer
     type: object
+  v1.AnalyzeBulkResponse:
+    properties:
+      candidates:
+        items:
+          $ref: '#/definitions/v1.BulkItemCandidate'
+        type: array
+      lane:
+        type: string
+    type: object
+  v1.AnalyzePhotoResponse:
+    properties:
+      categoryHints:
+        items:
+          type: string
+        type: array
+      confidence:
+        type: number
+      lane:
+        type: string
+      products:
+        items:
+          $ref: '#/definitions/repo.BarcodeProduct'
+        type: array
+    type: object
   v1.Build:
     properties:
       buildTime:
@@ -2179,6 +2276,25 @@ definitions:
         type: string
       version:
         type: string
+    type: object
+  v1.BulkItemCandidate:
+    properties:
+      categoryHints:
+        items:
+          type: string
+        type: array
+      confidence:
+        type: number
+      description:
+        type: string
+      manufacturer:
+        type: string
+      modelNumber:
+        type: string
+      name:
+        type: string
+      quantity:
+        type: number
     type: object
   v1.ChangePassword:
     properties:
@@ -2193,6 +2309,29 @@ definitions:
         type: string
     required:
     - name
+    type: object
+  v1.EntityTemplateBatchCreateRequest:
+    properties:
+      count:
+        maximum: 100
+        minimum: 1
+        type: integer
+      entityTypeId:
+        type: string
+      namePrefix:
+        maxLength: 240
+        type: string
+      parentId:
+        type: string
+      startNumber:
+        minimum: 1
+        type: integer
+      tagIds:
+        items:
+          type: string
+        type: array
+    required:
+    - count
     type: object
   v1.EntityTemplateCreateItemRequest:
     properties:
@@ -2233,6 +2372,35 @@ definitions:
       id:
         type: string
       name:
+        type: string
+    type: object
+  v1.GroupIntegrationsOut:
+    properties:
+      aiApiKey:
+        type: string
+      aiBaseUrl:
+        type: string
+      aiConfigured:
+        type: boolean
+      aiModel:
+        type: string
+      aiProvider:
+        description: '"" inherit env | "disabled" force off | "openai_compatible"
+          | "anthropic"'
+        type: string
+      barcodeTokenBarcodespider:
+        type: string
+      barcodespiderConfigured:
+        type: boolean
+      envAiBaseUrl:
+        type: string
+      envAiModel:
+        type: string
+      envAiProvider:
+        type: string
+      isOwner:
+        type: boolean
+      openFoodFactsContact:
         type: string
     type: object
   v1.GroupInvitation:
@@ -2303,6 +2471,13 @@ definitions:
       enabled:
         type: boolean
     type: object
+  v1.TestConnectionResponse:
+    properties:
+      detail:
+        type: string
+      ok:
+        type: boolean
+    type: object
   v1.TokenResponse:
     properties:
       attachmentToken:
@@ -2351,6 +2526,54 @@ info:
   title: Homebox API
   version: "1.0"
 paths:
+  /v1/actions/analyze-photo:
+    post:
+      consumes:
+      - multipart/form-data
+      description: Identifies a physical item from a photo using the configured vision
+        AI provider
+      parameters:
+      - description: Photo of a single item (JPEG/PNG/WebP)
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/v1.AnalyzePhotoResponse'
+      security:
+      - Bearer: []
+      summary: Analyze Item Photo
+      tags:
+      - Actions
+  /v1/actions/analyze-photo-bulk:
+    post:
+      consumes:
+      - multipart/form-data
+      description: Identifies every distinct item in a photo of an open container
+        using the configured vision AI provider
+      parameters:
+      - description: Photo of an open container/shelf (JPEG/PNG/WebP)
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/v1.AnalyzeBulkResponse'
+      security:
+      - Bearer: []
+      summary: Analyze Container Contents Photo
+      tags:
+      - Actions
   /v1/actions/create-missing-thumbnails:
     post:
       description: Creates thumbnails for items that are missing them
@@ -2508,6 +2731,14 @@ paths:
           type: string
         name: parentIds
         type: array
+      - description: filter by location entity types
+        in: query
+        name: isLocation
+        type: boolean
+      - description: filter by container entity types
+        in: query
+        name: isContainer
+        type: boolean
       produces:
       - application/json
       responses:
@@ -3006,6 +3237,10 @@ paths:
           description: Created
           schema:
             $ref: '#/definitions/repo.EntityTypeSummary'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/validate.ErrorResponse'
       security:
       - Bearer: []
       summary: Create Entity Type
@@ -3049,6 +3284,10 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/repo.EntityTypeSummary'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/validate.ErrorResponse'
       security:
       - Bearer: []
       summary: Update Entity Type
@@ -3244,6 +3483,79 @@ paths:
       security:
       - Bearer: []
       summary: Get All Groups
+      tags:
+      - Group
+  /v1/groups/integrations:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/v1.GroupIntegrationsOut'
+      security:
+      - Bearer: []
+      summary: Get Group Integrations
+      tags:
+      - Group
+    put:
+      description: 'Owner-only. Body = types.GroupIntegrations. Secret fields use
+        write-only sentinel semantics: incoming "[REDACTED]" keeps the stored value,
+        "" clears it, anything else replaces it.'
+      parameters:
+      - description: Group Integrations
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/types.GroupIntegrations'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/v1.GroupIntegrationsOut'
+      security:
+      - Bearer: []
+      summary: Update Group Integrations
+      tags:
+      - Group
+  /v1/groups/integrations/test-ai:
+    post:
+      description: Owner-only. Resolves the effective AI config and attempts a real
+        round-trip against the configured provider using a fixed small test image,
+        under a 30s timeout. Always 200; ok/detail report the outcome. detail is a
+        sanitized, coarse string — never the raw provider error.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/v1.TestConnectionResponse'
+      security:
+      - Bearer: []
+      summary: Test Group AI Integration
+      tags:
+      - Group
+  /v1/groups/integrations/test-barcode:
+    post:
+      description: Owner-only. Resolves the effective barcode config and attempts
+        a real lookup against barcodespider.com for a fixed, stable EAN. Always 200;
+        ok/detail report the outcome. detail is a sanitized, coarse string — never
+        the raw error.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/v1.TestConnectionResponse'
+      security:
+      - Bearer: []
+      summary: Test Group Barcode Integration
       tags:
       - Group
   /v1/groups/invitations:
@@ -3922,6 +4234,38 @@ paths:
       summary: Update Entity Template
       tags:
       - Entity Templates
+  /v1/templates/{id}/batch-create:
+    post:
+      parameters:
+      - description: Template ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Batch options
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/v1.EntityTemplateBatchCreateRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            items:
+              $ref: '#/definitions/repo.EntityOut'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/validate.ErrorResponse'
+      security:
+      - Bearer: []
+      summary: Batch Create Entities from Template
+      tags:
+      - Entity Templates
   /v1/templates/{id}/create-item:
     post:
       parameters:
@@ -3946,6 +4290,81 @@ paths:
       security:
       - Bearer: []
       summary: Create Entity from Template
+      tags:
+      - Entity Templates
+  /v1/templates/{id}/photo:
+    delete:
+      parameters:
+      - description: Template ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/validate.ErrorResponse'
+      security:
+      - Bearer: []
+      summary: Delete Template Photo
+      tags:
+      - Entity Templates
+    get:
+      parameters:
+      - description: Template ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/octet-stream
+      responses:
+        "200":
+          description: OK
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/validate.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/validate.ErrorResponse'
+      security:
+      - Bearer: []
+      summary: Get Template Photo
+      tags:
+      - Entity Templates
+    post:
+      parameters:
+      - description: Template ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Photo file
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/repo.EntityTemplateOut'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/validate.ErrorResponse'
+      security:
+      - Bearer: []
+      summary: Upload Template Photo
       tags:
       - Entity Templates
   /v1/users/change-password:

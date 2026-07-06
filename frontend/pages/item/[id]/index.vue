@@ -4,6 +4,7 @@
   import type { AnyDetail, Detail, Details } from "~~/components/global/DetailsSection/types";
   import { filterZeroValues } from "~~/components/global/DetailsSection/types";
   import type { ItemAttachment } from "~~/lib/api/types/data-contracts";
+  import { resolveEntityIcon } from "~~/lib/icons";
   import MdiPackageVariant from "~icons/mdi/package-variant";
   import MdiPlus from "~icons/mdi/plus";
   import MdiMinus from "~icons/mdi/minus";
@@ -671,6 +672,18 @@
                       class="text-foreground/70 hover:underline"
                     >
                       <NuxtLink :to="`/${part.type}/${part.id}`">
+                        <component
+                          :is="
+                            resolveEntityIcon({
+                              icon: part.icon,
+                              typeIcon: part.typeIcon,
+                              isContainer: part.isContainer,
+                              isLocation: true,
+                            })
+                          "
+                          v-if="part.type === 'location'"
+                          class="mr-1 inline-block size-4 align-text-bottom"
+                        />
                         {{ part.name }}
                       </NuxtLink>
                     </BreadcrumbLink>

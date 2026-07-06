@@ -53,6 +53,10 @@ type EntityTemplate struct {
 	IncludePurchaseFields bool `json:"include_purchase_fields,omitempty"`
 	// Whether to include sold fields in items created from this template
 	IncludeSoldFields bool `json:"include_sold_fields,omitempty"`
+	// Storage path of the template photo; copied as primary photo to created entities
+	PhotoPath string `json:"photo_path,omitempty"`
+	// PhotoMimeType holds the value of the "photo_mime_type" field.
+	PhotoMimeType string `json:"photo_mime_type,omitempty"`
 	// Default tag IDs for items created from this template
 	DefaultTagIds []uuid.UUID `json:"default_tag_ids,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
@@ -118,7 +122,7 @@ func (*EntityTemplate) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullBool)
 		case entitytemplate.FieldDefaultQuantity:
 			values[i] = new(sql.NullFloat64)
-		case entitytemplate.FieldName, entitytemplate.FieldDescription, entitytemplate.FieldNotes, entitytemplate.FieldDefaultName, entitytemplate.FieldDefaultDescription, entitytemplate.FieldDefaultManufacturer, entitytemplate.FieldDefaultModelNumber, entitytemplate.FieldDefaultWarrantyDetails:
+		case entitytemplate.FieldName, entitytemplate.FieldDescription, entitytemplate.FieldNotes, entitytemplate.FieldDefaultName, entitytemplate.FieldDefaultDescription, entitytemplate.FieldDefaultManufacturer, entitytemplate.FieldDefaultModelNumber, entitytemplate.FieldDefaultWarrantyDetails, entitytemplate.FieldPhotoPath, entitytemplate.FieldPhotoMimeType:
 			values[i] = new(sql.NullString)
 		case entitytemplate.FieldCreatedAt, entitytemplate.FieldUpdatedAt:
 			values[i] = new(sql.NullTime)
@@ -245,6 +249,18 @@ func (_m *EntityTemplate) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.IncludeSoldFields = value.Bool
 			}
+		case entitytemplate.FieldPhotoPath:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field photo_path", values[i])
+			} else if value.Valid {
+				_m.PhotoPath = value.String
+			}
+		case entitytemplate.FieldPhotoMimeType:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field photo_mime_type", values[i])
+			} else if value.Valid {
+				_m.PhotoMimeType = value.String
+			}
 		case entitytemplate.FieldDefaultTagIds:
 			if value, ok := values[i].(*[]byte); !ok {
 				return fmt.Errorf("unexpected type %T for field default_tag_ids", values[i])
@@ -365,6 +381,12 @@ func (_m *EntityTemplate) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("include_sold_fields=")
 	builder.WriteString(fmt.Sprintf("%v", _m.IncludeSoldFields))
+	builder.WriteString(", ")
+	builder.WriteString("photo_path=")
+	builder.WriteString(_m.PhotoPath)
+	builder.WriteString(", ")
+	builder.WriteString("photo_mime_type=")
+	builder.WriteString(_m.PhotoMimeType)
 	builder.WriteString(", ")
 	builder.WriteString("default_tag_ids=")
 	builder.WriteString(fmt.Sprintf("%v", _m.DefaultTagIds))

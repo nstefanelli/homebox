@@ -15,7 +15,7 @@
       <div class="flex gap-2">
         <TooltipProvider :delay-duration="0">
           <!-- Template selector button -->
-          <Tooltip v-if="!selectedEntityType?.isLocation">
+          <Tooltip v-if="!selectedEntityType?.isLocation || selectedEntityType?.isContainer">
             <TooltipTrigger>
               <TemplateSelector v-model="selectedTemplate" compact @template-selected="handleTemplateSelected" />
             </TooltipTrigger>
@@ -37,7 +37,13 @@
             </Tooltip>
             <Tooltip>
               <TooltipTrigger>
-                <Button variant="outline" :disabled="loading" size="icon" data-pos="end" @click="openBarcodeDialog()">
+                <Button
+                  variant="outline"
+                  :disabled="loading"
+                  size="icon"
+                  :data-pos="aiPhotoEnabled ? undefined : 'end'"
+                  @click="openBarcodeDialog()"
+                >
                   <MdiBarcode class="size-5" />
                 </Button>
               </TooltipTrigger>
@@ -45,13 +51,53 @@
                 <p>{{ $t("components.entity.create_modal.product_tooltip_input_barcode") }}</p>
               </TooltipContent>
             </Tooltip>
+            <Tooltip v-if="aiPhotoEnabled">
+              <TooltipTrigger>
+                <Button
+                  variant="outline"
+                  :disabled="loading || aiLoading"
+                  size="icon"
+                  data-pos="end"
+                  @click="openAiPhotoPicker()"
+                >
+                  <MdiCameraOutline class="size-5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>{{ $t("components.entity.create_modal.product_tooltip_ai_photo") }}</p>
+              </TooltipContent>
+            </Tooltip>
           </ButtonGroup>
         </TooltipProvider>
       </div>
     </template>
 
+    <input
+      ref="aiPhotoInput"
+      type="file"
+      accept="image/*"
+      capture="environment"
+      class="hidden"
+      @change="onAiPhotoSelected"
+    />
+
     <form class="flex min-w-0 flex-col gap-2" @submit.prevent="create()">
       <LocationSelector v-model="form.location" />
+
+      <div v-if="aiLoading" class="flex items-center gap-2 text-sm text-muted-foreground">
+        <MdiLoading class="size-4 animate-spin" />
+        <span>{{
+          aiLoadingSlow
+            ? $t("components.entity.create_modal.ai_loading_slow")
+            : $t("components.entity.create_modal.ai_loading")
+        }}</span>
+        <Button type="button" variant="ghost" size="sm" @click="cancelAiAnalyze()">
+          {{ $t("global.cancel") }}
+        </Button>
+      </div>
+      <Badge v-if="aiPrefill" variant="secondary" class="self-start">
+        {{ $t("components.entity.create_modal.ai_badge") }}
+      </Badge>
 
       <!-- Template Info Display - Collapsible banner with distinct styling -->
       <div v-if="templateData" class="rounded-lg border-l-4 border-l-primary bg-primary/5 p-3">
@@ -148,7 +194,35 @@
         :no-results-text="$t('components.entity.create_modal.item_selector_no_results_text')"
         :is-loading="isLoading"
         :trigger-search="triggerSearch"
-      />
+      >
+        <template #display="{ item }">
+          <span v-if="item && typeof item === 'object'" class="flex items-center gap-2">
+            <component
+              :is="
+                resolveEntityIcon({
+                  icon: asEntitySummary(item).icon,
+                  typeIcon: asEntitySummary(item).entityType?.icon,
+                  isContainer: asEntitySummary(item).entityType?.isContainer,
+                  isLocation: true,
+                })
+              "
+              v-if="asEntitySummary(item).entityType?.isLocation"
+              class="size-4 shrink-0"
+            />
+            {{ asEntitySummary(item).name }}
+          </span>
+          <template v-else>
+            <!--
+              Reproduces ItemSelector's own default fallback for the no-selection /
+              cleared-selection states (`displayValue(value) || localizedPlaceholder`
+              in components/Item/Selector.vue), since providing a #display slot at all
+              suppresses that default for BOTH the trigger button (item = "" or null)
+              and each CommandItem row (item = EntitySummary, handled above).
+            -->
+            {{ (typeof item === "string" ? item : "") || $t("components.item.selector.placeholder") }}
+          </template>
+        </template>
+      </ItemSelector>
       <FormTextField
         ref="nameInput"
         v-model="form.name"
@@ -173,6 +247,15 @@
         type="number"
         step="any"
       />
+      <FormTextField
+        v-if="selectedEntityType?.isContainer"
+        v-model.number="form.count"
+        type="number"
+        :min="1"
+        :max="100"
+        :step="1"
+        :label="$t('components.entity.create_modal.container_count')"
+      />
       <FormTextArea
         v-model="form.description"
         :label="
@@ -182,7 +265,39 @@
         "
         :max-length="1000"
       />
+      <FormTextField
+        v-if="!selectedEntityType?.isLocation"
+        v-model="form.manufacturer"
+        :label="$t('components.entity.create_modal.entity_manufacturer')"
+        :max-length="255"
+      />
+      <FormTextField
+        v-if="!selectedEntityType?.isLocation"
+        v-model="form.modelNumber"
+        :label="$t('components.entity.create_modal.entity_model_number')"
+        :max-length="255"
+      />
       <TagSelector v-model="form.tags" :tags="tags ?? []" />
+      <IconSelector
+        v-if="selectedEntityType?.isLocation"
+        v-model="form.icon"
+        :label="$t('components.entity.create_modal.entity_icon')"
+      />
+      <div v-if="categoryHints.length > 0" class="flex flex-wrap items-center gap-1">
+        <span class="text-xs text-muted-foreground">
+          {{ $t("components.entity.create_modal.ai_hints_label") }}
+        </span>
+        <Button
+          v-for="hint in categoryHints"
+          :key="hint"
+          type="button"
+          variant="outline"
+          size="sm"
+          @click="applyHint(hint)"
+        >
+          {{ hint }}
+        </Button>
+      </div>
       <PhotoUploader
         :label="
           $t('components.entity.create_modal.entity_photo', {
@@ -229,7 +344,9 @@
   import { Button, ButtonGroup } from "~/components/ui/button";
   import BaseModal from "@/components/App/CreateModal.vue";
   import type {
+    BarcodeProduct,
     EntityCreate,
+    EntitySummary,
     EntityTemplateOut,
     EntityTemplateSummary,
     EntityOut,
@@ -237,6 +354,7 @@
   } from "~~/lib/api/types/data-contracts";
   import { useTagStore } from "~/stores/tags";
   import { useLocationStore } from "~~/stores/locations";
+  import { useLabelPrintQueue } from "~~/stores/labels";
   import MdiBarcode from "~icons/mdi/barcode";
   import MdiBarcodeScan from "~icons/mdi/barcode-scan";
   import MdiPackageVariant from "~icons/mdi/package-variant";
@@ -244,9 +362,16 @@
   import MdiFileDocumentOutline from "~icons/mdi/file-document-outline";
   import MdiChevronDown from "~icons/mdi/chevron-down";
   import MdiClose from "~icons/mdi/close";
+  import MdiCameraOutline from "~icons/mdi/camera-outline";
+  import MdiLoading from "~icons/mdi/loading";
+  import { Badge } from "~/components/ui/badge";
+  import { detectProductBarcode } from "~~/lib/barcode/from-file";
+  import { resolveEntityIcon } from "~~/lib/icons";
+  import { matchHintToTag } from "~~/lib/ai/hints";
   import { AttachmentTypes } from "~~/lib/api/types/non-generated";
   import { useDialog, useDialogHotkey } from "~/components/ui/dialog-provider";
   import TagSelector from "~/components/Tag/Selector.vue";
+  import IconSelector from "@/components/Form/IconSelector.vue";
   import ItemSelector from "~/components/Item/Selector.vue";
   import TemplateSelector from "~/components/Template/Selector.vue";
   import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "~/components/ui/tooltip";
@@ -263,6 +388,7 @@
     type PhotoPreview,
   } from "~/components/Form/photo-uploader";
   import { useEntityTypeStore } from "~~/stores/entityTypes";
+  import { useIntegrationsStore } from "~~/stores/integrations";
   import EntitySelector from "~/components/Entity/Selector.vue";
 
   const { t } = useI18n();
@@ -279,6 +405,17 @@
 
   const api = useUserApi();
 
+  const integrationsStore = useIntegrationsStore();
+  integrationsStore.ensureFetched();
+  const aiPhotoEnabled = computed(() => integrationsStore.aiConfigured);
+
+  const aiPhotoInput = ref<HTMLInputElement | null>(null);
+  const aiLoading = ref(false);
+  const aiLoadingSlow = ref(false);
+  const aiPrefill = ref(false);
+  const categoryHints = ref<string[]>([]);
+  let aiAbort: AbortController | null = null;
+
   const locationsStore = useLocationStore();
   const locations = computed(() => locationsStore.allLocations);
 
@@ -290,6 +427,13 @@
   const parent = ref();
   const { query, results, isLoading, triggerSearch } = useItemSearch(api, { immediate: false });
   const subItemCreate = ref();
+
+  // ItemSelector's #display slot types `item` as `string | ItemsObject` (its generic prop
+  // shape); the parent-item search results are always EntitySummary in practice, so narrow
+  // via `unknown` (a direct cast doesn't type-check — the two types don't sufficiently overlap).
+  function asEntitySummary(item: unknown): EntitySummary {
+    return item as unknown as EntitySummary;
+  }
 
   const tagId = computed(() => {
     if (route.fullPath.includes("/tag/")) {
@@ -324,8 +468,10 @@
 
     // A template the user picked explicitly takes precedence over the entity
     // type's default template, so don't overwrite it when the type changes.
-    // (Locations don't use templates, so they still clear it below.)
-    if (templateUserSelected.value && !et?.isLocation) {
+    // Containers can use templates too, so a user-selected template also
+    // survives a switch into a container type. Plain (non-container)
+    // locations don't use templates, so they still clear it below.
+    if (templateUserSelected.value && (!et?.isLocation || et?.isContainer)) {
       return;
     }
 
@@ -371,7 +517,11 @@
     parentId: null,
     name: "",
     quantity: 1,
+    count: 1,
     description: "",
+    manufacturer: "",
+    modelNumber: "",
+    icon: "",
     color: "",
     tags: [] as string[],
     photos: [] as PhotoPreview[],
@@ -508,12 +658,129 @@
     }
   }
 
+  function applyProductPrefill(product: BarcodeProduct) {
+    // A product prefill (AI or barcode) carries manufacturer/modelNumber, but the
+    // template creation DTO (api.templates.createItem's request) has no such
+    // fields -- so an active template would silently swallow them when create()
+    // routes through the template path instead of the plain-item path. Product
+    // prefill wins: clear any active template so create() takes the plain-item
+    // path that carries manufacturer/model. clearTemplate() only touches
+    // template state + form.quantity, so it's safe regardless of ordering
+    // relative to the field assignments below.
+    if (templateData.value) {
+      clearTemplate();
+    }
+
+    form.name = product.item.name;
+    form.description = product.item.description;
+    form.manufacturer = product.manufacturer || product.item.manufacturer || "";
+    form.modelNumber = product.modelNumber || product.item.modelNumber || "";
+
+    if (product.imageURL) {
+      appendPhotos([
+        {
+          photoName: "product_view.jpg",
+          fileBase64: product.imageBase64,
+          primary: form.photos.length === 0,
+          file: dataURLtoFile(product.imageBase64, "product_view.jpg"),
+        },
+      ]);
+    }
+  }
+
+  function openAiPhotoPicker() {
+    aiPhotoInput.value?.click();
+  }
+
+  function cancelAiAnalyze() {
+    aiAbort?.abort();
+  }
+
+  async function applyHint(hint: string) {
+    const existing = matchHintToTag(hint, tags.value);
+    if (existing) {
+      if (!form.tags.includes(existing.id)) {
+        form.tags = [...form.tags, existing.id];
+      }
+    } else {
+      const { error, data } = await api.tags.create({
+        name: hint.trim(),
+        color: "",
+        description: "",
+        icon: "",
+      });
+      if (error) {
+        toast.error(t("components.entity.create_modal.toast.ai_hint_tag_failed"));
+        return;
+      }
+      form.tags = [...form.tags, data.id];
+      await tagStore.refresh();
+    }
+    categoryHints.value = categoryHints.value.filter(h => h !== hint);
+  }
+
+  async function onAiPhotoSelected(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file || aiLoading.value) {
+      return;
+    }
+
+    aiLoading.value = true;
+    aiLoadingSlow.value = false;
+    aiPrefill.value = false;
+    categoryHints.value = [];
+    const slowTimer = setTimeout(() => {
+      aiLoadingSlow.value = true;
+    }, 10_000);
+    aiAbort = new AbortController();
+
+    try {
+      // Lane 1: barcode visible in the photo -> existing UPC pipeline, authoritative.
+      const barcode = await detectProductBarcode(file);
+      if (barcode) {
+        const { data, error } = await api.products.searchFromBarcode(barcode, aiAbort.signal);
+        if (!error && data && data.length > 0) {
+          applyProductPrefill(data[0]!);
+          return;
+        }
+        // UPC miss: fall through to the vision lane with the same photo.
+      }
+
+      // Lane 2: vision analysis.
+      const { data, error } = await api.actions.analyzePhoto(file, aiAbort.signal);
+      if (error || !data || data.products.length === 0) {
+        toast.error(t("components.entity.create_modal.toast.ai_failed"));
+        return;
+      }
+      applyProductPrefill(data.products[0]!);
+      aiPrefill.value = true;
+      categoryHints.value = data.categoryHints ?? [];
+    } catch (err) {
+      if (!(err instanceof DOMException && err.name === "AbortError")) {
+        toast.error(t("components.entity.create_modal.toast.ai_failed"));
+      }
+    } finally {
+      clearTimeout(slowTimer);
+      aiLoading.value = false;
+      aiLoadingSlow.value = false;
+      aiAbort = null;
+    }
+  }
+
   onMounted(() => {
     const cleanup = registerOpenDialogCallback(DialogID.CreateEntity, async params => {
+      aiAbort?.abort();
       subItemCreate.value = false;
       let parentItemLocationId = null;
       parent.value = {};
       form.parentId = null;
+      form.manufacturer = "";
+      form.modelNumber = "";
+      form.icon = "";
+      aiPrefill.value = false;
+      categoryHints.value = [];
 
       if (params.baseType === "item") {
         selectedEntityType.value = entityTypes.value.find(t => !t.isLocation) || null;
@@ -539,23 +806,13 @@
         }
 
         if (params.product) {
-          form.name = params.product.item.name;
-          form.description = params.product.item.description;
-
-          if (params.product.imageURL) {
-            appendPhotos([
-              {
-                photoName: "product_view.jpg",
-                fileBase64: params.product.imageBase64,
-                primary: form.photos.length === 0,
-                file: dataURLtoFile(params.product.imageBase64, "product_view.jpg"),
-              },
-            ]);
-          }
+          applyProductPrefill(params.product);
+        } else {
+          // Restore last used template if available -- but only when there's no
+          // product prefill, since a restored template would silently swallow
+          // the prefilled manufacturer/modelNumber (see applyProductPrefill).
+          await restoreLastTemplate();
         }
-
-        // Restore last used template if available
-        await restoreLastTemplate();
       } else {
         selectedEntityType.value = entityTypes.value.find(t => t.isLocation) || null;
       }
@@ -605,6 +862,122 @@
 
     if (shift?.value) close = false;
 
+    // Container + template: batch-create form.count containers from the
+    // template in a single request. count:1 is just a batch of one, so this
+    // also covers "template + quantity 1" -- no separate single-create path
+    // needed for containers once a template is selected.
+    if (selectedEntityType.value?.isContainer && templateData.value) {
+      const { data: created, error } = await api.templates.batchCreate(templateData.value.id, {
+        count: form.count ?? 1,
+        namePrefix: form.name,
+        startNumber: 0, // 0 = backend infers next number from existing "<prefix> NN" names
+        parentId: (form.location?.id || null) as string,
+        entityTypeId: selectedEntityType.value?.id || "",
+        tagIds: form.tags,
+      });
+
+      if (error) {
+        loading.value = false;
+        toast.error(t("components.entity.create_modal.batch_failed"));
+        return;
+      }
+
+      toastBatchCreated(created);
+      await uploadPhotosToBatch(created.map(e => e.id));
+
+      form.name = "";
+      form.quantity = 1;
+      form.count = 1;
+      form.description = "";
+      form.manufacturer = "";
+      form.modelNumber = "";
+      form.icon = "";
+      form.color = "";
+      form.photos = [];
+      form.tags = [];
+      selectedTemplate.value = null;
+      templateData.value = null;
+      templateUserSelected.value = false;
+      showTemplateDetails.value = false;
+      aiPrefill.value = false;
+      categoryHints.value = [];
+      focused.value = false;
+      loading.value = false;
+
+      if (close && created[0]) {
+        closeDialog(DialogID.CreateEntity);
+        navigateTo(`/location/${created[0].id}`);
+      }
+      return;
+    }
+
+    // Container, no template, count > 1 (e.g. a UPC-scanned tote where the
+    // user just wants N more of the same bin): sequential numbered creates,
+    // mirroring ItemChangeDetails' sequential-PATCH pattern (avoids sqlite
+    // write contention from firing them all concurrently). Numbering
+    // restarts at 01 per prefix since this client-side path has no
+    // server-side inference -- the template batch path above remains the
+    // numbering-aware one.
+    if (selectedEntityType.value?.isContainer && !templateData.value && (form.count ?? 1) > 1) {
+      const prefix = form.name;
+      const created: EntityOut[] = [];
+
+      // Clamp client-side, mirroring the 1-100 bound the template-based batch
+      // path already gets server-side.
+      const count = Math.min(100, Math.max(1, Math.floor(form.count ?? 1)));
+
+      for (let i = 1; i <= count; i++) {
+        const { data: createdOne, error } = await api.items.createLocation({
+          name: `${prefix} ${String(i).padStart(2, "0")}`,
+          description: form.description,
+          quantity: 1,
+          parentId: form.location?.id || null,
+          entityTypeId: selectedEntityType.value?.id || "",
+          tagIds: form.tags,
+          manufacturer: "",
+          modelNumber: "",
+          icon: form.icon,
+        });
+
+        if (error) {
+          toast.error(t("components.entity.create_modal.batch_failed"));
+          console.error(error);
+          break;
+        }
+        created.push(createdOne);
+      }
+
+      if (created.length > 0) {
+        toastBatchCreated(created);
+        await uploadPhotosToBatch(created.map(e => e.id));
+      }
+
+      form.name = "";
+      form.quantity = 1;
+      form.count = 1;
+      form.description = "";
+      form.manufacturer = "";
+      form.modelNumber = "";
+      form.icon = "";
+      form.color = "";
+      form.photos = [];
+      form.tags = [];
+      selectedTemplate.value = null;
+      templateData.value = null;
+      templateUserSelected.value = false;
+      showTemplateDetails.value = false;
+      aiPrefill.value = false;
+      categoryHints.value = [];
+      focused.value = false;
+      loading.value = false;
+
+      if (close && created[0]) {
+        closeDialog(DialogID.CreateEntity);
+        navigateTo(`/location/${created[0].id}`);
+      }
+      return;
+    }
+
     let error, data;
 
     // If the selected entity type is a location, use the location creation endpoint
@@ -616,6 +989,9 @@
         entityTypeId: selectedEntityType.value?.id || "",
         quantity: 1,
         tagIds: form.tags,
+        manufacturer: "",
+        modelNumber: "",
+        icon: form.icon,
       });
       error = result.error;
       data = result.data;
@@ -640,8 +1016,11 @@
         name: form.name,
         quantity: form.quantity,
         description: form.description,
+        manufacturer: form.manufacturer,
+        modelNumber: form.modelNumber,
         tagIds: form.tags,
         entityTypeId: selectedEntityType.value?.id || "",
+        icon: form.icon,
       };
 
       const result = await api.items.create(out);
@@ -693,6 +1072,9 @@
     form.name = "";
     form.quantity = 1;
     form.description = "";
+    form.manufacturer = "";
+    form.modelNumber = "";
+    form.icon = "";
     form.color = "";
     form.photos = [];
     form.tags = [];
@@ -700,6 +1082,8 @@
     templateData.value = null;
     templateUserSelected.value = false;
     showTemplateDetails.value = false;
+    aiPrefill.value = false;
+    categoryHints.value = [];
     focused.value = false;
     loading.value = false;
 
@@ -710,6 +1094,75 @@
       } else {
         navigateTo(`/item/${data.id}`);
       }
+    }
+  }
+
+  /**
+   * Shared "created N containers" success toast for both batch-creation
+   * paths below (template batchCreate + the no-template sequential loop).
+   * Its action button fills the label print queue and jumps straight to the
+   * generator, so "created a shelf of totes" flows directly into printing
+   * labels for them.
+   */
+  function toastBatchCreated(created: EntityOut[]) {
+    const queue = useLabelPrintQueue();
+    toast.success(t("components.entity.create_modal.batch_created", { count: created.length }), {
+      action: {
+        label: t("components.entity.create_modal.print_labels"),
+        onClick: () => {
+          queue.set(
+            created.map(e => ({
+              id: e.id,
+              kind: "container" as const,
+              name: e.name,
+              parentPath: form.location?.name ?? "",
+              url: `${window.location.origin}/location/${e.id}`,
+            }))
+          );
+          navigateTo("/reports/label-generator");
+        },
+      },
+    });
+  }
+
+  /**
+   * Uploads the form's pending photos (e.g. a barcode-scanned product image)
+   * to every entity created by a batch -- a batch is N copies of the same
+   * container/product, so the same photos apply to all of them. Unlike the
+   * single-create photo loop in create() below, this reports one aggregate
+   * toast for the whole batch instead of one set of toasts per container,
+   * since a batch of e.g. 6 totes would otherwise fire 6 "uploading..."/
+   * "uploaded" toasts back-to-back.
+   */
+  async function uploadPhotosToBatch(entityIds: string[]) {
+    if (form.photos.length === 0 || entityIds.length === 0) return;
+
+    const totalUploads = form.photos.length * entityIds.length;
+    toast.info(t("components.entity.create_modal.toast.uploading_photos", { count: totalUploads }));
+
+    let uploadError = false;
+    for (const entityId of entityIds) {
+      for (const photo of form.photos) {
+        const { error: attachError } = await api.items.attachments.add(
+          entityId,
+          photo.file,
+          photo.photoName,
+          AttachmentTypes.Photo,
+          photo.primary
+        );
+
+        if (attachError) {
+          uploadError = true;
+          toast.error(t("components.entity.create_modal.toast.upload_failed", { photoName: photo.photoName }));
+          console.error(attachError);
+        }
+      }
+    }
+
+    if (uploadError) {
+      toast.warning(t("components.entity.create_modal.toast.some_photos_failed", { count: totalUploads }));
+    } else {
+      toast.success(t("components.entity.create_modal.toast.upload_success", { count: totalUploads }));
     }
   }
 

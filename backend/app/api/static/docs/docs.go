@@ -18,6 +18,80 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/v1/actions/analyze-photo": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Identifies a physical item from a photo using the configured vision AI provider",
+                "consumes": [
+                    "multipart/form-data"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Actions"
+                ],
+                "summary": "Analyze Item Photo",
+                "parameters": [
+                    {
+                        "type": "file",
+                        "description": "Photo of a single item (JPEG/PNG/WebP)",
+                        "name": "file",
+                        "in": "formData",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/v1.AnalyzePhotoResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/actions/analyze-photo-bulk": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Identifies every distinct item in a photo of an open container using the configured vision AI provider",
+                "consumes": [
+                    "multipart/form-data"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Actions"
+                ],
+                "summary": "Analyze Container Contents Photo",
+                "parameters": [
+                    {
+                        "type": "file",
+                        "description": "Photo of an open container/shelf (JPEG/PNG/WebP)",
+                        "name": "file",
+                        "in": "formData",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/v1.AnalyzeBulkResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/v1/actions/create-missing-thumbnails": {
             "post": {
                 "security": [
@@ -281,6 +355,18 @@ const docTemplate = `{
                         "collectionFormat": "multi",
                         "description": "parent Ids",
                         "name": "parentIds",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "filter by location entity types",
+                        "name": "isLocation",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "filter by container entity types",
+                        "name": "isContainer",
                         "in": "query"
                     }
                 ],
@@ -1081,6 +1167,12 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/repo.EntityTypeSummary"
                         }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/validate.ErrorResponse"
+                        }
                     }
                 }
             }
@@ -1122,6 +1214,12 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/repo.EntityTypeSummary"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/validate.ErrorResponse"
                         }
                     }
                 }
@@ -1463,6 +1561,114 @@ const docTemplate = `{
                             "items": {
                                 "$ref": "#/definitions/repo.Group"
                             }
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/groups/integrations": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Group"
+                ],
+                "summary": "Get Group Integrations",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/v1.GroupIntegrationsOut"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Owner-only. Body = types.GroupIntegrations. Secret fields use write-only sentinel semantics: incoming \"[REDACTED]\" keeps the stored value, \"\" clears it, anything else replaces it.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Group"
+                ],
+                "summary": "Update Group Integrations",
+                "parameters": [
+                    {
+                        "description": "Group Integrations",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/types.GroupIntegrations"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/v1.GroupIntegrationsOut"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/groups/integrations/test-ai": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Owner-only. Resolves the effective AI config and attempts a real round-trip against the configured provider using a fixed small test image, under a 30s timeout. Always 200; ok/detail report the outcome. detail is a sanitized, coarse string — never the raw provider error.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Group"
+                ],
+                "summary": "Test Group AI Integration",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/v1.TestConnectionResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/groups/integrations/test-barcode": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Owner-only. Resolves the effective barcode config and attempts a real lookup against barcodespider.com for a fixed, stable EAN. Always 200; ok/detail report the outcome. detail is a sanitized, coarse string — never the raw error.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Group"
+                ],
+                "summary": "Test Group Barcode Integration",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/v1.TestConnectionResponse"
                         }
                     }
                 }
@@ -2581,6 +2787,57 @@ const docTemplate = `{
                 }
             }
         },
+        "/v1/templates/{id}/batch-create": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Entity Templates"
+                ],
+                "summary": "Batch Create Entities from Template",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Template ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Batch options",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/v1.EntityTemplateBatchCreateRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/repo.EntityOut"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/validate.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/v1/templates/{id}/create-item": {
             "post": {
                 "security": [
@@ -2618,6 +2875,126 @@ const docTemplate = `{
                         "description": "Created",
                         "schema": {
                             "$ref": "#/definitions/repo.EntityOut"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/templates/{id}/photo": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "produces": [
+                    "application/octet-stream"
+                ],
+                "tags": [
+                    "Entity Templates"
+                ],
+                "summary": "Get Template Photo",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Template ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/validate.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/validate.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Entity Templates"
+                ],
+                "summary": "Upload Template Photo",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Template ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "file",
+                        "description": "Photo file",
+                        "name": "file",
+                        "in": "formData",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/repo.EntityTemplateOut"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/validate.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Entity Templates"
+                ],
+                "summary": "Delete Template Photo",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Template ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/validate.ErrorResponse"
                         }
                     }
                 }
@@ -3480,6 +3857,10 @@ const docTemplate = `{
                         }
                     ]
                 },
+                "icon": {
+                    "description": "Icon holds the value of the \"icon\" field.",
+                    "type": "string"
+                },
                 "id": {
                     "description": "ID of the ent.",
                     "type": "string"
@@ -3782,6 +4163,14 @@ const docTemplate = `{
                     "description": "Notes holds the value of the \"notes\" field.",
                     "type": "string"
                 },
+                "photo_mime_type": {
+                    "description": "PhotoMimeType holds the value of the \"photo_mime_type\" field.",
+                    "type": "string"
+                },
+                "photo_path": {
+                    "description": "Storage path of the template photo; copied as primary photo to created entities",
+                    "type": "string"
+                },
                 "updated_at": {
                     "description": "UpdatedAt holds the value of the \"updated_at\" field.",
                     "type": "string"
@@ -3842,6 +4231,10 @@ const docTemplate = `{
                 "id": {
                     "description": "ID of the ent.",
                     "type": "string"
+                },
+                "is_container": {
+                    "description": "Container types are movable holders (totes/bins); requires is_location",
+                    "type": "boolean"
                 },
                 "is_location": {
                     "description": "IsLocation holds the value of the \"is_location\" field.",
@@ -4775,6 +5168,19 @@ const docTemplate = `{
                 "entityTypeId": {
                     "type": "string"
                 },
+                "icon": {
+                    "type": "string",
+                    "maxLength": 255
+                },
+                "manufacturer": {
+                    "type": "string",
+                    "maxLength": 255
+                },
+                "modelNumber": {
+                    "description": "Identifications",
+                    "type": "string",
+                    "maxLength": 255
+                },
                 "name": {
                     "type": "string",
                     "maxLength": 255,
@@ -4885,6 +5291,9 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/repo.EntityFieldData"
                     }
+                },
+                "icon": {
+                    "type": "string"
                 },
                 "id": {
                     "type": "string"
@@ -5019,14 +5428,23 @@ const docTemplate = `{
         "repo.EntityPath": {
             "type": "object",
             "properties": {
+                "icon": {
+                    "type": "string"
+                },
                 "id": {
                     "type": "string"
+                },
+                "isContainer": {
+                    "type": "boolean"
                 },
                 "name": {
                     "type": "string"
                 },
                 "type": {
                     "$ref": "#/definitions/repo.EntityPathType"
+                },
+                "typeIcon": {
+                    "type": "string"
                 }
             }
         },
@@ -5065,6 +5483,9 @@ const docTemplate = `{
                     ],
                     "x-nullable": true,
                     "x-omitempty": true
+                },
+                "icon": {
+                    "type": "string"
                 },
                 "id": {
                     "type": "string"
@@ -5280,6 +5701,13 @@ const docTemplate = `{
                 "notes": {
                     "type": "string"
                 },
+                "photoMimeType": {
+                    "type": "string"
+                },
+                "photoPath": {
+                    "description": "Template photo (copied as the primary photo to entities created from this template)",
+                    "type": "string"
+                },
                 "updatedAt": {
                     "type": "string"
                 }
@@ -5403,6 +5831,9 @@ const docTemplate = `{
                 "icon": {
                     "type": "string"
                 },
+                "isContainer": {
+                    "type": "boolean"
+                },
                 "isLocation": {
                     "type": "boolean"
                 },
@@ -5432,6 +5863,9 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
+                "isContainer": {
+                    "type": "boolean"
+                },
                 "isLocation": {
                     "type": "boolean"
                 },
@@ -5454,6 +5888,9 @@ const docTemplate = `{
                 },
                 "id": {
                     "type": "string"
+                },
+                "isContainer": {
+                    "type": "boolean"
                 },
                 "isLocation": {
                     "type": "boolean"
@@ -5487,6 +5924,10 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/repo.EntityFieldData"
                     }
+                },
+                "icon": {
+                    "type": "string",
+                    "maxLength": 255
                 },
                 "id": {
                     "type": "string"
@@ -6130,13 +6571,22 @@ const docTemplate = `{
                         "$ref": "#/definitions/repo.TreeItem"
                     }
                 },
+                "icon": {
+                    "type": "string"
+                },
                 "id": {
                     "type": "string"
+                },
+                "isContainer": {
+                    "type": "boolean"
                 },
                 "name": {
                     "type": "string"
                 },
                 "type": {
+                    "type": "string"
+                },
+                "typeIcon": {
                     "type": "string"
                 }
             }
@@ -6278,6 +6728,30 @@ const docTemplate = `{
                 "TypeTime"
             ]
         },
+        "types.GroupIntegrations": {
+            "type": "object",
+            "properties": {
+                "aiApiKey": {
+                    "type": "string"
+                },
+                "aiBaseUrl": {
+                    "type": "string"
+                },
+                "aiModel": {
+                    "type": "string"
+                },
+                "aiProvider": {
+                    "description": "\"\" inherit env | \"disabled\" force off | \"openai_compatible\" | \"anthropic\"",
+                    "type": "string"
+                },
+                "barcodeTokenBarcodespider": {
+                    "type": "string"
+                },
+                "openFoodFactsContact": {
+                    "type": "string"
+                }
+            }
+        },
         "usergroup.Role": {
             "type": "string",
             "enum": [
@@ -6294,6 +6768,9 @@ const docTemplate = `{
         "v1.APISummary": {
             "type": "object",
             "properties": {
+                "aiPhotoAnalysis": {
+                    "type": "boolean"
+                },
                 "allowRegistration": {
                     "type": "boolean"
                 },
@@ -6340,6 +6817,43 @@ const docTemplate = `{
                 }
             }
         },
+        "v1.AnalyzeBulkResponse": {
+            "type": "object",
+            "properties": {
+                "candidates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/v1.BulkItemCandidate"
+                    }
+                },
+                "lane": {
+                    "type": "string"
+                }
+            }
+        },
+        "v1.AnalyzePhotoResponse": {
+            "type": "object",
+            "properties": {
+                "categoryHints": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "confidence": {
+                    "type": "number"
+                },
+                "lane": {
+                    "type": "string"
+                },
+                "products": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/repo.BarcodeProduct"
+                    }
+                }
+            }
+        },
         "v1.Build": {
             "type": "object",
             "properties": {
@@ -6351,6 +6865,35 @@ const docTemplate = `{
                 },
                 "version": {
                     "type": "string"
+                }
+            }
+        },
+        "v1.BulkItemCandidate": {
+            "type": "object",
+            "properties": {
+                "categoryHints": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "confidence": {
+                    "type": "number"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "manufacturer": {
+                    "type": "string"
+                },
+                "modelNumber": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "quantity": {
+                    "type": "number"
                 }
             }
         },
@@ -6373,6 +6916,39 @@ const docTemplate = `{
             "properties": {
                 "name": {
                     "type": "string"
+                }
+            }
+        },
+        "v1.EntityTemplateBatchCreateRequest": {
+            "type": "object",
+            "required": [
+                "count"
+            ],
+            "properties": {
+                "count": {
+                    "type": "integer",
+                    "maximum": 100,
+                    "minimum": 1
+                },
+                "entityTypeId": {
+                    "type": "string"
+                },
+                "namePrefix": {
+                    "type": "string",
+                    "maxLength": 240
+                },
+                "parentId": {
+                    "type": "string"
+                },
+                "startNumber": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "tagIds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },
@@ -6429,6 +7005,48 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "v1.GroupIntegrationsOut": {
+            "type": "object",
+            "properties": {
+                "aiApiKey": {
+                    "type": "string"
+                },
+                "aiBaseUrl": {
+                    "type": "string"
+                },
+                "aiConfigured": {
+                    "type": "boolean"
+                },
+                "aiModel": {
+                    "type": "string"
+                },
+                "aiProvider": {
+                    "description": "\"\" inherit env | \"disabled\" force off | \"openai_compatible\" | \"anthropic\"",
+                    "type": "string"
+                },
+                "barcodeTokenBarcodespider": {
+                    "type": "string"
+                },
+                "barcodespiderConfigured": {
+                    "type": "boolean"
+                },
+                "envAiBaseUrl": {
+                    "type": "string"
+                },
+                "envAiModel": {
+                    "type": "string"
+                },
+                "envAiProvider": {
+                    "type": "string"
+                },
+                "isOwner": {
+                    "type": "boolean"
+                },
+                "openFoodFactsContact": {
                     "type": "string"
                 }
             }
@@ -6531,6 +7149,17 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "enabled": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "v1.TestConnectionResponse": {
+            "type": "object",
+            "properties": {
+                "detail": {
+                    "type": "string"
+                },
+                "ok": {
                     "type": "boolean"
                 }
             }

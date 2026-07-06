@@ -146,6 +146,7 @@ var (
 		{Name: "serial_number", Type: field.TypeString, Nullable: true, Size: 255},
 		{Name: "model_number", Type: field.TypeString, Nullable: true, Size: 255},
 		{Name: "manufacturer", Type: field.TypeString, Nullable: true, Size: 255},
+		{Name: "icon", Type: field.TypeString, Nullable: true, Size: 255},
 		{Name: "lifetime_warranty", Type: field.TypeBool, Default: false},
 		{Name: "warranty_expires", Type: field.TypeTime, Nullable: true},
 		{Name: "warranty_details", Type: field.TypeString, Nullable: true, Size: 1000},
@@ -168,19 +169,19 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "entities_entities_children",
-				Columns:    []*schema.Column{EntitiesColumns[25]},
+				Columns:    []*schema.Column{EntitiesColumns[26]},
 				RefColumns: []*schema.Column{EntitiesColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 			{
 				Symbol:     "entities_entity_types_entities",
-				Columns:    []*schema.Column{EntitiesColumns[26]},
+				Columns:    []*schema.Column{EntitiesColumns[27]},
 				RefColumns: []*schema.Column{EntityTypesColumns[0]},
 				OnDelete:   schema.Restrict,
 			},
 			{
 				Symbol:     "entities_groups_entities",
-				Columns:    []*schema.Column{EntitiesColumns[27]},
+				Columns:    []*schema.Column{EntitiesColumns[28]},
 				RefColumns: []*schema.Column{GroupsColumns[0]},
 				OnDelete:   schema.Cascade,
 			},
@@ -265,6 +266,8 @@ var (
 		{Name: "include_warranty_fields", Type: field.TypeBool, Default: false},
 		{Name: "include_purchase_fields", Type: field.TypeBool, Default: false},
 		{Name: "include_sold_fields", Type: field.TypeBool, Default: false},
+		{Name: "photo_path", Type: field.TypeString, Nullable: true, Size: 500},
+		{Name: "photo_mime_type", Type: field.TypeString, Nullable: true, Size: 255},
 		{Name: "default_tag_ids", Type: field.TypeJSON, Nullable: true},
 		{Name: "entity_template_location", Type: field.TypeUUID, Nullable: true},
 		{Name: "group_entity_templates", Type: field.TypeUUID},
@@ -277,13 +280,13 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "entity_templates_entities_location",
-				Columns:    []*schema.Column{EntityTemplatesColumns[18]},
+				Columns:    []*schema.Column{EntityTemplatesColumns[20]},
 				RefColumns: []*schema.Column{EntitiesColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 			{
 				Symbol:     "entity_templates_groups_entity_templates",
-				Columns:    []*schema.Column{EntityTemplatesColumns[19]},
+				Columns:    []*schema.Column{EntityTemplatesColumns[21]},
 				RefColumns: []*schema.Column{GroupsColumns[0]},
 				OnDelete:   schema.Cascade,
 			},
@@ -304,6 +307,7 @@ var (
 		{Name: "name", Type: field.TypeString, Size: 255},
 		{Name: "description", Type: field.TypeString, Nullable: true, Size: 1000},
 		{Name: "is_location", Type: field.TypeBool, Default: false},
+		{Name: "is_container", Type: field.TypeBool, Default: false},
 		{Name: "icon", Type: field.TypeString, Nullable: true, Size: 255},
 		{Name: "entity_type_default_template", Type: field.TypeUUID, Nullable: true},
 		{Name: "group_entity_types", Type: field.TypeUUID},
@@ -316,13 +320,13 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "entity_types_entity_templates_default_template",
-				Columns:    []*schema.Column{EntityTypesColumns[7]},
+				Columns:    []*schema.Column{EntityTypesColumns[8]},
 				RefColumns: []*schema.Column{EntityTemplatesColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 			{
 				Symbol:     "entity_types_groups_entity_types",
-				Columns:    []*schema.Column{EntityTypesColumns[8]},
+				Columns:    []*schema.Column{EntityTypesColumns[9]},
 				RefColumns: []*schema.Column{GroupsColumns[0]},
 				OnDelete:   schema.Cascade,
 			},
@@ -374,6 +378,7 @@ var (
 		{Name: "updated_at", Type: field.TypeTime},
 		{Name: "name", Type: field.TypeString, Size: 255},
 		{Name: "currency", Type: field.TypeString, Default: "usd"},
+		{Name: "integrations", Type: field.TypeJSON, Nullable: true},
 	}
 	// GroupsTable holds the schema information for the "groups" table.
 	GroupsTable = &schema.Table{

@@ -20,6 +20,7 @@ export type RequestArgs<T> = {
   body?: T;
   data?: FormData;
   headers?: Record<string, string>;
+  signal?: AbortSignal;
 };
 
 export class Requests {
@@ -77,6 +78,7 @@ export class Requests {
         ...rargs.headers,
         ...this.headers,
       } as Record<string, string>,
+      signal: rargs.signal,
     };
 
     const token = this.token();

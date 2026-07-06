@@ -240,6 +240,34 @@ func (_c *EntityTemplateCreate) SetNillableIncludeSoldFields(v *bool) *EntityTem
 	return _c
 }
 
+// SetPhotoPath sets the "photo_path" field.
+func (_c *EntityTemplateCreate) SetPhotoPath(v string) *EntityTemplateCreate {
+	_c.mutation.SetPhotoPath(v)
+	return _c
+}
+
+// SetNillablePhotoPath sets the "photo_path" field if the given value is not nil.
+func (_c *EntityTemplateCreate) SetNillablePhotoPath(v *string) *EntityTemplateCreate {
+	if v != nil {
+		_c.SetPhotoPath(*v)
+	}
+	return _c
+}
+
+// SetPhotoMimeType sets the "photo_mime_type" field.
+func (_c *EntityTemplateCreate) SetPhotoMimeType(v string) *EntityTemplateCreate {
+	_c.mutation.SetPhotoMimeType(v)
+	return _c
+}
+
+// SetNillablePhotoMimeType sets the "photo_mime_type" field if the given value is not nil.
+func (_c *EntityTemplateCreate) SetNillablePhotoMimeType(v *string) *EntityTemplateCreate {
+	if v != nil {
+		_c.SetPhotoMimeType(*v)
+	}
+	return _c
+}
+
 // SetDefaultTagIds sets the "default_tag_ids" field.
 func (_c *EntityTemplateCreate) SetDefaultTagIds(v []uuid.UUID) *EntityTemplateCreate {
 	_c.mutation.SetDefaultTagIds(v)
@@ -447,6 +475,16 @@ func (_c *EntityTemplateCreate) check() error {
 	if _, ok := _c.mutation.IncludeSoldFields(); !ok {
 		return &ValidationError{Name: "include_sold_fields", err: errors.New(`ent: missing required field "EntityTemplate.include_sold_fields"`)}
 	}
+	if v, ok := _c.mutation.PhotoPath(); ok {
+		if err := entitytemplate.PhotoPathValidator(v); err != nil {
+			return &ValidationError{Name: "photo_path", err: fmt.Errorf(`ent: validator failed for field "EntityTemplate.photo_path": %w`, err)}
+		}
+	}
+	if v, ok := _c.mutation.PhotoMimeType(); ok {
+		if err := entitytemplate.PhotoMimeTypeValidator(v); err != nil {
+			return &ValidationError{Name: "photo_mime_type", err: fmt.Errorf(`ent: validator failed for field "EntityTemplate.photo_mime_type": %w`, err)}
+		}
+	}
 	if len(_c.mutation.GroupIDs()) == 0 {
 		return &ValidationError{Name: "group", err: errors.New(`ent: missing required edge "EntityTemplate.group"`)}
 	}
@@ -548,6 +586,14 @@ func (_c *EntityTemplateCreate) createSpec() (*EntityTemplate, *sqlgraph.CreateS
 	if value, ok := _c.mutation.IncludeSoldFields(); ok {
 		_spec.SetField(entitytemplate.FieldIncludeSoldFields, field.TypeBool, value)
 		_node.IncludeSoldFields = value
+	}
+	if value, ok := _c.mutation.PhotoPath(); ok {
+		_spec.SetField(entitytemplate.FieldPhotoPath, field.TypeString, value)
+		_node.PhotoPath = value
+	}
+	if value, ok := _c.mutation.PhotoMimeType(); ok {
+		_spec.SetField(entitytemplate.FieldPhotoMimeType, field.TypeString, value)
+		_node.PhotoMimeType = value
 	}
 	if value, ok := _c.mutation.DefaultTagIds(); ok {
 		_spec.SetField(entitytemplate.FieldDefaultTagIds, field.TypeJSON, value)

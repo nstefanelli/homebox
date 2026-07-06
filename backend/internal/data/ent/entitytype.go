@@ -30,6 +30,8 @@ type EntityType struct {
 	Description string `json:"description,omitempty"`
 	// IsLocation holds the value of the "is_location" field.
 	IsLocation bool `json:"is_location,omitempty"`
+	// Container types are movable holders (totes/bins); requires is_location
+	IsContainer bool `json:"is_container,omitempty"`
 	// Icon holds the value of the "icon" field.
 	Icon string `json:"icon,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
@@ -89,7 +91,7 @@ func (*EntityType) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case entitytype.FieldIsLocation:
+		case entitytype.FieldIsLocation, entitytype.FieldIsContainer:
 			values[i] = new(sql.NullBool)
 		case entitytype.FieldName, entitytype.FieldDescription, entitytype.FieldIcon:
 			values[i] = new(sql.NullString)
@@ -151,6 +153,12 @@ func (_m *EntityType) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field is_location", values[i])
 			} else if value.Valid {
 				_m.IsLocation = value.Bool
+			}
+		case entitytype.FieldIsContainer:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field is_container", values[i])
+			} else if value.Valid {
+				_m.IsContainer = value.Bool
 			}
 		case entitytype.FieldIcon:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -237,6 +245,9 @@ func (_m *EntityType) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("is_location=")
 	builder.WriteString(fmt.Sprintf("%v", _m.IsLocation))
+	builder.WriteString(", ")
+	builder.WriteString("is_container=")
+	builder.WriteString(fmt.Sprintf("%v", _m.IsContainer))
 	builder.WriteString(", ")
 	builder.WriteString("icon=")
 	builder.WriteString(_m.Icon)

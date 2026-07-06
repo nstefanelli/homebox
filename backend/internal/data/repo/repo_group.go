@@ -19,6 +19,7 @@ import (
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/tag"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/user"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/usergroup"
+	"github.com/sysadminsmedia/homebox/backend/internal/data/types"
 )
 
 type GroupRepository struct {
@@ -463,6 +464,22 @@ func (r *GroupRepository) IsOwnerOf(ctx context.Context, userID, groupID uuid.UU
 			usergroup.RoleEQ(usergroup.RoleOwner),
 		).
 		Exist(ctx)
+}
+
+// IntegrationsGet returns the group's stored integration settings. Groups
+// with no settings row yet return the zero value (all fields "", meaning
+// "inherit env" for every field).
+func (r *GroupRepository) IntegrationsGet(ctx context.Context, gid uuid.UUID) (types.GroupIntegrations, error) {
+	g, err := r.db.Group.Get(ctx, gid)
+	if err != nil {
+		return types.GroupIntegrations{}, err
+	}
+	return g.Integrations, nil
+}
+
+// IntegrationsSet overwrites the group's stored integration settings.
+func (r *GroupRepository) IntegrationsSet(ctx context.Context, gid uuid.UUID, data types.GroupIntegrations) error {
+	return r.db.Group.UpdateOneID(gid).SetIntegrations(data).Exec(ctx)
 }
 
 func (r *GroupRepository) RemoveMember(ctx context.Context, groupID, userID uuid.UUID) error {

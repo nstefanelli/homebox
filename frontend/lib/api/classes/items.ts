@@ -33,6 +33,7 @@ export type ItemsQuery = {
 
 export type LocationsQuery = {
   filterChildren: boolean;
+  parentIds?: string[];
 };
 
 export type TreeQuery = {
@@ -200,6 +201,17 @@ export class ItemsApi extends BaseAPI {
       url: route("/entities", { ...q, isLocation: true }),
     });
     // Unwrap paginated response to flat array for backward compat
+    return {
+      ...resp,
+      data: resp.data?.items ?? [],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as { data: EntitySummary[]; error: any; status: number };
+  }
+
+  async getContainers(q: LocationsQuery = { filterChildren: false }) {
+    const resp = await this.http.get<{ items: EntitySummary[] }>({
+      url: route("/entities", { ...q, isLocation: true, isContainer: true }),
+    });
     return {
       ...resp,
       data: resp.data?.items ?? [],

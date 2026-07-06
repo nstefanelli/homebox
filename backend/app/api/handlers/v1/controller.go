@@ -15,6 +15,7 @@ import (
 	"github.com/sysadminsmedia/homebox/backend/internal/core/services/reporting/eventbus"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/repo"
 	"github.com/sysadminsmedia/homebox/backend/internal/sys/config"
+	"github.com/sysadminsmedia/homebox/backend/pkgs/ai"
 
 	"github.com/olahol/melody"
 )
@@ -77,6 +78,16 @@ func WithURL(url string) func(*V1Controller) {
 	}
 }
 
+// WithAIProviderFactory overrides the function used to build an ai.Provider
+// from a resolved config.AIConf. Defaults to ai.NewProvider in NewControllerV1;
+// tests substitute a factory that returns a stub provider instead of making a
+// real one.
+func WithAIProviderFactory(f func(config.AIConf) (ai.Provider, error)) func(*V1Controller) {
+	return func(ctrl *V1Controller) {
+		ctrl.aiProviderFactory = f
+	}
+}
+
 type V1Controller struct {
 	cookieSecure      bool
 	repo              *repo.AllRepos
@@ -90,6 +101,11 @@ type V1Controller struct {
 	url               string
 	config            *config.Config
 	oidcProvider      *providers.OIDCProvider
+
+	// aiProviderFactory builds an ai.Provider from a resolved config.AIConf,
+	// per request (runtime gating — see EffectiveAI). Defaults to
+	// ai.NewProvider; overridden in tests via WithAIProviderFactory.
+	aiProviderFactory func(config.AIConf) (ai.Provider, error)
 }
 
 type (
@@ -111,6 +127,7 @@ type (
 		Demo              bool            `json:"demo"`
 		AllowRegistration bool            `json:"allowRegistration"`
 		LabelPrinting     bool            `json:"labelPrinting"`
+		AIPhotoAnalysis   bool            `json:"aiPhotoAnalysis"`
 		OIDC              OIDCStatus      `json:"oidc"`
 		Telemetry         TelemetryStatus `json:"telemetry"`
 	}
@@ -134,6 +151,7 @@ func NewControllerV1(svc *services.AllServices, repos *repo.AllRepos, bus *event
 		allowRegistration: true,
 		bus:               bus,
 		config:            config,
+		aiProviderFactory: ai.NewProvider,
 	}
 
 	for _, opt := range options {
@@ -175,6 +193,11 @@ func (ctrl *V1Controller) HandleBase(ready ReadyFunc, build Build) errchain.Hand
 			Demo:              ctrl.isDemo,
 			AllowRegistration: ctrl.allowRegistration,
 			LabelPrinting:     ctrl.config.LabelMaker.PrintCommand != nil,
+			// Env-only signal (unauthenticated, group-unaware endpoint — no
+			// group context to resolve DB-backed settings against). The
+			// frontend no longer uses this for button gating; it now reads
+			// the per-group effective config via /v1/groups/integrations.
+			AIPhotoAnalysis: ctrl.config.AI.Provider != "",
 			OIDC: OIDCStatus{
 				Enabled:      ctrl.config.OIDC.Enabled,
 				ButtonText:   ctrl.config.OIDC.ButtonText,

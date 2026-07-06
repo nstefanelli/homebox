@@ -25,6 +25,7 @@ import (
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/attachment"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/entity"
+	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/entitytemplate"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/group"
 	"github.com/sysadminsmedia/homebox/backend/internal/sys/config"
 	"github.com/sysadminsmedia/homebox/backend/pkgs/utils"
@@ -558,8 +559,17 @@ func (r *AttachmentRepo) Delete(ctx context.Context, gid uuid.UUID, id uuid.UUID
 	if err != nil {
 		return err
 	}
-	// If this is the last attachment for this path, delete the file
+	// If this is the last attachment for this path, delete the file - unless
+	// an entity template's photo still references this same content-addressed
+	// path, in which case the blob must be kept alive for the template.
 	if len(all) == 1 {
+		templateStillReferencesPath, err := r.db.EntityTemplate.Query().
+			Where(entitytemplate.PhotoPath(doc.Path)).
+			Exist(ctx)
+		if err != nil {
+			return err
+		}
+
 		thumb, err := doc.QueryThumbnail().First(ctx)
 		if err != nil && !ent.IsNotFound(err) {
 			log.Err(err).Msg("failed to query thumbnail for attachment")
@@ -582,20 +592,22 @@ func (r *AttachmentRepo) Delete(ctx context.Context, gid uuid.UUID, id uuid.UUID
 				return err
 			}
 		}
-		bucket, err := blob.OpenBucket(ctx, r.GetConnString())
-		if err != nil {
-			log.Err(err).Msg("failed to open bucket")
-			return err
-		}
-		defer func(bucket *blob.Bucket) {
-			err := bucket.Close()
+		if !templateStillReferencesPath {
+			bucket, err := blob.OpenBucket(ctx, r.GetConnString())
 			if err != nil {
-				log.Err(err).Msg("failed to close bucket")
+				log.Err(err).Msg("failed to open bucket")
+				return err
 			}
-		}(bucket)
-		err = bucket.Delete(ctx, r.fullPath(doc.Path))
-		if err != nil {
-			return err
+			defer func(bucket *blob.Bucket) {
+				err := bucket.Close()
+				if err != nil {
+					log.Err(err).Msg("failed to close bucket")
+				}
+			}(bucket)
+			err = bucket.Delete(ctx, r.fullPath(doc.Path))
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -983,6 +995,16 @@ func (r *AttachmentRepo) UploadFile(ctx context.Context, itemGroup *ent.Group, d
 		Path:        relativePath,
 		ContentType: contentType,
 	}, nil
+}
+
+// UploadFileByGroupID uploads a blob for a group looked up by ID. Used by callers
+// (e.g. template photos) that don't already hold the *ent.Group.
+func (r *AttachmentRepo) UploadFileByGroupID(ctx context.Context, gid uuid.UUID, doc ItemCreateAttachment) (UploadResult, error) {
+	grp, err := r.db.Group.Get(ctx, gid)
+	if err != nil {
+		return UploadResult{}, err
+	}
+	return r.UploadFile(ctx, grp, doc)
 }
 
 func isImageFile(mimetype string) bool {

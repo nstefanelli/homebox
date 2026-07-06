@@ -4,10 +4,14 @@
   import type { AnyDetail, Details } from "~~/components/global/DetailsSection/types";
   import { filterZeroValues } from "~~/components/global/DetailsSection/types";
   import type { ItemAttachment } from "~~/lib/api/types/data-contracts";
-  import MdiPackageVariant from "~icons/mdi/package-variant";
+  import { useLabelPrintQueue, type PrintQueueEntry } from "~~/stores/labels";
+  import { resolveEntityIcon } from "~~/lib/icons";
+  import MdiPackageVariantClosedRemove from "~icons/mdi/package-variant-closed-remove";
   import MdiPlus from "~icons/mdi/plus";
   import MdiPencil from "~icons/mdi/pencil";
   import MdiDelete from "~icons/mdi/delete";
+  import MdiArrowRight from "~icons/mdi/arrow-right";
+  import MdiCameraPlusOutline from "~icons/mdi/camera-plus-outline";
   import { useDialog } from "@/components/ui/dialog-provider";
   import { Card } from "@/components/ui/card";
   import {
@@ -19,6 +23,8 @@
   } from "@/components/ui/breadcrumb";
   import { Button } from "@/components/ui/button";
   import { Badge } from "@/components/ui/badge";
+  import { Checkbox } from "@/components/ui/checkbox";
+  import { Label } from "@/components/ui/label";
   import { Separator } from "@/components/ui/separator";
   import { DialogID } from "~/components/ui/dialog-provider/utils";
   import BaseCard from "@/components/Base/Card.vue";
@@ -33,6 +39,7 @@
   import ItemImageDialog from "~/components/Item/ImageDialog.vue";
   import LocationCard from "~/components/Location/Card.vue";
   import TagChip from "~/components/Tag/Chip.vue";
+  import { useIntegrationsStore } from "~~/stores/integrations";
 
   definePageMeta({
     middleware: ["auth"],
@@ -46,9 +53,13 @@
   const api = useUserApi();
   const preferences = useViewPreferences();
 
+  const integrationsStore = useIntegrationsStore();
+  integrationsStore.ensureFetched();
+  const aiPhotoEnabled = computed(() => integrationsStore.aiConfigured);
+
   const locationId = computed<string>(() => route.params.id as string);
 
-  const { data: location } = useAsyncData(locationId.value, async () => {
+  const { data: location, refresh: refreshLocation } = useAsyncData(locationId.value, async () => {
     const { data, error } = await api.items.getLocation(locationId.value);
     if (error) {
       toast.error(t("locations.toast.failed_load_location"));
@@ -87,6 +98,49 @@
 
   function goToEdit() {
     navigateTo(`/location/${locationId.value}/edit`);
+  }
+
+  function openMove() {
+    if (!location.value) return;
+    openDialog(DialogID.ItemChangeDetails, {
+      params: { items: [location.value], changeLocation: true, currentLocation: location.value },
+      onClose: result => {
+        if (result) {
+          toast.success(t("pages.location.move_success"));
+          refreshLocation();
+        }
+      },
+    });
+  }
+
+  function openEmpty() {
+    if (!location.value || !emptyableChildren.value.length) return;
+    openDialog(DialogID.ItemChangeDetails, {
+      params: { items: emptyableChildren.value, changeLocation: true, currentLocation: location.value },
+      onClose: result => {
+        if (result) {
+          toast.success(t("pages.location.empty_success"));
+          refreshItemList();
+          refreshLocation();
+          refreshContainersHere();
+        }
+      },
+    });
+  }
+
+  function openBulkCatalog() {
+    if (!location.value) return;
+    openDialog(DialogID.BulkCatalog, {
+      params: { containerId: location.value.id, containerName: location.value.name },
+      onClose: result => {
+        if (result) {
+          toast.success(t("pages.location.catalog_success", { count: result.created }));
+          refreshItemList();
+          refreshLocation();
+          refreshContainersHere();
+        }
+      },
+    });
   }
 
   // Photos
@@ -214,6 +268,118 @@
       watch: [locationId],
     }
   );
+
+  const { data: containersHere, refresh: refreshContainersHere } = useAsyncData(
+    () => locationId.value + "_containers_here",
+    async () => {
+      if (!locationId.value) {
+        return [];
+      }
+
+      const { data } = await api.items.getContainers({ parentIds: [locationId.value], filterChildren: false });
+      return data;
+    },
+    {
+      watch: [locationId],
+    }
+  );
+
+  // Wrapped in a computed (rather than referencing the useAsyncData ref directly in the template) to
+  // avoid vue-tsc's ref-unwrap quirk with bare async-data refs in v-if/v-for guards.
+  const containersHereList = computed(() => containersHere.value ?? []);
+
+  // Child locations that aren't already shown in the "Containers here" section, to avoid double-rendering.
+  const childLocations = computed(() => {
+    if (!location.value?.children) {
+      return [];
+    }
+    const containerIds = new Set(containersHereList.value.map(c => c.id));
+    return location.value.children.filter(child => !containerIds.has(child.id));
+  });
+
+  // All direct children eligible to be moved by "Empty container": child items, plus the complete
+  // deduped set of direct location-type children. `containersHereList` and `childLocations` were split
+  // above purely to avoid double-rendering the "Containers here" vs "Child locations" sections — recombining
+  // them here (rather than reusing `location.children`) recovers the full direct-children set with no
+  // double-counting, since `childLocations` already excludes anything present in `containersHereList`.
+  const emptyableChildren = computed(() => [
+    ...(items.value ?? []),
+    ...containersHereList.value,
+    ...childLocations.value,
+  ]);
+
+  // Wrapped in a computed (rather than referencing `location.entityType` directly in the template) to
+  // avoid vue-tsc's ref-unwrap quirk with bare async-data refs — same reasoning as containersHereList above.
+  const canEmptyContainer = computed(
+    () => !!location.value?.entityType?.isContainer && emptyableChildren.value.length > 0
+  );
+
+  // Same vue-tsc ref-unwrap quirk as above — resolve icons here rather than referencing
+  // `location.icon`/`location.entityType`/`location.parent` directly in the template.
+  const locationIcon = computed(() =>
+    resolveEntityIcon({
+      icon: location.value?.icon,
+      typeIcon: location.value?.entityType?.icon,
+      isContainer: location.value?.entityType?.isContainer,
+      isLocation: true,
+    })
+  );
+
+  const parentLocationIcon = computed(() => {
+    const parent = location.value?.parent;
+    return resolveEntityIcon({
+      icon: parent?.icon,
+      typeIcon: parent?.entityType?.icon,
+      isContainer: parent?.entityType?.isContainer,
+      isLocation: true,
+    });
+  });
+
+  const printQueue = useLabelPrintQueue();
+  const printIncludeItems = ref(false);
+
+  async function printContainerLabels() {
+    const entries: PrintQueueEntry[] = [];
+
+    const { data: containers } = await api.items.getContainers({
+      parentIds: [locationId.value],
+      filterChildren: false,
+    });
+    entries.push(
+      ...containers.map(c => ({
+        id: c.id,
+        kind: "container" as const,
+        name: c.name,
+        parentPath: location.value?.name ?? "",
+        url: `${window.location.origin}/location/${c.id}`,
+      }))
+    );
+
+    if (printIncludeItems.value) {
+      entries.push(
+        ...(items.value ?? []).map(i => ({
+          id: i.id,
+          kind: "item" as const,
+          name: i.name,
+          parentPath: location.value?.name ?? "",
+          assetId: i.assetId,
+          url: `${window.location.origin}/a/${i.assetId}`,
+        }))
+      );
+    }
+
+    // An empty queue makes queueMode fall through to the generator's default
+    // asset-range view (all entities in the collection) -- surprising when the
+    // user asked to print "this location's containers" and there are none.
+    // Warn and stay put instead of silently navigating to an unrelated screen.
+    if (entries.length === 0) {
+      toast.warning(t("components.location.print_nothing_to_print"));
+      return;
+    }
+
+    printQueue.set(entries);
+    navigateTo("/reports/label-generator");
+  }
 </script>
 
 <template>
@@ -248,7 +414,7 @@
             <div
               class="mb-auto flex size-12 items-center justify-center rounded-full bg-secondary text-secondary-foreground"
             >
-              <MdiPackageVariant class="size-7" />
+              <component :is="locationIcon" class="size-7" />
             </div>
             <div>
               <Breadcrumb v-if="location?.parent">
@@ -256,6 +422,7 @@
                   <BreadcrumbItem>
                     <BreadcrumbLink as-child class="text-foreground/70 hover:underline">
                       <NuxtLink :to="`/location/${location.parent.id}`">
+                        <component :is="parentLocationIcon" class="mr-1 inline-block size-4 align-text-bottom" />
                         {{ location.parent.name }}
                       </NuxtLink>
                     </BreadcrumbLink>
@@ -283,6 +450,15 @@
             </div>
             <div class="ml-auto mt-2 flex flex-wrap items-center justify-between gap-2">
               <LabelMaker :id="location.id" type="location" />
+              <Button variant="outline" @click="printContainerLabels">
+                {{ $t("components.location.print_containers") }}
+              </Button>
+              <div class="flex items-center gap-1">
+                <Checkbox id="printIncludeItems" v-model="printIncludeItems" />
+                <Label for="printIncludeItems" class="cursor-pointer text-sm">
+                  {{ $t("components.location.print_include_items") }}
+                </Label>
+              </div>
               <Button class="w-9 md:w-auto" @click="openCreateItem">
                 <MdiPlus name="mdi-plus" />
                 <span class="hidden md:inline">
@@ -293,6 +469,24 @@
                 <MdiPencil name="mdi-pencil" />
                 <span class="hidden md:inline">
                   {{ $t("global.edit") }}
+                </span>
+              </Button>
+              <Button class="w-9 md:w-auto" variant="outline" @click="openMove">
+                <MdiArrowRight name="mdi-arrow-right" />
+                <span class="hidden md:inline">
+                  {{ $t("pages.location.move") }}
+                </span>
+              </Button>
+              <Button v-if="canEmptyContainer" class="w-9 md:w-auto" variant="outline" @click="openEmpty">
+                <MdiPackageVariantClosedRemove name="mdi-package-variant-closed-remove" />
+                <span class="hidden md:inline">
+                  {{ $t("pages.location.empty_container") }}
+                </span>
+              </Button>
+              <Button v-if="aiPhotoEnabled" class="w-9 md:w-auto" variant="outline" @click="openBulkCatalog">
+                <MdiCameraPlusOutline name="mdi-camera-plus-outline" />
+                <span class="hidden md:inline">
+                  {{ $t("pages.location.catalog_contents") }}
                 </span>
               </Button>
               <Button variant="destructive" class="w-9 md:w-auto" @click="confirmDelete()">
@@ -346,11 +540,44 @@
         <ItemViewSelectable :items="items" @refresh="refreshItemList" />
       </section>
 
+      <!-- Containers here -->
+      <section v-if="containersHereList.length > 0" class="mt-6 space-y-2">
+        <BaseSectionHeader class="mb-5">
+          {{ $t("pages.location.containers_here", { count: containersHereList.length }) }}
+        </BaseSectionHeader>
+        <div class="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          <NuxtLink
+            v-for="c in containersHereList"
+            :key="c.id"
+            :to="`/location/${c.id}`"
+            class="flex items-center justify-between rounded-md border p-3 hover:bg-accent"
+          >
+            <span class="flex items-center gap-2">
+              <component
+                :is="
+                  resolveEntityIcon({
+                    icon: c.icon,
+                    typeIcon: c.entityType?.icon,
+                    isContainer: c.entityType?.isContainer,
+                    isLocation: true,
+                  })
+                "
+                class="size-4"
+              />
+              {{ c.name }}
+            </span>
+            <Badge v-if="c.itemCount != null" variant="secondary">
+              {{ $t("pages.location.container_item_count", { count: c.itemCount }) }}
+            </Badge>
+          </NuxtLink>
+        </div>
+      </section>
+
       <!-- Child locations -->
-      <section v-if="location && location.children && location.children.length > 0" class="mt-6">
+      <section v-if="location && childLocations.length > 0" class="mt-6">
         <BaseSectionHeader class="mb-5"> {{ $t("locations.child_locations") }} </BaseSectionHeader>
         <div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
-          <LocationCard v-for="child in location.children" :key="child.id" :location="child" />
+          <LocationCard v-for="child in childLocations" :key="child.id" :location="child" />
         </div>
       </section>
     </div>

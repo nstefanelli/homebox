@@ -136,6 +136,16 @@ func IncludeSoldFields(v bool) predicate.EntityTemplate {
 	return predicate.EntityTemplate(sql.FieldEQ(FieldIncludeSoldFields, v))
 }
 
+// PhotoPath applies equality check predicate on the "photo_path" field. It's identical to PhotoPathEQ.
+func PhotoPath(v string) predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldEQ(FieldPhotoPath, v))
+}
+
+// PhotoMimeType applies equality check predicate on the "photo_mime_type" field. It's identical to PhotoMimeTypeEQ.
+func PhotoMimeType(v string) predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldEQ(FieldPhotoMimeType, v))
+}
+
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.
 func CreatedAtEQ(v time.Time) predicate.EntityTemplate {
 	return predicate.EntityTemplate(sql.FieldEQ(FieldCreatedAt, v))
@@ -894,6 +904,156 @@ func IncludeSoldFieldsEQ(v bool) predicate.EntityTemplate {
 // IncludeSoldFieldsNEQ applies the NEQ predicate on the "include_sold_fields" field.
 func IncludeSoldFieldsNEQ(v bool) predicate.EntityTemplate {
 	return predicate.EntityTemplate(sql.FieldNEQ(FieldIncludeSoldFields, v))
+}
+
+// PhotoPathEQ applies the EQ predicate on the "photo_path" field.
+func PhotoPathEQ(v string) predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldEQ(FieldPhotoPath, v))
+}
+
+// PhotoPathNEQ applies the NEQ predicate on the "photo_path" field.
+func PhotoPathNEQ(v string) predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldNEQ(FieldPhotoPath, v))
+}
+
+// PhotoPathIn applies the In predicate on the "photo_path" field.
+func PhotoPathIn(vs ...string) predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldIn(FieldPhotoPath, vs...))
+}
+
+// PhotoPathNotIn applies the NotIn predicate on the "photo_path" field.
+func PhotoPathNotIn(vs ...string) predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldNotIn(FieldPhotoPath, vs...))
+}
+
+// PhotoPathGT applies the GT predicate on the "photo_path" field.
+func PhotoPathGT(v string) predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldGT(FieldPhotoPath, v))
+}
+
+// PhotoPathGTE applies the GTE predicate on the "photo_path" field.
+func PhotoPathGTE(v string) predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldGTE(FieldPhotoPath, v))
+}
+
+// PhotoPathLT applies the LT predicate on the "photo_path" field.
+func PhotoPathLT(v string) predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldLT(FieldPhotoPath, v))
+}
+
+// PhotoPathLTE applies the LTE predicate on the "photo_path" field.
+func PhotoPathLTE(v string) predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldLTE(FieldPhotoPath, v))
+}
+
+// PhotoPathContains applies the Contains predicate on the "photo_path" field.
+func PhotoPathContains(v string) predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldContains(FieldPhotoPath, v))
+}
+
+// PhotoPathHasPrefix applies the HasPrefix predicate on the "photo_path" field.
+func PhotoPathHasPrefix(v string) predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldHasPrefix(FieldPhotoPath, v))
+}
+
+// PhotoPathHasSuffix applies the HasSuffix predicate on the "photo_path" field.
+func PhotoPathHasSuffix(v string) predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldHasSuffix(FieldPhotoPath, v))
+}
+
+// PhotoPathIsNil applies the IsNil predicate on the "photo_path" field.
+func PhotoPathIsNil() predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldIsNull(FieldPhotoPath))
+}
+
+// PhotoPathNotNil applies the NotNil predicate on the "photo_path" field.
+func PhotoPathNotNil() predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldNotNull(FieldPhotoPath))
+}
+
+// PhotoPathEqualFold applies the EqualFold predicate on the "photo_path" field.
+func PhotoPathEqualFold(v string) predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldEqualFold(FieldPhotoPath, v))
+}
+
+// PhotoPathContainsFold applies the ContainsFold predicate on the "photo_path" field.
+func PhotoPathContainsFold(v string) predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldContainsFold(FieldPhotoPath, v))
+}
+
+// PhotoMimeTypeEQ applies the EQ predicate on the "photo_mime_type" field.
+func PhotoMimeTypeEQ(v string) predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldEQ(FieldPhotoMimeType, v))
+}
+
+// PhotoMimeTypeNEQ applies the NEQ predicate on the "photo_mime_type" field.
+func PhotoMimeTypeNEQ(v string) predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldNEQ(FieldPhotoMimeType, v))
+}
+
+// PhotoMimeTypeIn applies the In predicate on the "photo_mime_type" field.
+func PhotoMimeTypeIn(vs ...string) predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldIn(FieldPhotoMimeType, vs...))
+}
+
+// PhotoMimeTypeNotIn applies the NotIn predicate on the "photo_mime_type" field.
+func PhotoMimeTypeNotIn(vs ...string) predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldNotIn(FieldPhotoMimeType, vs...))
+}
+
+// PhotoMimeTypeGT applies the GT predicate on the "photo_mime_type" field.
+func PhotoMimeTypeGT(v string) predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldGT(FieldPhotoMimeType, v))
+}
+
+// PhotoMimeTypeGTE applies the GTE predicate on the "photo_mime_type" field.
+func PhotoMimeTypeGTE(v string) predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldGTE(FieldPhotoMimeType, v))
+}
+
+// PhotoMimeTypeLT applies the LT predicate on the "photo_mime_type" field.
+func PhotoMimeTypeLT(v string) predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldLT(FieldPhotoMimeType, v))
+}
+
+// PhotoMimeTypeLTE applies the LTE predicate on the "photo_mime_type" field.
+func PhotoMimeTypeLTE(v string) predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldLTE(FieldPhotoMimeType, v))
+}
+
+// PhotoMimeTypeContains applies the Contains predicate on the "photo_mime_type" field.
+func PhotoMimeTypeContains(v string) predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldContains(FieldPhotoMimeType, v))
+}
+
+// PhotoMimeTypeHasPrefix applies the HasPrefix predicate on the "photo_mime_type" field.
+func PhotoMimeTypeHasPrefix(v string) predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldHasPrefix(FieldPhotoMimeType, v))
+}
+
+// PhotoMimeTypeHasSuffix applies the HasSuffix predicate on the "photo_mime_type" field.
+func PhotoMimeTypeHasSuffix(v string) predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldHasSuffix(FieldPhotoMimeType, v))
+}
+
+// PhotoMimeTypeIsNil applies the IsNil predicate on the "photo_mime_type" field.
+func PhotoMimeTypeIsNil() predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldIsNull(FieldPhotoMimeType))
+}
+
+// PhotoMimeTypeNotNil applies the NotNil predicate on the "photo_mime_type" field.
+func PhotoMimeTypeNotNil() predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldNotNull(FieldPhotoMimeType))
+}
+
+// PhotoMimeTypeEqualFold applies the EqualFold predicate on the "photo_mime_type" field.
+func PhotoMimeTypeEqualFold(v string) predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldEqualFold(FieldPhotoMimeType, v))
+}
+
+// PhotoMimeTypeContainsFold applies the ContainsFold predicate on the "photo_mime_type" field.
+func PhotoMimeTypeContainsFold(v string) predicate.EntityTemplate {
+	return predicate.EntityTemplate(sql.FieldContainsFold(FieldPhotoMimeType, v))
 }
 
 // DefaultTagIdsIsNil applies the IsNil predicate on the "default_tag_ids" field.

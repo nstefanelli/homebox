@@ -195,6 +195,8 @@ export interface EntEntity {
    * The values are being populated by the EntityQuery when eager-loading is set.
    */
   edges: EntEntityEdges;
+  /** Icon holds the value of the "icon" field. */
+  icon: string;
   /** ID of the ent. */
   id: string;
   /** ImportRef holds the value of the "import_ref" field. */
@@ -331,6 +333,10 @@ export interface EntEntityTemplate {
   name: string;
   /** Notes holds the value of the "notes" field. */
   notes: string;
+  /** PhotoMimeType holds the value of the "photo_mime_type" field. */
+  photo_mime_type: string;
+  /** Storage path of the template photo; copied as primary photo to created entities */
+  photo_path: string;
   /** UpdatedAt holds the value of the "updated_at" field. */
   updated_at: string;
 }
@@ -358,6 +364,8 @@ export interface EntEntityType {
   icon: string;
   /** ID of the ent. */
   id: string;
+  /** Container types are movable holders (totes/bins); requires is_location */
+  is_container: boolean;
   /** IsLocation holds the value of the "is_location" field. */
   is_location: boolean;
   /** Name holds the value of the "name" field. */
@@ -745,6 +753,15 @@ export interface EntityCreate {
   /** @maxLength 1000 */
   description: string;
   entityTypeId: string;
+  /** @maxLength 255 */
+  icon: string;
+  /** @maxLength 255 */
+  manufacturer: string;
+  /**
+   * Identifications
+   * @maxLength 255
+   */
+  modelNumber: string;
   /**
    * @minLength 1
    * @maxLength 255
@@ -784,6 +801,7 @@ export interface EntityOut {
   description: string;
   entityType?: EntityTypeSummary | null;
   fields: EntityFieldData[];
+  icon: string;
   id: string;
   imageId?: string | null;
   insured: boolean;
@@ -827,9 +845,12 @@ export interface EntityPatch {
 }
 
 export interface EntityPath {
+  icon: string;
   id: string;
+  isContainer: boolean;
   name: string;
   type: EntityPathType;
+  typeIcon: string;
 }
 
 export interface EntitySummary {
@@ -839,6 +860,7 @@ export interface EntitySummary {
   createdAt: Date | string;
   description: string;
   entityType?: EntityTypeSummary | null;
+  icon: string;
   id: string;
   imageId?: string | null;
   insured: boolean;
@@ -915,6 +937,9 @@ export interface EntityTemplateOut {
   includeWarrantyFields: boolean;
   name: string;
   notes: string;
+  photoMimeType: string;
+  /** Template photo (copied as the primary photo to entities created from this template) */
+  photoPath: string;
   updatedAt: Date | string;
 }
 
@@ -965,6 +990,7 @@ export interface EntityTemplateUpdate {
 export interface EntityTypeCreate {
   defaultTemplateId: string;
   icon: string;
+  isContainer: boolean;
   isLocation: boolean;
   name: string;
 }
@@ -976,6 +1002,7 @@ export interface EntityTypeSummary {
   description: string;
   icon: string;
   id: string;
+  isContainer: boolean;
   isLocation: boolean;
   name: string;
   updatedAt: Date | string;
@@ -985,6 +1012,7 @@ export interface EntityTypeUpdate {
   defaultTemplateId: string;
   icon: string;
   id: string;
+  isContainer: boolean;
   isLocation: boolean;
   name: string;
 }
@@ -996,6 +1024,8 @@ export interface EntityUpdate {
   description: string;
   entityTypeId: string;
   fields: EntityFieldData[];
+  /** @maxLength 255 */
+  icon: string;
   id: string;
   insured: boolean;
   /** Warranty */
@@ -1255,9 +1285,12 @@ export interface TotalsByOrganizer {
 
 export interface TreeItem {
   children: TreeItem[];
+  icon: string;
   id: string;
+  isContainer: boolean;
   name: string;
   type: string;
+  typeIcon: string;
 }
 
 export interface UserOut {
@@ -1308,7 +1341,18 @@ export interface UserRegistration {
   token: string;
 }
 
+export interface TypesGroupIntegrations {
+  aiApiKey: string;
+  aiBaseUrl: string;
+  aiModel: string;
+  /** "" inherit env | "disabled" force off | "openai_compatible" | "anthropic" */
+  aiProvider: string;
+  barcodeTokenBarcodespider: string;
+  openFoodFactsContact: string;
+}
+
 export interface APISummary {
+  aiPhotoAnalysis: boolean;
   allowRegistration: boolean;
   build: Build;
   demo: boolean;
@@ -1326,10 +1370,32 @@ export interface ActionAmountResult {
   completed: number;
 }
 
+export interface AnalyzeBulkResponse {
+  candidates: BulkItemCandidate[];
+  lane: string;
+}
+
+export interface AnalyzePhotoResponse {
+  categoryHints: string[];
+  confidence: number;
+  lane: string;
+  products: BarcodeProduct[];
+}
+
 export interface Build {
   buildTime: string;
   commit: string;
   version: string;
+}
+
+export interface BulkItemCandidate {
+  categoryHints: string[];
+  confidence: number;
+  description: string;
+  manufacturer: string;
+  modelNumber: string;
+  name: string;
+  quantity: number;
 }
 
 export interface ChangePassword {
@@ -1339,6 +1405,21 @@ export interface ChangePassword {
 
 export interface CreateRequest {
   name: string;
+}
+
+export interface EntityTemplateBatchCreateRequest {
+  /**
+   * @min 1
+   * @max 100
+   */
+  count: number;
+  entityTypeId: string;
+  /** @maxLength 240 */
+  namePrefix: string;
+  parentId: string;
+  /** @min 1 */
+  startNumber: number;
+  tagIds: string[];
 }
 
 export interface EntityTemplateCreateItemRequest {
@@ -1367,6 +1448,22 @@ export interface ForgotPasswordRequest {
 export interface GroupAcceptInvitationResponse {
   id: string;
   name: string;
+}
+
+export interface GroupIntegrationsOut {
+  aiApiKey: string;
+  aiBaseUrl: string;
+  aiConfigured: boolean;
+  aiModel: string;
+  /** "" inherit env | "disabled" force off | "openai_compatible" | "anthropic" */
+  aiProvider: string;
+  barcodeTokenBarcodespider: string;
+  barcodespiderConfigured: boolean;
+  envAiBaseUrl: string;
+  envAiModel: string;
+  envAiProvider: string;
+  isOwner: boolean;
+  openFoodFactsContact: string;
 }
 
 export interface GroupInvitation {
@@ -1413,6 +1510,11 @@ export interface ResultsRepoExportOut {
 
 export interface TelemetryStatus {
   enabled: boolean;
+}
+
+export interface TestConnectionResponse {
+  detail: string;
+  ok: boolean;
 }
 
 export interface TokenResponse {

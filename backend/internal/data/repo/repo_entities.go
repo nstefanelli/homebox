@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -66,6 +68,7 @@ type (
 		SortBy           string       `json:"sortBy"`
 		IncludeArchived  bool         `json:"includeArchived"`
 		IsLocation       *bool        `json:"isLocation"`     // nil=all, true=locations only, false=items only
+		IsContainer      *bool        `json:"isContainer"`    // nil=any, true=container types only, false=non-containers
 		FilterChildren   bool         `json:"filterChildren"` // when true, only return root entities (no parent)
 		Fields           []FieldQuery `json:"fields"`
 		OrderBy          string       `json:"orderBy"`
@@ -96,6 +99,11 @@ type (
 		AssetID      AssetID   `json:"-"`
 		EntityTypeID uuid.UUID `json:"entityTypeId"`
 
+		// Identifications
+		ModelNumber  string `json:"modelNumber"  validate:"max=255"`
+		Manufacturer string `json:"manufacturer" validate:"max=255"`
+		Icon         string `json:"icon"         validate:"max=255"`
+
 		// Edges
 		TagIDs []uuid.UUID `json:"tagIds"`
 	}
@@ -119,6 +127,7 @@ type (
 		SerialNumber string `json:"serialNumber"`
 		ModelNumber  string `json:"modelNumber"`
 		Manufacturer string `json:"manufacturer"`
+		Icon         string `json:"icon"         validate:"max=255"`
 
 		// Warranty
 		LifetimeWarranty bool       `json:"lifetimeWarranty"`
@@ -156,6 +165,7 @@ type (
 		AssetID     AssetID   `json:"assetId,string"`
 		Name        string    `json:"name"`
 		Description string    `json:"description"`
+		Icon        string    `json:"icon"`
 		Quantity    float64   `json:"quantity"`
 		Insured     bool      `json:"insured"`
 		Archived    bool      `json:"archived"`
@@ -258,6 +268,7 @@ func mapEntitySummary(e *ent.Entity) EntitySummary {
 		AssetID:       AssetID(e.AssetID),
 		Name:          e.Name,
 		Description:   e.Description,
+		Icon:          e.Icon,
 		ImportRef:     e.ImportRef,
 		Quantity:      e.Quantity,
 		CreatedAt:     e.CreatedAt,
@@ -521,6 +532,11 @@ func entityQuerySpanAttrs(gid uuid.UUID, q EntityQuery) []attribute.KeyValue {
 	if isLocSet {
 		isLocValue = *q.IsLocation
 	}
+	isContSet := q.IsContainer != nil
+	isContValue := false
+	if isContSet {
+		isContValue = *q.IsContainer
+	}
 	return []attribute.KeyValue{
 		attribute.String("group.id", gid.String()),
 		attribute.Int("query.page", q.Page),
@@ -538,6 +554,8 @@ func entityQuerySpanAttrs(gid uuid.UUID, q EntityQuery) []attribute.KeyValue {
 		attribute.String("query.order_by", q.OrderBy),
 		attribute.Bool("query.is_location.set", isLocSet),
 		attribute.Bool("query.is_location.value", isLocValue),
+		attribute.Bool("query.is_container.set", isContSet),
+		attribute.Bool("query.is_container.value", isContValue),
 		attribute.Bool("query.asset_id.set", !q.AssetID.Nil()),
 	}
 }
@@ -565,6 +583,21 @@ func (r *EntityRepository) QueryByGroup(ctx context.Context, gid uuid.UUID, q En
 				entity.HasEntityTypeWith(entitytype.IsLocation(false)),
 			),
 		)
+	}
+
+	// Filter by container flag when specified (composes with IsLocation above).
+	if q.IsContainer != nil {
+		if *q.IsContainer {
+			qb = qb.Where(entity.HasEntityTypeWith(entitytype.IsContainer(true)))
+		} else {
+			// Entities with no entity type are trivially not containers.
+			qb = qb.Where(
+				entity.Or(
+					entity.Not(entity.HasEntityType()),
+					entity.HasEntityTypeWith(entitytype.IsContainer(false)),
+				),
+			)
+		}
 	}
 
 	if q.FilterChildren {
@@ -1015,6 +1048,9 @@ func (r *EntityRepository) Create(ctx context.Context, gid uuid.UUID, data Entit
 		SetName(data.Name).
 		SetQuantity(data.Quantity).
 		SetDescription(data.Description).
+		SetModelNumber(data.ModelNumber).
+		SetManufacturer(data.Manufacturer).
+		SetIcon(data.Icon).
 		SetGroupID(gid).
 		SetAssetID(int64(data.AssetID))
 
@@ -1065,6 +1101,19 @@ type EntityCreateFromTemplate struct {
 	LifetimeWarranty bool
 	WarrantyDetails  string
 	Fields           []EntityFieldData
+
+	// Template photo to copy onto the created entity (blob is shared, row per entity)
+	PhotoPath     string `json:"photoPath,omitempty"`
+	PhotoMimeType string `json:"photoMimeType,omitempty"`
+}
+
+// EntityBatchCreateFromTemplate contains the data needed to create Count numbered
+// entities from a single template in one transaction.
+type EntityBatchCreateFromTemplate struct {
+	Template    EntityCreateFromTemplate `json:"template"`
+	Count       int                      `json:"count"`
+	NamePrefix  string                   `json:"namePrefix"`
+	StartNumber int                      `json:"startNumber"` // 0 = infer from existing names
 }
 
 // CreateFromTemplate creates an entity with all template data in a single transaction.
@@ -1136,18 +1185,49 @@ func (r *EntityRepository) CreateFromTemplate(ctx context.Context, gid uuid.UUID
 	nextAssetID++
 	span.SetAttributes(attribute.Int64("entity.asset_id", int64(nextAssetID)))
 
-	// Create entity with all template data
-	newEntityID := uuid.New()
+	newEntityID, err := r.createFromTemplateTx(ctx, tx, gid, data, nextAssetID)
+	if err != nil {
+		recordSpanError(span, err)
+		return EntityOut{}, err
+	}
 	span.SetAttributes(attribute.String("entity.id", newEntityID.String()))
 
-	entityCtx, entitySpan := entityTracer().Start(ctx, "repo.EntityRepository.CreateFromTemplate.entity")
+	_, commitSpan := entityTracer().Start(ctx, "repo.EntityRepository.CreateFromTemplate.commit")
+	if err = tx.Commit(); err != nil {
+		recordSpanError(commitSpan, err)
+		commitSpan.End()
+		recordSpanError(span, err)
+		return EntityOut{}, err
+	}
+	commitSpan.End()
+	committed = true
+
+	r.publishMutationEvent(gid)
+	out, err := r.GetOne(ctx, newEntityID)
+	recordSpanError(span, err)
+	return out, err
+}
+
+// createFromTemplateTx creates one entity from template data inside an existing
+// transaction and returns the new entity's ID. assetID must be pre-assigned by
+// the caller (e.g. via GetHighestAssetIDTx), since callers that create multiple
+// entities in one transaction (see CreateFromTemplateBatch) need to increment it
+// themselves between calls.
+func (r *EntityRepository) createFromTemplateTx(ctx context.Context, tx *ent.Tx, gid uuid.UUID, data EntityCreateFromTemplate, assetID AssetID) (uuid.UUID, error) {
+	newEntityID := uuid.New()
+
+	entityCtx, entitySpan := entityTracer().Start(ctx, "repo.EntityRepository.createFromTemplateTx.entity",
+		trace.WithAttributes(
+			attribute.String("entity.id", newEntityID.String()),
+			attribute.Int64("entity.asset_id", int64(assetID)),
+		))
 	entityBuilder := tx.Entity.Create().
 		SetID(newEntityID).
 		SetName(data.Name).
 		SetDescription(data.Description).
 		SetQuantity(data.Quantity).
 		SetGroupID(gid).
-		SetAssetID(int64(nextAssetID)).
+		SetAssetID(int64(assetID)).
 		SetInsured(data.Insured).
 		SetManufacturer(data.Manufacturer).
 		SetModelNumber(data.ModelNumber).
@@ -1164,17 +1244,16 @@ func (r *EntityRepository) CreateFromTemplate(ctx context.Context, gid uuid.UUID
 		entityBuilder.AddTagIDs(data.TagIDs...)
 	}
 
-	_, err = entityBuilder.Save(entityCtx)
+	_, err := entityBuilder.Save(entityCtx)
 	if err != nil {
 		recordSpanError(entitySpan, err)
 		entitySpan.End()
-		recordSpanError(span, err)
-		return EntityOut{}, err
+		return uuid.Nil, err
 	}
 	entitySpan.End()
 
 	if len(data.Fields) > 0 {
-		fieldsCtx, fieldsSpan := entityTracer().Start(ctx, "repo.EntityRepository.CreateFromTemplate.fields",
+		fieldsCtx, fieldsSpan := entityTracer().Start(ctx, "repo.EntityRepository.createFromTemplateTx.fields",
 			trace.WithAttributes(attribute.Int("fields.count", len(data.Fields))))
 		for _, field := range data.Fields {
 			_, err = tx.EntityField.Create().
@@ -1187,27 +1266,177 @@ func (r *EntityRepository) CreateFromTemplate(ctx context.Context, gid uuid.UUID
 				wrapped := fmt.Errorf("failed to create field %s: %w", field.Name, err)
 				recordSpanError(fieldsSpan, wrapped)
 				fieldsSpan.End()
-				recordSpanError(span, wrapped)
-				return EntityOut{}, wrapped
+				return uuid.Nil, wrapped
 			}
 		}
 		fieldsSpan.End()
 	}
 
-	_, commitSpan := entityTracer().Start(ctx, "repo.EntityRepository.CreateFromTemplate.commit")
-	if err = tx.Commit(); err != nil {
-		recordSpanError(commitSpan, err)
-		commitSpan.End()
-		recordSpanError(span, err)
-		return EntityOut{}, err
+	// Copy the template photo as the entity's primary photo. Row-level copy with a
+	// shared content-addressed blob path — same pattern as Duplicate's attachment copy.
+	if data.PhotoPath != "" {
+		_, err = tx.Attachment.Create().
+			SetEntityID(newEntityID).
+			SetType(attachment.TypePhoto).
+			SetTitle("photo").
+			SetPath(data.PhotoPath).
+			SetMimeType(data.PhotoMimeType).
+			SetPrimary(true).
+			Save(ctx)
+		if err != nil {
+			return uuid.Nil, err
+		}
 	}
-	commitSpan.End()
-	committed = true
 
+	return newEntityID, nil
+}
+
+// nextBatchStartNumber returns 1 + the highest numeric suffix among entities in
+// the group named "<prefix> <number>".
+func (r *EntityRepository) nextBatchStartNumber(ctx context.Context, gid uuid.UUID, prefix string) (int, error) {
+	names, err := r.db.Entity.Query().
+		Where(
+			entity.HasGroupWith(group.ID(gid)),
+			entity.NameHasPrefix(prefix+" "),
+		).
+		Select(entity.FieldName).
+		Strings(ctx)
+	if err != nil {
+		return 0, err
+	}
+	re := regexp.MustCompile(`^` + regexp.QuoteMeta(prefix) + ` (\d+)$`)
+	maxN := 0
+	for _, n := range names {
+		if m := re.FindStringSubmatch(n); m != nil {
+			if v, aerr := strconv.Atoi(m[1]); aerr == nil && v > maxN {
+				maxN = v
+			}
+		}
+	}
+	return maxN + 1, nil
+}
+
+// CreateFromTemplateBatch creates Count numbered entities from template data in a
+// single transaction. Names are "<NamePrefix> NN" (zero-padded to 2). If
+// StartNumber is unset (< 1), the numbering continues from the highest existing
+// "<NamePrefix> NN"-named entity in the group.
+func (r *EntityRepository) CreateFromTemplateBatch(ctx context.Context, gid uuid.UUID, data EntityBatchCreateFromTemplate) ([]EntityOut, error) {
+	ctx, span := entityTracer().Start(ctx, "repo.EntityRepository.CreateFromTemplateBatch",
+		trace.WithAttributes(
+			attribute.String("group.id", gid.String()),
+			attribute.Int("batch.count", data.Count),
+			attribute.String("batch.name_prefix", data.NamePrefix),
+		))
+	defer span.End()
+
+	if data.Count < 1 || data.Count > 100 {
+		err := fmt.Errorf("count must be between 1 and 100, got %d", data.Count)
+		recordSpanError(span, err)
+		return nil, err
+	}
+	if data.NamePrefix == "" {
+		err := fmt.Errorf("namePrefix is required")
+		recordSpanError(span, err)
+		return nil, err
+	}
+
+	if err := validateQuantity("create entity from template batch", data.Template.Quantity); err != nil {
+		recordSpanError(span, err)
+		return nil, err
+	}
+
+	// Same group-ownership checks as CreateFromTemplate, run once up front for
+	// the whole batch (every entity in the batch shares the same template, so a
+	// per-item check would be redundant). Done before opening the tx so a
+	// rejected request doesn't leave a dangling transaction.
+	if err := assertEntityInGroup(ctx, r.db.Entity, gid, data.Template.ParentID); err != nil {
+		recordSpanError(span, err)
+		return nil, err
+	}
+	if err := assertEntityTypeInGroup(ctx, r.db.EntityType, gid, data.Template.EntityTypeID); err != nil {
+		recordSpanError(span, err)
+		return nil, err
+	}
+	if err := assertTagsInGroup(ctx, r.db.Tag, gid, data.Template.TagIDs); err != nil {
+		recordSpanError(span, err)
+		return nil, err
+	}
+
+	// entity_type is a required edge. The user-selected type takes precedence;
+	// fall back to the group's default item type when none was provided so
+	// creation from a template doesn't fail the required-edge validation. This
+	// mirrors CreateFromTemplate; the resolved ID is copied into every entity
+	// created for this batch below.
+	if data.Template.EntityTypeID == uuid.Nil {
+		etID, err := r.resolveDefaultEntityType(ctx, gid, false)
+		if err != nil {
+			recordSpanError(span, err)
+			return nil, err
+		}
+		data.Template.EntityTypeID = etID
+	}
+
+	start := data.StartNumber
+	if start < 1 {
+		var err error
+		start, err = r.nextBatchStartNumber(ctx, gid, data.NamePrefix)
+		if err != nil {
+			recordSpanError(span, err)
+			return nil, err
+		}
+	}
+
+	tx, err := r.db.Tx(ctx)
+	if err != nil {
+		recordSpanError(span, err)
+		return nil, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			if rerr := tx.Rollback(); rerr != nil {
+				log.Warn().Err(rerr).Msg("failed to rollback batch create transaction")
+			}
+		}
+	}()
+
+	nextAssetID, err := r.GetHighestAssetIDTx(ctx, tx, gid)
+	if err != nil {
+		recordSpanError(span, err)
+		return nil, err
+	}
+
+	ids := make([]uuid.UUID, 0, data.Count)
+	for i := 0; i < data.Count; i++ {
+		one := data.Template
+		one.Name = fmt.Sprintf("%s %02d", data.NamePrefix, start+i)
+		nextAssetID++
+
+		id, err := r.createFromTemplateTx(ctx, tx, gid, one, nextAssetID)
+		if err != nil {
+			recordSpanError(span, err)
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+
+	if err = tx.Commit(); err != nil {
+		recordSpanError(span, err)
+		return nil, err
+	}
+	committed = true
 	r.publishMutationEvent(gid)
-	out, err := r.GetOne(ctx, newEntityID)
-	recordSpanError(span, err)
-	return out, err
+
+	outs := make([]EntityOut, 0, len(ids))
+	for _, id := range ids {
+		out, err := r.GetOne(ctx, id)
+		if err != nil {
+			recordSpanError(span, err)
+			return nil, err
+		}
+		outs = append(outs, out)
+	}
+	return outs, nil
 }
 
 func (r *EntityRepository) Delete(ctx context.Context, id uuid.UUID) error {
@@ -1486,6 +1715,7 @@ func (r *EntityRepository) UpdateByGroup(ctx context.Context, gid uuid.UUID, dat
 		SetSerialNumber(data.SerialNumber).
 		SetModelNumber(data.ModelNumber).
 		SetManufacturer(data.Manufacturer).
+		SetIcon(data.Icon).
 		SetArchived(data.Archived).
 		SetPurchaseFrom(data.PurchaseFrom).
 		SetPurchasePrice(data.PurchasePrice).
@@ -2650,18 +2880,24 @@ func (r *EntityRepository) DeleteContainerByGroup(ctx context.Context, gid, id u
 // ============================================================================
 
 type TreeItem struct {
-	ID       uuid.UUID   `json:"id"`
-	Name     string      `json:"name"`
-	Type     string      `json:"type"`
-	Children []*TreeItem `json:"children"`
+	ID          uuid.UUID   `json:"id"`
+	Name        string      `json:"name"`
+	Type        string      `json:"type"`
+	Icon        string      `json:"icon"`
+	TypeIcon    string      `json:"typeIcon"`
+	IsContainer bool        `json:"isContainer"`
+	Children    []*TreeItem `json:"children"`
 }
 
 type FlatTreeItem struct {
-	ID       uuid.UUID
-	Name     string
-	Type     string
-	ParentID uuid.UUID
-	Level    int
+	ID          uuid.UUID
+	Name        string
+	Type        string
+	Icon        string
+	TypeIcon    string
+	IsContainer bool
+	ParentID    uuid.UUID
+	Level       int
 }
 
 type TreeQuery struct {
@@ -2676,9 +2912,12 @@ const (
 )
 
 type EntityPath struct {
-	Type EntityPathType `json:"type"`
-	ID   uuid.UUID      `json:"id"`
-	Name string         `json:"name"`
+	Type        EntityPathType `json:"type"`
+	ID          uuid.UUID      `json:"id"`
+	Name        string         `json:"name"`
+	Icon        string         `json:"icon"`
+	TypeIcon    string         `json:"typeIcon"`
+	IsContainer bool           `json:"isContainer"`
 }
 
 func (r *EntityRepository) PathForEntity(ctx context.Context, gid, entityID uuid.UUID) ([]EntityPath, error) {
@@ -2690,19 +2929,27 @@ func (r *EntityRepository) PathForEntity(ctx context.Context, gid, entityID uuid
 	defer span.End()
 
 	query := `WITH RECURSIVE entity_path AS (
-		SELECT id, name, entity_children
-		FROM entities
-		WHERE id = $1
-		AND group_entities = $2
+		SELECT e.id, e.name, e.entity_children,
+			COALESCE(e.icon, '') AS icon,
+			COALESCE(et.icon, '') AS type_icon,
+			COALESCE(et.is_container, false) AS is_container
+		FROM entities e
+		JOIN entity_types et ON et.id = e.entity_type_entities
+		WHERE e.id = $1
+		AND e.group_entities = $2
 
 		UNION ALL
 
-		SELECT e.id, e.name, e.entity_children
+		SELECT e.id, e.name, e.entity_children,
+			COALESCE(e.icon, '') AS icon,
+			COALESCE(et.icon, '') AS type_icon,
+			COALESCE(et.is_container, false) AS is_container
 		FROM entities e
+		JOIN entity_types et ON et.id = e.entity_type_entities
 		JOIN entity_path ep ON e.id = ep.entity_children
 	  )
 
-	  SELECT id, name
+	  SELECT id, name, icon, type_icon, is_container
 	  FROM entity_path`
 
 	queryCtx, querySpan := entityTracer().Start(ctx, "repo.EntityRepository.PathForEntity.query")
@@ -2720,7 +2967,7 @@ func (r *EntityRepository) PathForEntity(ctx context.Context, gid, entityID uuid
 	for rows.Next() {
 		var entry EntityPath
 		entry.Type = EntityPathTypeLocation
-		if err := rows.Scan(&entry.ID, &entry.Name); err != nil {
+		if err := rows.Scan(&entry.ID, &entry.Name, &entry.Icon, &entry.TypeIcon, &entry.IsContainer); err != nil {
 			recordSpanError(querySpan, err)
 			querySpan.End()
 			recordSpanError(span, err)
@@ -2754,13 +3001,16 @@ func (r *EntityRepository) Tree(ctx context.Context, gid uuid.UUID, tq TreeQuery
 	defer span.End()
 
 	query := `
-		WITH recursive entity_tree(id, NAME, parent_id, level, node_type) AS
+		WITH recursive entity_tree(id, NAME, parent_id, level, node_type, icon, type_icon, is_container) AS
 		(
 			SELECT  e.id,
 					e.NAME,
 					e.entity_children AS parent_id,
 					0 AS level,
-					CASE WHEN et.is_location THEN 'location' ELSE 'item' END AS node_type
+					CASE WHEN et.is_location THEN 'location' ELSE 'item' END AS node_type,
+					COALESCE(e.icon, '') AS icon,
+					COALESCE(et.icon, '') AS type_icon,
+					COALESCE(et.is_container, false) AS is_container
 			FROM    entities e
 			JOIN    entity_types et ON et.id = e.entity_type_entities
 			WHERE   e.entity_children IS NULL
@@ -2772,7 +3022,10 @@ func (r *EntityRepository) Tree(ctx context.Context, gid uuid.UUID, tq TreeQuery
 					c.NAME,
 					c.entity_children AS parent_id,
 					level + 1,
-					CASE WHEN ct.is_location THEN 'location' ELSE 'item' END AS node_type
+					CASE WHEN ct.is_location THEN 'location' ELSE 'item' END AS node_type,
+					COALESCE(c.icon, '') AS icon,
+					COALESCE(ct.icon, '') AS type_icon,
+					COALESCE(ct.is_container, false) AS is_container
 			FROM   entities c
 			JOIN   entity_types ct ON ct.id = c.entity_type_entities
 			JOIN   entity_tree p
@@ -2785,7 +3038,10 @@ func (r *EntityRepository) Tree(ctx context.Context, gid uuid.UUID, tq TreeQuery
 				 NAME,
 				 level,
 				 parent_id,
-				 node_type
+				 node_type,
+				 icon,
+				 type_icon,
+				 is_container
 		FROM    (
 					SELECT  *
 					FROM    entity_tree
@@ -2798,13 +3054,16 @@ func (r *EntityRepository) Tree(ctx context.Context, gid uuid.UUID, tq TreeQuery
 				 lower(NAME)`
 
 	if tq.WithItems {
-		itemQuery := `, item_tree(id, NAME, parent_id, level, node_type) AS
+		itemQuery := `, item_tree(id, NAME, parent_id, level, node_type, icon, type_icon, is_container) AS
 		(
 			SELECT  e.id,
 					e.NAME,
 					e.entity_children as parent_id,
 					0 AS level,
-					'item' AS node_type
+					'item' AS node_type,
+					COALESCE(e.icon, '') AS icon,
+					COALESCE(et.icon, '') AS type_icon,
+					COALESCE(et.is_container, false) AS is_container
 			FROM    entities e
 			JOIN    entity_types et ON et.id = e.entity_type_entities
 			WHERE   et.is_location = false
@@ -2816,7 +3075,10 @@ func (r *EntityRepository) Tree(ctx context.Context, gid uuid.UUID, tq TreeQuery
 					c.NAME,
 					c.entity_children AS parent_id,
 					level + 1,
-					'item' AS node_type
+					'item' AS node_type,
+					COALESCE(c.icon, '') AS icon,
+					COALESCE(ct.icon, '') AS type_icon,
+					COALESCE(ct.is_container, false) AS is_container
 			FROM    entities c
 			JOIN    entity_types ct ON ct.id = c.entity_type_entities
 			JOIN    item_tree p
@@ -2850,7 +3112,7 @@ func (r *EntityRepository) Tree(ctx context.Context, gid uuid.UUID, tq TreeQuery
 	var flatItems []FlatTreeItem
 	for rows.Next() {
 		var item FlatTreeItem
-		if err := rows.Scan(&item.ID, &item.Name, &item.Level, &item.ParentID, &item.Type); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.Level, &item.ParentID, &item.Type, &item.Icon, &item.TypeIcon, &item.IsContainer); err != nil {
 			recordSpanError(querySpan, err)
 			querySpan.End()
 			recordSpanError(span, err)
@@ -2888,10 +3150,13 @@ func ConvertEntitiesToTree(items []FlatTreeItem) []TreeItem {
 
 	for _, item := range items {
 		node := &TreeItem{
-			ID:       item.ID,
-			Name:     item.Name,
-			Type:     item.Type,
-			Children: []*TreeItem{},
+			ID:          item.ID,
+			Name:        item.Name,
+			Type:        item.Type,
+			Icon:        item.Icon,
+			TypeIcon:    item.TypeIcon,
+			IsContainer: item.IsContainer,
+			Children:    []*TreeItem{},
 		}
 
 		itemMap[item.ID] = node

@@ -1,5 +1,5 @@
 import { BaseAPI, route } from "../base";
-import type { ActionAmountResult } from "../types/data-contracts";
+import type { ActionAmountResult, AnalyzePhotoResponse, AnalyzeBulkResponse } from "../types/data-contracts";
 
 export class ActionsAPI extends BaseAPI {
   ensureAssetIDs() {
@@ -39,6 +39,28 @@ export class ActionsAPI extends BaseAPI {
     >({
       url: route("/actions/wipe-inventory"),
       body: options || {},
+    });
+  }
+
+  analyzePhoto(file: File | Blob, signal?: AbortSignal) {
+    const formData = new FormData();
+    formData.append("file", file);
+
+    return this.http.post<FormData, AnalyzePhotoResponse>({
+      url: route("/actions/analyze-photo"),
+      data: formData,
+      signal,
+    });
+  }
+
+  analyzePhotoBulk(file: File | Blob, signal?: AbortSignal) {
+    const formData = new FormData();
+    formData.append("file", file);
+
+    return this.http.post<FormData, AnalyzeBulkResponse>({
+      url: route("/actions/analyze-photo-bulk"),
+      data: formData,
+      signal,
     });
   }
 }

@@ -215,6 +215,20 @@ func (_c *EntityCreate) SetNillableManufacturer(v *string) *EntityCreate {
 	return _c
 }
 
+// SetIcon sets the "icon" field.
+func (_c *EntityCreate) SetIcon(v string) *EntityCreate {
+	_c.mutation.SetIcon(v)
+	return _c
+}
+
+// SetNillableIcon sets the "icon" field if the given value is not nil.
+func (_c *EntityCreate) SetNillableIcon(v *string) *EntityCreate {
+	if v != nil {
+		_c.SetIcon(*v)
+	}
+	return _c
+}
+
 // SetLifetimeWarranty sets the "lifetime_warranty" field.
 func (_c *EntityCreate) SetLifetimeWarranty(v bool) *EntityCreate {
 	_c.mutation.SetLifetimeWarranty(v)
@@ -627,6 +641,11 @@ func (_c *EntityCreate) check() error {
 			return &ValidationError{Name: "manufacturer", err: fmt.Errorf(`ent: validator failed for field "Entity.manufacturer": %w`, err)}
 		}
 	}
+	if v, ok := _c.mutation.Icon(); ok {
+		if err := entity.IconValidator(v); err != nil {
+			return &ValidationError{Name: "icon", err: fmt.Errorf(`ent: validator failed for field "Entity.icon": %w`, err)}
+		}
+	}
 	if _, ok := _c.mutation.LifetimeWarranty(); !ok {
 		return &ValidationError{Name: "lifetime_warranty", err: errors.New(`ent: missing required field "Entity.lifetime_warranty"`)}
 	}
@@ -742,6 +761,10 @@ func (_c *EntityCreate) createSpec() (*Entity, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Manufacturer(); ok {
 		_spec.SetField(entity.FieldManufacturer, field.TypeString, value)
 		_node.Manufacturer = value
+	}
+	if value, ok := _c.mutation.Icon(); ok {
+		_spec.SetField(entity.FieldIcon, field.TypeString, value)
+		_node.Icon = value
 	}
 	if value, ok := _c.mutation.LifetimeWarranty(); ok {
 		_spec.SetField(entity.FieldLifetimeWarranty, field.TypeBool, value)

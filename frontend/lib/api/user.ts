@@ -46,7 +46,7 @@ export class UserClient extends BaseAPI {
 
     this.tags = new TagsApi(requests);
     this.items = new ItemsApi(requests, attachmentToken);
-    this.templates = new TemplatesApi(requests);
+    this.templates = new TemplatesApi(requests, attachmentToken);
     this.entityTypes = new EntityTypesApi(requests);
     this.maintenance = new MaintenanceAPI(requests);
     this.group = new GroupApi(requests);

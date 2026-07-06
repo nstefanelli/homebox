@@ -11,6 +11,7 @@
     <WipeInventoryDialog />
     <TagCreateModal />
     <ItemBarcodeModal />
+    <LocationBulkCatalogDialog />
     <AppQuickMenuModal :actions="quickMenuActions" />
     <AppScannerModal />
     <CollectionCreateModal />
@@ -291,6 +292,7 @@
   import WipeInventoryDialog from "~/components/WipeInventoryDialog.vue";
   import TagCreateModal from "~/components/Tag/CreateModal.vue";
   import ItemBarcodeModal from "~/components/Item/BarcodeModal.vue";
+  import LocationBulkCatalogDialog from "~/components/Location/BulkCatalogDialog.vue";
   import AppQuickMenuModal from "~/components/App/QuickMenuModal.vue";
   import AppScannerModal from "~/components/App/ScannerModal.vue";
   import AppLogo from "~/components/App/Logo.vue";

@@ -25,6 +25,18 @@
   <a href="https://www.pikapods.com/pods?run=homebox"><img src="https://www.pikapods.com/static/run-button.svg"/></a>
 </p>
 
+## About this fork
+
+This is a personal fork ([nstefanelli/homebox](https://github.com/nstefanelli/homebox)) of [sysadminsmedia/homebox](https://github.com/sysadminsmedia/homebox) v0.26.2, adding five feature sets on top of upstream:
+
+- **Containers & totes** (`v0.26.2-containers.1`) — a `Container` entity type with nested contents, move/empty-container actions, batch container creation, and QR label queue printing for physical totes/bins.
+- **AI add-by-photo** (v0.26.2-ai-icons.1) — photograph an item and a vision-LLM prefills name/description/manufacturer/model/tag hints for you to verify before saving; if a barcode is visible in the photo it routes to the existing UPC lookup instead. Provider-pluggable via `HBOX_AI_PROVIDER` / `HBOX_AI_BASE_URL` / `HBOX_AI_API_KEY` / `HBOX_AI_MODEL` / `HBOX_AI_TIMEOUT_SECONDS` (OpenAI-compatible APIs, including local Ollama, or Anthropic). Leaving it unconfigured fully hides the feature.
+- **Entity icons** (v0.26.2-ai-icons.1) — customizable icons for locations and containers, with type-level defaults and per-entity overrides, rendered throughout the tree view, cards, selectors, and breadcrumbs.
+- **Bulk tote cataloging** (v0.26.2-phase3.1) — photograph multiple items in a container, review AI-generated candidates per item with edit/check/skip/retry, and batch-create entities into the target container. Contents-snapshot photos stored with the container.
+- **Integrations settings UI** (v0.26.2-phase3.1) — group-scoped database-backed AI provider, model, and barcode settings on the collection settings page, with environment variables as per-field fallback defaults, live-apply without restart, and test-connection endpoints for validation.
+
+See `CHANGELOG.md` for release-by-release detail.
+
 ## What is HomeBox
 
 HomeBox is the inventory and organization system built for the Home User! With a focus on simplicity and ease of use, Homebox is the perfect solution for your home inventory, organization, and management needs. While developing this project, We've tried to keep the following principles in mind:

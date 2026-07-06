@@ -126,6 +126,11 @@ func Manufacturer(v string) predicate.Entity {
 	return predicate.Entity(sql.FieldEQ(FieldManufacturer, v))
 }
 
+// Icon applies equality check predicate on the "icon" field. It's identical to IconEQ.
+func Icon(v string) predicate.Entity {
+	return predicate.Entity(sql.FieldEQ(FieldIcon, v))
+}
+
 // LifetimeWarranty applies equality check predicate on the "lifetime_warranty" field. It's identical to LifetimeWarrantyEQ.
 func LifetimeWarranty(v bool) predicate.Entity {
 	return predicate.Entity(sql.FieldEQ(FieldLifetimeWarranty, v))
@@ -879,6 +884,81 @@ func ManufacturerEqualFold(v string) predicate.Entity {
 // ManufacturerContainsFold applies the ContainsFold predicate on the "manufacturer" field.
 func ManufacturerContainsFold(v string) predicate.Entity {
 	return predicate.Entity(sql.FieldContainsFold(FieldManufacturer, v))
+}
+
+// IconEQ applies the EQ predicate on the "icon" field.
+func IconEQ(v string) predicate.Entity {
+	return predicate.Entity(sql.FieldEQ(FieldIcon, v))
+}
+
+// IconNEQ applies the NEQ predicate on the "icon" field.
+func IconNEQ(v string) predicate.Entity {
+	return predicate.Entity(sql.FieldNEQ(FieldIcon, v))
+}
+
+// IconIn applies the In predicate on the "icon" field.
+func IconIn(vs ...string) predicate.Entity {
+	return predicate.Entity(sql.FieldIn(FieldIcon, vs...))
+}
+
+// IconNotIn applies the NotIn predicate on the "icon" field.
+func IconNotIn(vs ...string) predicate.Entity {
+	return predicate.Entity(sql.FieldNotIn(FieldIcon, vs...))
+}
+
+// IconGT applies the GT predicate on the "icon" field.
+func IconGT(v string) predicate.Entity {
+	return predicate.Entity(sql.FieldGT(FieldIcon, v))
+}
+
+// IconGTE applies the GTE predicate on the "icon" field.
+func IconGTE(v string) predicate.Entity {
+	return predicate.Entity(sql.FieldGTE(FieldIcon, v))
+}
+
+// IconLT applies the LT predicate on the "icon" field.
+func IconLT(v string) predicate.Entity {
+	return predicate.Entity(sql.FieldLT(FieldIcon, v))
+}
+
+// IconLTE applies the LTE predicate on the "icon" field.
+func IconLTE(v string) predicate.Entity {
+	return predicate.Entity(sql.FieldLTE(FieldIcon, v))
+}
+
+// IconContains applies the Contains predicate on the "icon" field.
+func IconContains(v string) predicate.Entity {
+	return predicate.Entity(sql.FieldContains(FieldIcon, v))
+}
+
+// IconHasPrefix applies the HasPrefix predicate on the "icon" field.
+func IconHasPrefix(v string) predicate.Entity {
+	return predicate.Entity(sql.FieldHasPrefix(FieldIcon, v))
+}
+
+// IconHasSuffix applies the HasSuffix predicate on the "icon" field.
+func IconHasSuffix(v string) predicate.Entity {
+	return predicate.Entity(sql.FieldHasSuffix(FieldIcon, v))
+}
+
+// IconIsNil applies the IsNil predicate on the "icon" field.
+func IconIsNil() predicate.Entity {
+	return predicate.Entity(sql.FieldIsNull(FieldIcon))
+}
+
+// IconNotNil applies the NotNil predicate on the "icon" field.
+func IconNotNil() predicate.Entity {
+	return predicate.Entity(sql.FieldNotNull(FieldIcon))
+}
+
+// IconEqualFold applies the EqualFold predicate on the "icon" field.
+func IconEqualFold(v string) predicate.Entity {
+	return predicate.Entity(sql.FieldEqualFold(FieldIcon, v))
+}
+
+// IconContainsFold applies the ContainsFold predicate on the "icon" field.
+func IconContainsFold(v string) predicate.Entity {
+	return predicate.Entity(sql.FieldContainsFold(FieldIcon, v))
 }
 
 // LifetimeWarrantyEQ applies the EQ predicate on the "lifetime_warranty" field.

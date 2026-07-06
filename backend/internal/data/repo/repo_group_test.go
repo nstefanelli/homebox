@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/sysadminsmedia/homebox/backend/internal/data/types"
 )
 
 func Test_Group_Create(t *testing.T) {
@@ -94,4 +95,32 @@ func Test_Group_IsMember(t *testing.T) {
 	isMember, err = tRepos.Groups.IsMember(ctx, group.ID, createdOther.ID)
 	require.NoError(t, err)
 	assert.False(t, isMember)
+}
+
+func Test_Group_Integrations_RoundTrip(t *testing.T) {
+	ctx := context.Background()
+
+	g, err := tRepos.Groups.GroupCreate(ctx, "integrations-round-trip", uuid.Nil)
+	require.NoError(t, err)
+
+	// Untouched group returns the zero value.
+	got, err := tRepos.Groups.IntegrationsGet(ctx, g.ID)
+	require.NoError(t, err)
+	assert.Equal(t, types.GroupIntegrations{}, got)
+
+	data := types.GroupIntegrations{
+		AIProvider:                "anthropic",
+		AIBaseURL:                 "https://api.anthropic.com",
+		AIAPIKey:                  "sk-test-key",
+		AIModel:                   "claude-3-5-sonnet",
+		BarcodeTokenBarcodespider: "bs-token",
+		OpenFoodFactsContact:      "test@example.com",
+	}
+
+	err = tRepos.Groups.IntegrationsSet(ctx, g.ID, data)
+	require.NoError(t, err)
+
+	got, err = tRepos.Groups.IntegrationsGet(ctx, g.ID)
+	require.NoError(t, err)
+	assert.Equal(t, data, got)
 }
