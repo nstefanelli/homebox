@@ -2,6 +2,11 @@
 
 All notable changes to this fork are documented in this file. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Upstream is [sysadminsmedia/homebox](https://github.com/sysadminsmedia/homebox); this file only covers fork-specific work on top of v0.26.2.
 
+## v0.26.2-phase3.2 - 2026-07-06
+
+### Fixed
+- Label printing clipped the outer label columns left and right in Safari (and shrank-to-fit in Chrome). The label sheet renders at the full physical page width with the Avery margins baked into its own padding; without an explicit `@page` rule the browser reserved its default print margins, pushing the full-width sheet past the printable area. Now emits a reactive `@page { size; margin: 0 }` sized to the current sheet so it prints 1:1, edge to edge.
+
 ## v0.26.2-phase3.1 - 2026-07-05
 
 ### Bulk tote cataloging
