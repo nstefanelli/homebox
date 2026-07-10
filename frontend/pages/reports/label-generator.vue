@@ -30,6 +30,22 @@
   const printLocationRow = ref(true);
   const labelBlankLine = "_______________";
 
+  // Per-printer alignment calibration: printers routinely place the page
+  // origin a small fraction of an inch off (feed registration), which shifts
+  // the whole full-bleed sheet relative to the physical die-cut labels and can
+  // shave the outer columns' content. Standard label-software fix: a user-set
+  // X/Y offset, persisted per browser. Applied as a paint-only translate on
+  // each sheet so grid geometry, pagination, and the @page rule are untouched.
+  // Units follow the sheet's measure setting (inches for presets).
+  const OFFSET_STORAGE_KEY = "homebox:labelPrintOffset";
+  const storedOffset = (() => {
+    try {
+      return JSON.parse(localStorage.getItem(OFFSET_STORAGE_KEY) ?? "{}");
+    } catch {
+      return {};
+    }
+  })();
+
   // Print-safe inset inside each label cell. The sheet prints full-bleed
   // (@page margin:0), so the outer columns' die-cut edges sit ~0.19in from the
   // paper edge — inside many printers' unprintable zone. Content flush to the
@@ -65,7 +81,14 @@
     pageBottomPadding: 0.42,
     pageLeftPadding: 0.25,
     pageRightPadding: 0.1,
+    printOffsetX: Number(storedOffset.x) || 0,
+    printOffsetY: Number(storedOffset.y) || 0,
   });
+
+  watch(
+    () => [displayProperties.printOffsetX, displayProperties.printOffsetY],
+    ([x, y]) => localStorage.setItem(OFFSET_STORAGE_KEY, JSON.stringify({ x, y }))
+  );
 
   // Print queue (Task 9 stores): when non-empty, the page renders the queued
   // entries (containers/locations/items picked elsewhere) instead of the
@@ -180,6 +203,14 @@
       {
         label: t("reports.label_generator.page_right_padding"),
         ref: "pageRightPadding",
+      },
+      {
+        label: t("reports.label_generator.print_offset_x"),
+        ref: "printOffsetX",
+      },
+      {
+        label: t("reports.label_generator.print_offset_y"),
+        ref: "printOffsetY",
       },
       {
         label: t("reports.label_generator.base_url"),
@@ -358,6 +389,16 @@
   useHead(() => ({
     style: printPageRule.value ? [{ id: "label-page-rule", innerHTML: printPageRule.value }] : [],
   }));
+
+  // Paint-only sheet shift from the calibration offsets; undefined (no
+  // transform) at 0/0. Number() guards the transient empty-string state while
+  // the user edits the inputs.
+  const printOffsetTransform = computed(() => {
+    const x = Number(displayProperties.printOffsetX) || 0;
+    const y = Number(displayProperties.printOffsetY) || 0;
+    if (!x && !y) return undefined;
+    return `translate(${x}${out.value.measure}, ${y}${out.value.measure})`;
+  });
 
   function calcPages() {
     // Set Out Dimensions
@@ -626,6 +667,8 @@
         // labels shifted ~0.25in up and they no longer register on the Avery
         // stock. break-before (not break-after) avoids a trailing blank page.
         breakBefore: pi > 0 ? 'page' : 'auto',
+        // Per-printer registration calibration (see printOffsetTransform).
+        transform: printOffsetTransform,
       }"
     >
       <div
@@ -654,17 +697,20 @@
               }"
             />
           </div>
+          <!-- Every line is clamped so the stack can never exceed the label
+               height: unclamped wrapping pushed the bottom line (always the
+               location row) past the overflow guard and it printed chopped. -->
           <div class="ml-2 flex min-w-0 flex-col justify-center overflow-hidden">
-            <div class="font-bold">{{ item.topLine }}</div>
+            <div class="line-clamp-2 font-bold">{{ item.topLine }}</div>
             <div
               v-if="getHomeBoxLineText(item)"
-              class="text-xs"
+              class="truncate text-xs"
               :class="{ 'font-light italic': getHomeBoxLineText(item) !== labelBlankLine }"
             >
               {{ getHomeBoxLineText(item) }}
             </div>
-            <div class="overflow-hidden text-wrap text-xs">{{ item.nameLine }}</div>
-            <div v-if="printLocationRow" class="text-xs">{{ item.locationLine }}</div>
+            <div class="line-clamp-2 text-wrap text-xs">{{ item.nameLine }}</div>
+            <div v-if="printLocationRow" class="truncate text-xs">{{ item.locationLine }}</div>
           </div>
         </template>
       </div>

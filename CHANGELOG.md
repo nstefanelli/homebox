@@ -2,6 +2,14 @@
 
 All notable changes to this fork are documented in this file. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Upstream is [sysadminsmedia/homebox](https://github.com/sysadminsmedia/homebox); this file only covers fork-specific work on top of v0.26.2.
 
+## v0.26.2-phase3.5 - 2026-07-10
+
+### Fixed
+- The phase3.4 overflow guard chopped the label's bottom text row (always the location line) whenever a long name wrapped past the label height. Every text line is now clamped so the stack always fits: name lines clamp to 2 lines with ellipsis, HomeBox and location rows truncate to a single ellipsized line.
+
+### Added
+- Print alignment calibration: new "Print Offset X/Y" inputs shift the whole rendered sheet by a fixed amount (sheet-measure units, negatives allowed, persisted per browser in localStorage). Compensates per-printer feed-registration offsets that shave outer-column content even when the layout is geometrically exact — the standard knob every dedicated label tool ships. Applied as a paint-only CSS translate, so grid geometry, pagination, and the `@page` rule are untouched (verified: 0.1 offset shifts ink extents by exactly 0.100in with pitch unchanged).
+
 ## v0.26.2-phase3.4 - 2026-07-10
 
 ### Fixed
