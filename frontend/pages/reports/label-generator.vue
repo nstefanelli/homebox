@@ -30,6 +30,15 @@
   const printLocationRow = ref(true);
   const labelBlankLine = "_______________";
 
+  // Print-safe inset inside each label cell. The sheet prints full-bleed
+  // (@page margin:0), so the outer columns' die-cut edges sit ~0.19in from the
+  // paper edge — inside many printers' unprintable zone. Content flush to the
+  // label edge gets shaved there (and is vulnerable to die-cut registration
+  // drift anyway). Absolute CSS unit on purpose: applies regardless of the
+  // sheet's measure setting. Bordered mode still draws at the true label edge
+  // (it marks the die-cut for alignment tests).
+  const LABEL_SAFE_INSET = "0.1in";
+
   // Behavior constants for HomeBox text replacement
   const BEHAVIOR_SHOW = "show";
   const BEHAVIOR_ALWAYS_REPLACE = "always_replace";
@@ -630,6 +639,8 @@
         :style="{
           height: `${out.card.height}${out.measure}`,
           width: `${out.card.width}${out.measure}`,
+          paddingLeft: LABEL_SAFE_INSET,
+          paddingRight: LABEL_SAFE_INSET,
         }"
       >
         <template v-if="item">
@@ -643,7 +654,7 @@
               }"
             />
           </div>
-          <div class="ml-2 flex flex-col justify-center">
+          <div class="ml-2 flex min-w-0 flex-col justify-center overflow-hidden">
             <div class="font-bold">{{ item.topLine }}</div>
             <div
               v-if="getHomeBoxLineText(item)"

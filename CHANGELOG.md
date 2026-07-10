@@ -2,6 +2,11 @@
 
 All notable changes to this fork are documented in this file. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Upstream is [sysadminsmedia/homebox](https://github.com/sysadminsmedia/homebox); this file only covers fork-specific work on top of v0.26.2.
 
+## v0.26.2-phase3.4 - 2026-07-10
+
+### Fixed
+- Label sheets print full-bleed (`@page { margin: 0 }`), but label content was laid out flush to each label's die-cut edge — on the outer columns that edge sits ~0.19in from the paper edge, inside many printers' unprintable zone, so the printer shaved the outer slivers (QR left edge on the left column, long text on the right) even though the rendered PDF was pixel-perfect. Labels now keep a 0.1in print-safe inset inside each cell (Avery's own templates do the same), and the text column is overflow-guarded so long names cannot paint past the inset. Sheet geometry is untouched: label pitch, die-cut registration, and multi-page alignment measure identical before/after (borders-on ink extents 0.187–8.307in, page-2 first row y=0.500in). Bordered mode still draws at the true label edge — it marks the die-cut for alignment tests, so its outer edges may still shave on printers with large margins.
+
 ## v0.26.2-phase3.3 - 2026-07-06
 
 ### Fixed
