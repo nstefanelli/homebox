@@ -1059,3 +1059,153 @@ func TestEntityRepository_PathForEntity_CarriesIconFields(t *testing.T) {
 	require.NoError(t, tRepos.Entities.Delete(ctx, c.ID))
 	require.NoError(t, tRepos.Entities.Delete(ctx, p.ID))
 }
+
+func TestEntityRepository_GetOne_DerivesNearestLocationAncestor(t *testing.T) {
+	ctx := context.Background()
+	locationET := useContainerEntityType(t)
+	itemET := useItemEntityType(t)
+
+	create := func(name string, entityTypeID, parentID uuid.UUID) EntityOut {
+		t.Helper()
+		out, err := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+			Name:         name,
+			Quantity:     1,
+			EntityTypeID: entityTypeID,
+			ParentID:     parentID,
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = tRepos.Entities.Delete(context.Background(), out.ID) })
+		return out
+	}
+
+	location := create("nearest-location", locationET.ID, uuid.Nil)
+	box := create("nearest-location-box", itemET.ID, location.ID)
+	nested := create("nearest-location-item", itemET.ID, box.ID)
+	direct := create("direct-location-item", itemET.ID, location.ID)
+
+	got, err := tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, nested.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.Parent)
+	assert.Equal(t, box.ID, got.Parent.ID)
+	require.NotNil(t, got.Location)
+	assert.Equal(t, location.ID, got.Location.ID)
+
+	got, err = tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, direct.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.Location)
+	assert.Equal(t, location.ID, got.Location.ID)
+
+	got, err = tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, location.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got.Location)
+}
+
+func TestEntityRepository_GetOne_DoesNotFollowLegacyForeignParent(t *testing.T) {
+	ctx := context.Background()
+	itemET := useItemEntityType(t)
+	own, err := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+		Name:         "legacy-cross-group-child",
+		Quantity:     1,
+		EntityTypeID: itemET.ID,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tRepos.Entities.Delete(context.Background(), own.ID) })
+
+	foreignGID, _, _ := makeForeignGroup(t)
+	foreignLocationET, err := tRepos.EntityTypes.GetDefault(ctx, foreignGID, true)
+	require.NoError(t, err)
+	foreignLocation, err := tRepos.Entities.Create(ctx, foreignGID, EntityCreate{
+		Name:         "foreign-location-must-not-leak",
+		Quantity:     1,
+		EntityTypeID: foreignLocationET.ID,
+	})
+	require.NoError(t, err)
+
+	_, err = tClient.Entity.UpdateOneID(own.ID).SetParentID(foreignLocation.ID).Save(ctx)
+	require.NoError(t, err)
+
+	got, err := tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, own.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got.Parent, "foreign direct parent must be filtered")
+	assert.Nil(t, got.Location, "foreign location ancestor must be filtered")
+}
+
+func TestEntityRepository_MovingEntityKeepsChildrenAttached(t *testing.T) {
+	ctx := context.Background()
+	locationET := useContainerEntityType(t)
+	itemET := useItemEntityType(t)
+
+	create := func(name string, entityTypeID, parentID uuid.UUID) EntityOut {
+		t.Helper()
+		out, err := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+			Name:         name,
+			Quantity:     1,
+			EntityTypeID: entityTypeID,
+			ParentID:     parentID,
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = tRepos.Entities.Delete(context.Background(), out.ID) })
+		return out
+	}
+
+	locationA := create("move-location-a", locationET.ID, uuid.Nil)
+	locationB := create("move-location-b", locationET.ID, uuid.Nil)
+	box := create("move-box", itemET.ID, locationA.ID)
+	child := create("move-child", itemET.ID, box.ID)
+
+	_, err := tRepos.Entities.UpdateByGroup(ctx, tGroup.ID, EntityUpdate{
+		ID:                       box.ID,
+		Name:                     box.Name,
+		Quantity:                 1,
+		EntityTypeID:             itemET.ID,
+		ParentID:                 locationB.ID,
+		SyncChildEntityLocations: true,
+	})
+	require.NoError(t, err)
+
+	got, err := tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, child.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.Parent)
+	assert.Equal(t, box.ID, got.Parent.ID, "moving a box must not flatten its children")
+	require.NotNil(t, got.Location)
+	assert.Equal(t, locationB.ID, got.Location.ID)
+
+	err = tRepos.Entities.Patch(ctx, tGroup.ID, box.ID, EntityPatch{ParentID: locationA.ID})
+	require.NoError(t, err)
+	got, err = tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, child.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.Parent)
+	assert.Equal(t, box.ID, got.Parent.ID)
+}
+
+func TestEntityRepository_RejectsNegativeQuantity(t *testing.T) {
+	ctx := context.Background()
+	itemET := useItemEntityType(t)
+
+	_, err := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+		Name:         "negative-create",
+		Quantity:     -1,
+		EntityTypeID: itemET.ID,
+	})
+	require.ErrorContains(t, err, "must not be negative")
+
+	created, err := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+		Name:         "negative-guard",
+		Quantity:     1,
+		EntityTypeID: itemET.ID,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tRepos.Entities.Delete(context.Background(), created.ID) })
+
+	_, err = tRepos.Entities.UpdateByGroup(ctx, tGroup.ID, EntityUpdate{
+		ID:           created.ID,
+		Name:         created.Name,
+		Quantity:     -2,
+		EntityTypeID: itemET.ID,
+	})
+	require.ErrorContains(t, err, "must not be negative")
+
+	negative := -3.0
+	err = tRepos.Entities.Patch(ctx, tGroup.ID, created.ID, EntityPatch{Quantity: &negative})
+	require.ErrorContains(t, err, "must not be negative")
+}

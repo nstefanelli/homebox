@@ -299,3 +299,74 @@ func Test_EntityTemplateGetOne_DoesNotExposeLegacyForeignDefaultTags(t *testing.
 	require.NoError(t, err)
 	assert.Empty(t, got.DefaultTags, "legacy foreign tag IDs must never expose foreign tag names")
 }
+
+func Test_HierarchyQueries_DoNotTraverseLegacyCrossGroupEdges(t *testing.T) {
+	ctx := context.Background()
+	ownLocationType := useContainerEntityType(t)
+	ownItemType := useItemEntityType(t)
+	ownLocation, err := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+		Name:         "own-location",
+		Quantity:     1,
+		EntityTypeID: ownLocationType.ID,
+	})
+	require.NoError(t, err)
+	ownItem, err := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+		Name:         "own-item",
+		Quantity:     1,
+		EntityTypeID: ownItemType.ID,
+	})
+	require.NoError(t, err)
+
+	foreignGID, _, foreignItemTypeID := makeForeignGroup(t)
+	foreignLocationType, err := tRepos.EntityTypes.GetDefault(ctx, foreignGID, true)
+	require.NoError(t, err)
+	foreignLocation, err := tRepos.Entities.Create(ctx, foreignGID, EntityCreate{
+		Name:         "foreign-location-secret",
+		Quantity:     1,
+		EntityTypeID: foreignLocationType.ID,
+	})
+	require.NoError(t, err)
+	foreignItem, err := tRepos.Entities.Create(ctx, foreignGID, EntityCreate{
+		Name:         "foreign-item-secret",
+		Quantity:     7,
+		EntityTypeID: foreignItemTypeID,
+	})
+	require.NoError(t, err)
+
+	// Simulate legacy corruption from the historical cross-tenant parent IDOR:
+	// an own row points to a foreign parent, and a foreign row points to an own
+	// container. Current write APIs reject both shapes.
+	_, err = tClient.Entity.UpdateOneID(ownItem.ID).SetParentID(foreignLocation.ID).Save(ctx)
+	require.NoError(t, err)
+	_, err = tClient.Entity.UpdateOneID(foreignItem.ID).SetParentID(ownLocation.ID).Save(ctx)
+	require.NoError(t, err)
+
+	path, err := tRepos.Entities.PathForEntity(ctx, tGroup.ID, ownItem.ID)
+	require.NoError(t, err)
+	require.Len(t, path, 1)
+	assert.Equal(t, ownItem.ID, path[0].ID)
+
+	tree, err := tRepos.Entities.Tree(ctx, tGroup.ID, TreeQuery{WithItems: true})
+	require.NoError(t, err)
+	var treeIDs []uuid.UUID
+	var walk func([]*TreeItem)
+	walk = func(items []*TreeItem) {
+		for _, item := range items {
+			treeIDs = append(treeIDs, item.ID)
+			walk(item.Children)
+		}
+	}
+	for i := range tree {
+		treeIDs = append(treeIDs, tree[i].ID)
+		walk(tree[i].Children)
+	}
+	assert.NotContains(t, treeIDs, foreignItem.ID)
+
+	containers, err := tRepos.Entities.GetAllContainers(ctx, tGroup.ID, ContainerQuery{})
+	require.NoError(t, err)
+	for _, container := range containers {
+		if container.ID == ownLocation.ID {
+			assert.Zero(t, container.ItemCount, "foreign children must not affect own container counts")
+		}
+	}
+}

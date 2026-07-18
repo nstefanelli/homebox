@@ -192,6 +192,9 @@ type (
 
 	EntityOut struct {
 		Parent *EntitySummary `json:"parent,omitempty" extensions:"x-nullable,x-omitempty"`
+		// Location is the nearest ancestor whose entity type is a location.
+		// It can differ from Parent when an item is nested in other entities.
+		Location *EntitySummary `json:"location,omitempty" extensions:"x-nullable,x-omitempty"`
 		EntitySummary
 		AssetID AssetID `json:"assetId,string"`
 
@@ -424,7 +427,12 @@ func (r *EntityRepository) publishMutationEvent(gid uuid.UUID) {
 	}
 }
 
-func (r *EntityRepository) getOneTx(ctx context.Context, tx *ent.Tx, where ...predicate.Entity) (EntityOut, error) {
+func (r *EntityRepository) getOneTx(
+	ctx context.Context,
+	tx *ent.Tx,
+	gid uuid.UUID,
+	where ...predicate.Entity,
+) (EntityOut, error) {
 	ctx, span := entityTracer().Start(ctx, "repo.EntityRepository.getOneTx",
 		trace.WithAttributes(
 			attribute.Bool("tx", tx != nil),
@@ -439,23 +447,67 @@ func (r *EntityRepository) getOneTx(ctx context.Context, tx *ent.Tx, where ...pr
 		q = r.db.Entity.Query().Where(where...)
 	}
 
-	out, err := mapEntityOutErr(q.
+	q = q.
 		WithFields().
-		WithTag().
-		WithParent(func(eq *ent.EntityQuery) {
-			eq.WithEntityType()
-		}).
-		WithEntityType().
 		WithGroup().
-		WithChildren(func(eq *ent.EntityQuery) {
-			eq.WithEntityType()
-		}).
-		WithAttachments().
-		Only(ctx),
-	)
+		WithAttachments()
+
+	if gid == uuid.Nil {
+		q = q.
+			WithTag().
+			WithParent(func(eq *ent.EntityQuery) {
+				eq.WithEntityType()
+			}).
+			WithEntityType().
+			WithChildren(func(eq *ent.EntityQuery) {
+				eq.WithEntityType()
+			})
+	} else {
+		q = q.
+			WithTag(func(tq *ent.TagQuery) {
+				tq.Where(tag.HasGroupWith(group.ID(gid)))
+			}).
+			WithParent(func(eq *ent.EntityQuery) {
+				eq.Where(entity.HasGroupWith(group.ID(gid))).
+					WithEntityType(func(etq *ent.EntityTypeQuery) {
+						etq.Where(entitytype.HasGroupWith(group.ID(gid)))
+					})
+			}).
+			WithEntityType(func(etq *ent.EntityTypeQuery) {
+				etq.Where(entitytype.HasGroupWith(group.ID(gid)))
+			}).
+			WithChildren(func(eq *ent.EntityQuery) {
+				eq.Where(entity.HasGroupWith(group.ID(gid))).
+					WithEntityType(func(etq *ent.EntityTypeQuery) {
+						etq.Where(entitytype.HasGroupWith(group.ID(gid)))
+					})
+			})
+	}
+
+	e, err := q.Only(ctx)
 	if err != nil {
 		recordSpanError(span, err)
-		return out, err
+		return EntityOut{}, err
+	}
+
+	out := mapEntityOut(e)
+	effectiveGID := gid
+	if effectiveGID == uuid.Nil && e.Edges.Group != nil {
+		effectiveGID = e.Edges.Group.ID
+	}
+	if effectiveGID != uuid.Nil {
+		var client *ent.EntityClient
+		if tx != nil {
+			client = tx.Entity
+		} else {
+			client = r.db.Entity
+		}
+		location, err := nearestLocationAncestor(ctx, client, effectiveGID, e.Edges.Parent)
+		if err != nil {
+			recordSpanError(span, err)
+			return EntityOut{}, err
+		}
+		out.Location = location
 	}
 	span.SetAttributes(
 		attribute.String("entity.id", out.ID.String()),
@@ -467,8 +519,74 @@ func (r *EntityRepository) getOneTx(ctx context.Context, tx *ent.Tx, where ...pr
 	return out, nil
 }
 
-func (r *EntityRepository) getOne(ctx context.Context, where ...predicate.Entity) (EntityOut, error) {
-	return r.getOneTx(ctx, nil, where...)
+// nearestLocationAncestor walks the parent chain and returns the first
+// location-type entity. Each hop is tenant-scoped to prevent legacy corrupt
+// cross-group edges from disclosing another group's hierarchy.
+func nearestLocationAncestor(
+	ctx context.Context,
+	entities *ent.EntityClient,
+	gid uuid.UUID,
+	start *ent.Entity,
+) (*EntitySummary, error) {
+	if start == nil {
+		return nil, nil
+	}
+
+	currentID := start.ID
+	seen := make(map[uuid.UUID]struct{}, maxHierarchyDepth)
+	for depth := 0; depth < maxHierarchyDepth; depth++ {
+		if _, ok := seen[currentID]; ok {
+			return nil, fmt.Errorf("entity hierarchy cycle detected while resolving location")
+		}
+		seen[currentID] = struct{}{}
+
+		current, err := entities.Query().
+			Where(
+				entity.ID(currentID),
+				entity.HasGroupWith(group.ID(gid)),
+			).
+			WithEntityType(func(etq *ent.EntityTypeQuery) {
+				etq.Where(entitytype.HasGroupWith(group.ID(gid)))
+			}).
+			Only(ctx)
+		if ent.IsNotFound(err) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if current.Edges.EntityType != nil && current.Edges.EntityType.IsLocation {
+			summary := mapEntitySummary(current)
+			return &summary, nil
+		}
+
+		parent, err := entities.Query().
+			Where(
+				entity.ID(currentID),
+				entity.HasGroupWith(group.ID(gid)),
+			).
+			QueryParent().
+			Where(entity.HasGroupWith(group.ID(gid))).
+			Select(entity.FieldID).
+			Only(ctx)
+		if ent.IsNotFound(err) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		currentID = parent.ID
+	}
+
+	return nil, fmt.Errorf("entity hierarchy exceeds maximum depth of %d", maxHierarchyDepth)
+}
+
+func (r *EntityRepository) getOne(
+	ctx context.Context,
+	gid uuid.UUID,
+	where ...predicate.Entity,
+) (EntityOut, error) {
+	return r.getOneTx(ctx, nil, gid, where...)
 }
 
 // GetOne returns a single entity by ID. If the entity does not exist, an error is returned.
@@ -477,7 +595,7 @@ func (r *EntityRepository) GetOne(ctx context.Context, id uuid.UUID) (EntityOut,
 		trace.WithAttributes(attribute.String("entity.id", id.String())))
 	defer span.End()
 
-	out, err := r.getOne(ctx, entity.ID(id))
+	out, err := r.getOne(ctx, uuid.Nil, entity.ID(id))
 	recordSpanError(span, err)
 	return out, err
 }
@@ -508,7 +626,7 @@ func (r *EntityRepository) GetByRef(ctx context.Context, gid uuid.UUID, ref stri
 		))
 	defer span.End()
 
-	out, err := r.getOne(ctx, entity.ImportRef(ref), entity.HasGroupWith(group.ID(gid)))
+	out, err := r.getOne(ctx, gid, entity.ImportRef(ref), entity.HasGroupWith(group.ID(gid)))
 	recordSpanError(span, err)
 	return out, err
 }
@@ -522,7 +640,7 @@ func (r *EntityRepository) GetOneByGroup(ctx context.Context, gid, id uuid.UUID)
 		))
 	defer span.End()
 
-	out, err := r.getOne(ctx, entity.ID(id), entity.HasGroupWith(group.ID(gid)))
+	out, err := r.getOne(ctx, gid, entity.ID(id), entity.HasGroupWith(group.ID(gid)))
 	recordSpanError(span, err)
 	return out, err
 }
@@ -1004,6 +1122,9 @@ func (r *EntityRepository) SetAssetID(ctx context.Context, gid uuid.UUID, id uui
 func validateQuantity(op string, quantity float64) error {
 	if math.IsNaN(quantity) || math.IsInf(quantity, 0) {
 		return fmt.Errorf("%s: invalid quantity: must be a finite number", op)
+	}
+	if quantity < 0 {
+		return fmt.Errorf("%s: invalid quantity: must not be negative", op)
 	}
 
 	return nil
@@ -1986,6 +2107,7 @@ func (r *EntityRepository) UpdateByGroup(ctx context.Context, gid uuid.UUID, dat
 	out, err := r.getOneTx(
 		ctx,
 		tx,
+		gid,
 		entity.ID(data.ID),
 		entity.HasGroupWith(group.ID(gid)),
 	)
@@ -2458,7 +2580,7 @@ func (r *EntityRepository) Duplicate(ctx context.Context, gid, id uuid.UUID, opt
 	}()
 
 	// Get the original entity with all its data
-	originalEntity, err := r.getOneTx(ctx, tx, entity.ID(id), entity.HasGroupWith(group.ID(gid)))
+	originalEntity, err := r.getOneTx(ctx, tx, gid, entity.ID(id), entity.HasGroupWith(group.ID(gid)))
 	if err != nil {
 		recordSpanError(span, err)
 		return EntityOut{}, err
@@ -2681,8 +2803,10 @@ func (r *EntityRepository) GetAllContainers(ctx context.Context, gid uuid.UUID, 
 					entity_types ct ON ct.id = child.entity_type_entities
 				WHERE
 					child.entity_children = e.id
+					AND child.group_entities = e.group_entities
 					AND child.archived = false
 					AND ct.is_location = false
+					AND ct.group_entity_types = e.group_entities
 			) as item_count
 		FROM
 			entities e
@@ -2691,6 +2815,7 @@ func (r *EntityRepository) GetAllContainers(ctx context.Context, gid uuid.UUID, 
 		WHERE
 			e.group_entities = $1
 			AND et.is_location = true
+			AND et.group_entity_types = $1
 			{{ FILTER_CHILDREN }}
 		ORDER BY
 			e.name ASC
@@ -2922,6 +3047,7 @@ func (r *EntityRepository) UpdateContainer(ctx context.Context, gid, id uuid.UUI
 	out, err := r.getOneTx(
 		ctx,
 		tx,
+		gid,
 		entity.ID(id),
 		entity.HasGroupWith(group.ID(gid)),
 	)
@@ -3015,28 +3141,34 @@ func (r *EntityRepository) PathForEntity(ctx context.Context, gid, entityID uuid
 		SELECT e.id, e.name, e.entity_children,
 			COALESCE(e.icon, '') AS icon,
 			COALESCE(et.icon, '') AS type_icon,
-			COALESCE(et.is_container, false) AS is_container
+			COALESCE(et.is_container, false) AS is_container,
+			0 AS depth
 		FROM entities e
 		JOIN entity_types et ON et.id = e.entity_type_entities
 		WHERE e.id = $1
 		AND e.group_entities = $2
+		AND et.group_entity_types = $2
 
 		UNION ALL
 
 		SELECT e.id, e.name, e.entity_children,
 			COALESCE(e.icon, '') AS icon,
 			COALESCE(et.icon, '') AS type_icon,
-			COALESCE(et.is_container, false) AS is_container
+			COALESCE(et.is_container, false) AS is_container,
+			ep.depth + 1
 		FROM entities e
 		JOIN entity_types et ON et.id = e.entity_type_entities
 		JOIN entity_path ep ON e.id = ep.entity_children
+		WHERE e.group_entities = $2
+		AND et.group_entity_types = $2
+		AND ep.depth < $3
 	  )
 
 	  SELECT id, name, icon, type_icon, is_container
 	  FROM entity_path`
 
 	queryCtx, querySpan := entityTracer().Start(ctx, "repo.EntityRepository.PathForEntity.query")
-	rows, err := r.db.Sql().QueryContext(queryCtx, query, entityID, gid)
+	rows, err := r.db.Sql().QueryContext(queryCtx, query, entityID, gid, maxHierarchyDepth-1)
 	if err != nil {
 		recordSpanError(querySpan, err)
 		querySpan.End()
@@ -3099,6 +3231,7 @@ func (r *EntityRepository) Tree(ctx context.Context, gid uuid.UUID, tq TreeQuery
 			WHERE   e.entity_children IS NULL
 			AND     e.group_entities = $1
 			AND     et.is_location = true
+			AND     et.group_entity_types = $1
 
 			UNION ALL
 			SELECT  c.id,
@@ -3113,8 +3246,10 @@ func (r *EntityRepository) Tree(ctx context.Context, gid uuid.UUID, tq TreeQuery
 			JOIN   entity_types ct ON ct.id = c.entity_type_entities
 			JOIN   entity_tree p
 			ON     c.entity_children = p.id
-			WHERE  level < 10 -- prevent infinite loop & excessive recursion
+			WHERE  level < $2 -- prevent infinite loop & excessive recursion
+			AND    c.group_entities = $1
 			AND    ct.is_location = true
+			AND    ct.group_entity_types = $1
 		){{ WITH_ITEMS }}
 
 		SELECT   id,
@@ -3150,6 +3285,8 @@ func (r *EntityRepository) Tree(ctx context.Context, gid uuid.UUID, tq TreeQuery
 			FROM    entities e
 			JOIN    entity_types et ON et.id = e.entity_type_entities
 			WHERE   et.is_location = false
+			AND     e.group_entities = $1
+			AND     et.group_entity_types = $1
 			AND     e.entity_children IN (SELECT id FROM entity_tree)
 
 			UNION ALL
@@ -3167,7 +3304,9 @@ func (r *EntityRepository) Tree(ctx context.Context, gid uuid.UUID, tq TreeQuery
 			JOIN    item_tree p
 			ON      c.entity_children = p.id
 			WHERE   ct.is_location = false
-			AND     level < 10 -- prevent infinite loop & excessive recursion
+			AND     c.group_entities = $1
+			AND     ct.group_entity_types = $1
+			AND     level < $2 -- prevent infinite loop & excessive recursion
 		)`
 
 		itemsFrom := `
@@ -3183,7 +3322,7 @@ func (r *EntityRepository) Tree(ctx context.Context, gid uuid.UUID, tq TreeQuery
 	}
 
 	queryCtx, querySpan := entityTracer().Start(ctx, "repo.EntityRepository.Tree.query")
-	rows, err := r.db.Sql().QueryContext(queryCtx, query, gid)
+	rows, err := r.db.Sql().QueryContext(queryCtx, query, gid, maxHierarchyDepth-1)
 	if err != nil {
 		recordSpanError(querySpan, err)
 		querySpan.End()
