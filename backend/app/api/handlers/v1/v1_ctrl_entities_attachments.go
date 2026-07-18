@@ -217,7 +217,7 @@ func (ctrl *V1Controller) handleEntityAttachmentsHandler(w http.ResponseWriter, 
 		getCtx, getSpan := startEntityCtrlSpan(spanCtx, "controller.V1.handleEntityAttachmentsHandler.get")
 		defer getSpan.End()
 
-		doc, err := ctrl.svc.Entities.AttachmentPath(getCtx, ctx.GID, attachmentID)
+		doc, err := ctrl.svc.Entities.AttachmentPath(getCtx, ctx.GID, ID, attachmentID)
 		if err != nil {
 			recordCtrlSpanError(getSpan, err)
 			recordCtrlSpanError(span, err)
@@ -298,7 +298,7 @@ func (ctrl *V1Controller) handleEntityAttachmentsHandler(w http.ResponseWriter, 
 		return nil
 
 	case http.MethodDelete:
-		err = ctrl.svc.Entities.AttachmentDelete(spanCtx, ctx.GID, attachmentID)
+		err = ctrl.svc.Entities.AttachmentDelete(spanCtx, ctx.GID, ID, attachmentID)
 		if err != nil {
 			recordCtrlSpanError(span, err)
 			log.Err(err).Msg("failed to delete attachment")

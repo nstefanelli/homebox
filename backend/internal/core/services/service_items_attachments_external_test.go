@@ -30,6 +30,15 @@ func newExternalLinkEntity(t *testing.T) repo.EntityOut {
 	return entity
 }
 
+func TestRedactExternalURLForTrace(t *testing.T) {
+	assert.Equal(
+		t,
+		"https://example.com/doc/42",
+		redactExternalURLForTrace("https://user:secret@example.com/doc/42?token=top-secret#fragment"),
+	)
+	assert.Empty(t, redactExternalURLForTrace("not-a-url"))
+}
+
 func TestEntityService_AttachmentAddExternalLink_DefaultType(t *testing.T) {
 	svc := &EntityService{repo: tRepos}
 	entity := newExternalLinkEntity(t)
@@ -133,7 +142,7 @@ func TestEntityService_AttachmentDelete_ExternalLink(t *testing.T) {
 	}
 	require.NotEqual(t, uuid.Nil, createdID)
 
-	err = svc.AttachmentDelete(tCtx, tCtx.GID, createdID)
+	err = svc.AttachmentDelete(tCtx, tCtx.GID, entity.ID, createdID)
 	require.NoError(t, err)
 
 	_, err = tRepos.Attachments.Get(context.Background(), tCtx.GID, createdID)

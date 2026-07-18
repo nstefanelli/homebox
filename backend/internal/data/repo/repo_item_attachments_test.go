@@ -1,7 +1,11 @@
 package repo
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
+	"errors"
+	"hash/crc32"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +18,12 @@ import (
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/attachment"
 	"github.com/sysadminsmedia/homebox/backend/internal/sys/config"
 )
+
+type alwaysFailReader struct{}
+
+func (alwaysFailReader) Read(_ []byte) (int, error) {
+	return 0, errors.New("injected read failure")
+}
 
 func TestMimeTypeForSourceType(t *testing.T) {
 	mime, ok := MimeTypeForSourceType("link")
@@ -112,10 +122,12 @@ func useAttachments(t *testing.T, n int) []*ent.Attachment {
 
 func TestAttachmentRepo_Update(t *testing.T) {
 	entity := useAttachments(t, 1)[0]
+	owner, err := entity.QueryEntity().Only(context.Background())
+	require.NoError(t, err)
 
 	for _, typ := range []attachment.Type{"photo", "manual", "warranty", "attachment"} {
 		t.Run(string(typ), func(t *testing.T) {
-			_, err := tRepos.Attachments.Update(context.Background(), tGroup.ID, entity.ID, &ItemAttachmentUpdate{
+			_, err = tRepos.Attachments.Update(context.Background(), tGroup.ID, owner.ID, entity.ID, &ItemAttachmentUpdate{
 				Type: string(typ),
 			})
 
@@ -126,6 +138,168 @@ func TestAttachmentRepo_Update(t *testing.T) {
 			assert.Equal(t, typ, updated.Type)
 		})
 	}
+}
+
+func TestAttachmentRepo_RouteEntityMustOwnAttachment(t *testing.T) {
+	ctx := context.Background()
+	entities := useEntities(t, 2)
+	att, err := tRepos.Attachments.Create(
+		ctx,
+		entities[1].ID,
+		ItemCreateAttachment{Title: "owned-by-second", Content: strings.NewReader("content")},
+		attachment.TypeManual,
+		false,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tRepos.Attachments.Delete(ctx, tGroup.ID, att.ID) })
+
+	_, err = tRepos.Attachments.GetForEntity(ctx, tGroup.ID, entities[0].ID, att.ID)
+	require.Error(t, err)
+	assert.True(t, ent.IsNotFound(err))
+
+	_, err = tRepos.Attachments.Update(ctx, tGroup.ID, entities[0].ID, att.ID, &ItemAttachmentUpdate{
+		Type:  attachment.TypeManual.String(),
+		Title: "must-not-change",
+	})
+	require.Error(t, err)
+	assert.True(t, ent.IsNotFound(err))
+
+	err = tRepos.Attachments.DeleteForEntity(ctx, tGroup.ID, entities[0].ID, att.ID)
+	require.Error(t, err)
+	assert.True(t, ent.IsNotFound(err))
+
+	got, err := tRepos.Attachments.GetForEntity(ctx, tGroup.ID, entities[1].ID, att.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "owned-by-second", got.Title)
+}
+
+func TestAttachmentRepo_UpdatePrimaryAndTitleAreAtomic(t *testing.T) {
+	ctx := context.Background()
+	entity := useEntities(t, 1)[0]
+	primary, err := tRepos.Attachments.Create(
+		ctx,
+		entity.ID,
+		ItemCreateAttachment{Title: "primary", Content: strings.NewReader("primary")},
+		attachment.TypePhoto,
+		true,
+	)
+	require.NoError(t, err)
+	other, err := tRepos.Attachments.Create(
+		ctx,
+		entity.ID,
+		ItemCreateAttachment{Title: "other", Content: strings.NewReader("other")},
+		attachment.TypePhoto,
+		false,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = tRepos.Attachments.Delete(ctx, tGroup.ID, primary.ID)
+		_ = tRepos.Attachments.Delete(ctx, tGroup.ID, other.ID)
+	})
+
+	_, err = tRepos.Attachments.Update(ctx, tGroup.ID, entity.ID, other.ID, &ItemAttachmentUpdate{
+		Type:    "invalid-attachment-type",
+		Title:   "must-roll-back",
+		Primary: true,
+	})
+	require.Error(t, err)
+
+	gotPrimary, err := tRepos.Attachments.Get(ctx, tGroup.ID, primary.ID)
+	require.NoError(t, err)
+	assert.True(t, gotPrimary.Primary)
+	gotOther, err := tRepos.Attachments.Get(ctx, tGroup.ID, other.ID)
+	require.NoError(t, err)
+	assert.False(t, gotOther.Primary)
+	assert.Equal(t, "other", gotOther.Title)
+}
+
+func TestAttachmentRepo_CreateFailureDoesNotClearExistingPrimary(t *testing.T) {
+	ctx := context.Background()
+	entity := useEntities(t, 1)[0]
+	primary, err := tRepos.Attachments.Create(
+		ctx,
+		entity.ID,
+		ItemCreateAttachment{Title: "primary", Content: strings.NewReader("primary")},
+		attachment.TypePhoto,
+		true,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tRepos.Attachments.Delete(ctx, tGroup.ID, primary.ID) })
+
+	_, err = tRepos.Attachments.Create(
+		ctx,
+		entity.ID,
+		ItemCreateAttachment{Title: "fails", Content: alwaysFailReader{}},
+		attachment.TypePhoto,
+		true,
+	)
+	require.Error(t, err)
+
+	got, err := tRepos.Attachments.Get(ctx, tGroup.ID, primary.ID)
+	require.NoError(t, err)
+	assert.True(t, got.Primary)
+}
+
+func TestAttachmentRepo_CreateReturnsSuccessAfterNotificationFailure(t *testing.T) {
+	ctx := context.Background()
+	entity := useEntities(t, 1)[0]
+	repos := New(
+		tClient,
+		tbus,
+		config.Storage{ConnString: "mem://attachment-notify", PrefixPath: "/"},
+		"{{",
+		config.Thumbnail{Enabled: true, Width: 128, Height: 128},
+	)
+
+	att, err := repos.Attachments.Create(
+		ctx,
+		entity.ID,
+		ItemCreateAttachment{Title: "saved-before-notify", Content: strings.NewReader("content")},
+		attachment.TypePhoto,
+		false,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, att)
+	t.Cleanup(func() { _ = tClient.Attachment.DeleteOneID(att.ID).Exec(context.Background()) })
+
+	_, err = repos.Attachments.Get(ctx, tGroup.ID, att.ID)
+	require.NoError(t, err)
+}
+
+func TestAttachmentRepo_CreateMissingThumbnailsReturnsPubSubConfigurationError(t *testing.T) {
+	repos := New(
+		tClient,
+		tbus,
+		config.Storage{ConnString: "mem://missing-thumbnails", PrefixPath: "/"},
+		"{{",
+		config.Thumbnail{Enabled: true, Width: 128, Height: 128},
+	)
+	_, err := repos.Attachments.CreateMissingThumbnails(context.Background(), tGroup.ID)
+	require.ErrorContains(t, err, "generate thumbnail pubsub connection")
+}
+
+func oversizedPNGHeader(width, height uint32) []byte {
+	var out bytes.Buffer
+	out.Write([]byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'})
+	_ = binary.Write(&out, binary.BigEndian, uint32(13))
+	out.WriteString("IHDR")
+	data := make([]byte, 13)
+	binary.BigEndian.PutUint32(data[0:4], width)
+	binary.BigEndian.PutUint32(data[4:8], height)
+	data[8] = 8 // bit depth
+	data[9] = 2 // truecolor
+	out.Write(data)
+	checksumInput := append([]byte("IHDR"), data...)
+	_ = binary.Write(&out, binary.BigEndian, crc32.ChecksumIEEE(checksumInput))
+	return out.Bytes()
+}
+
+func TestValidateThumbnailSourceDimensionsRejectsOversizedHeader(t *testing.T) {
+	err := validateThumbnailSourceDimensions(
+		"image/png",
+		oversizedPNGHeader(maxThumbnailSourceDimension+1, 1),
+	)
+	require.ErrorContains(t, err, "exceed maximum dimension")
 }
 
 func TestAttachmentRepo_Delete(t *testing.T) {
@@ -208,9 +382,11 @@ func TestAttachmentRepo_DeleteExternalLink_DoesNotRequireBlobStorage(t *testing.
 func TestAttachmentRepo_EnsureSinglePrimaryAttachment(t *testing.T) {
 	ctx := context.Background()
 	attachments := useAttachments(t, 2)
+	owner, err := attachments[0].QueryEntity().Only(ctx)
+	require.NoError(t, err)
 
 	setAndVerifyPrimary := func(primaryAttachmentID, nonPrimaryAttachmentID uuid.UUID) {
-		primaryAttachment, err := tRepos.Attachments.Update(ctx, tGroup.ID, primaryAttachmentID, &ItemAttachmentUpdate{
+		primaryAttachment, err := tRepos.Attachments.Update(ctx, tGroup.ID, owner.ID, primaryAttachmentID, &ItemAttachmentUpdate{
 			Type:    attachment.TypePhoto.String(),
 			Primary: true,
 		})
@@ -251,7 +427,7 @@ func TestAttachmentRepo_UpdateNonPhotoDoesNotAffectPrimaryPhoto(t *testing.T) {
 	assert.True(t, photoAttachment.Primary)
 
 	// Update the manual attachment (this should NOT affect the photo's primary status)
-	_, err = tRepos.Attachments.Update(ctx, tGroup.ID, manualAttachment.ID, &ItemAttachmentUpdate{
+	_, err = tRepos.Attachments.Update(ctx, tGroup.ID, entity.ID, manualAttachment.ID, &ItemAttachmentUpdate{
 		Type:    attachment.TypeManual.String(),
 		Title:   "Updated Manual",
 		Primary: false,
@@ -342,7 +518,7 @@ func TestAttachmentRepo_SettingPhotoPrimaryStillWorks(t *testing.T) {
 	assert.False(t, photo2.Primary)
 
 	// Now set photo2 as primary (this should work and remove primary from photo1)
-	photo2, err = tRepos.Attachments.Update(ctx, tGroup.ID, photo2.ID, &ItemAttachmentUpdate{
+	photo2, err = tRepos.Attachments.Update(ctx, tGroup.ID, entity.ID, photo2.ID, &ItemAttachmentUpdate{
 		Type:    attachment.TypePhoto.String(),
 		Title:   "Photo 2",
 		Primary: true,

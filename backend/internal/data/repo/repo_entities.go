@@ -450,7 +450,9 @@ func (r *EntityRepository) getOneTx(
 	q = q.
 		WithFields().
 		WithGroup().
-		WithAttachments()
+		WithAttachments(func(aq *ent.AttachmentQuery) {
+			aq.WithThumbnail()
+		})
 
 	if gid == uuid.Nil {
 		q = q.

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -14,7 +16,28 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-func (svc *EntityService) AttachmentPath(ctx context.Context, gid uuid.UUID, attachmentID uuid.UUID) (*ent.Attachment, error) {
+func redactExternalURLForTrace(raw string) string {
+	u, err := url.ParseRequestURI(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	if !strings.EqualFold(u.Scheme, "http") && !strings.EqualFold(u.Scheme, "https") {
+		return ""
+	}
+	if u.Host == "" {
+		return ""
+	}
+	u.User = nil
+	u.RawQuery = ""
+	u.ForceQuery = false
+	u.Fragment = ""
+	return u.String()
+}
+
+func (svc *EntityService) AttachmentPath(
+	ctx context.Context,
+	gid, entityID, attachmentID uuid.UUID,
+) (*ent.Attachment, error) {
 	ctx, span := entityServiceTracer().Start(ctx, "service.EntityService.AttachmentPath",
 		trace.WithAttributes(
 			attribute.String("group.id", gid.String()),
@@ -22,7 +45,7 @@ func (svc *EntityService) AttachmentPath(ctx context.Context, gid uuid.UUID, att
 		))
 	defer span.End()
 
-	attachment, err := svc.repo.Attachments.Get(ctx, gid, attachmentID)
+	attachment, err := svc.repo.Attachments.GetForEntity(ctx, gid, entityID, attachmentID)
 	if err != nil {
 		recordServiceSpanError(span, err)
 		return nil, err
@@ -45,7 +68,7 @@ func (svc *EntityService) AttachmentUpdate(ctx Context, gid uuid.UUID, entityID 
 	ctx.Context = spanCtx
 
 	updateCtx, updateSpan := entityServiceTracer().Start(spanCtx, "service.EntityService.AttachmentUpdate.update")
-	attachment, err := svc.repo.Attachments.Update(updateCtx, gid, data.ID, data)
+	_, err := svc.repo.Attachments.Update(updateCtx, gid, entityID, data.ID, data)
 	if err != nil {
 		recordServiceSpanError(updateSpan, err)
 		updateSpan.End()
@@ -53,16 +76,6 @@ func (svc *EntityService) AttachmentUpdate(ctx Context, gid uuid.UUID, entityID 
 		return repo.EntityOut{}, err
 	}
 	updateSpan.End()
-
-	renameCtx, renameSpan := entityServiceTracer().Start(spanCtx, "service.EntityService.AttachmentUpdate.rename")
-	_, err = svc.repo.Attachments.Rename(renameCtx, gid, attachment.ID, data.Title)
-	if err != nil {
-		recordServiceSpanError(renameSpan, err)
-		renameSpan.End()
-		recordServiceSpanError(span, err)
-		return repo.EntityOut{}, err
-	}
-	renameSpan.End()
 
 	out, err := svc.repo.Entities.GetOneByGroup(ctx, ctx.GID, entityID)
 	if err != nil {
@@ -120,7 +133,7 @@ func (svc *EntityService) AttachmentAddExternalLink(ctx Context, entityID uuid.U
 			attribute.String("group.id", ctx.GID.String()),
 			attribute.String("entity.id", entityID.String()),
 			attribute.String("integration.source_type", sourceType),
-			attribute.String("integration.external_id", externalID),
+			attribute.String("integration.external_id", redactExternalURLForTrace(externalID)),
 		))
 	defer span.End()
 	ctx.Context = spanCtx
@@ -160,7 +173,10 @@ func (svc *EntityService) AttachmentAddExternalLink(ctx Context, entityID uuid.U
 	return out, err
 }
 
-func (svc *EntityService) AttachmentDelete(ctx context.Context, gid uuid.UUID, attachmentID uuid.UUID) error {
+func (svc *EntityService) AttachmentDelete(
+	ctx context.Context,
+	gid, entityID, attachmentID uuid.UUID,
+) error {
 	ctx, span := entityServiceTracer().Start(ctx, "service.EntityService.AttachmentDelete",
 		trace.WithAttributes(
 			attribute.String("group.id", gid.String()),
@@ -168,7 +184,7 @@ func (svc *EntityService) AttachmentDelete(ctx context.Context, gid uuid.UUID, a
 		))
 	defer span.End()
 
-	err := svc.repo.Attachments.Delete(ctx, gid, attachmentID)
+	err := svc.repo.Attachments.DeleteForEntity(ctx, gid, entityID, attachmentID)
 	if err != nil {
 		recordServiceSpanError(span, err)
 		return err

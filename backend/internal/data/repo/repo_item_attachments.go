@@ -6,6 +6,9 @@ import (
 	"crypto/md5"
 	"fmt"
 	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"io/fs"
 	"net/http"
@@ -87,6 +90,14 @@ type (
 
 const MimeTypeLinkURL = "link/url"
 
+// Thumbnail source limits are enforced before full decode for every supported
+// raster format. This bounds worst-case decoder allocations from tiny,
+// maliciously crafted files with enormous dimensions.
+const (
+	maxThumbnailSourceDimension = 32_768
+	maxThumbnailSourcePixels    = 50_000_000
+)
+
 var externalLinkMimeTypes = []string{
 	MimeTypeLinkURL,
 }
@@ -119,7 +130,7 @@ func ToItemAttachment(attachment *ent.Attachment) ItemAttachment {
 		Path:      attachment.Path,
 		Title:     attachment.Title,
 		MimeType:  attachment.MimeType,
-		Thumbnail: attachment.QueryThumbnail().FirstX(context.Background()),
+		Thumbnail: attachment.Edges.Thumbnail,
 	}
 }
 
@@ -300,14 +311,10 @@ func (r *AttachmentRepo) Create(ctx context.Context, itemID uuid.UUID, doc ItemC
 	if err != nil {
 		return nil, err
 	}
-
-	// If there is an error during file creation rollback the database
+	committed := false
 	defer func() {
-		if v := recover(); v != nil {
-			err := tx.Rollback()
-			if err != nil {
-				return
-			}
+		if !committed {
+			_ = tx.Rollback()
 		}
 	}()
 
@@ -323,7 +330,7 @@ func (r *AttachmentRepo) Create(ctx context.Context, itemID uuid.UUID, doc ItemC
 
 	if typ == attachment.TypePhoto && primary {
 		bldr = bldr.SetPrimary(true)
-		err := r.db.Attachment.Update().
+		err := tx.Attachment.Update().
 			Where(
 				attachment.HasEntityWith(entity.ID(itemID)),
 				attachment.IDNEQ(bldrId),
@@ -332,10 +339,6 @@ func (r *AttachmentRepo) Create(ctx context.Context, itemID uuid.UUID, doc ItemC
 			Exec(ctx)
 		if err != nil {
 			log.Err(err).Msg("failed to remove primary from other attachments")
-			err := tx.Rollback()
-			if err != nil {
-				return nil, err
-			}
 			return nil, err
 		}
 	} else if typ == attachment.TypePhoto {
@@ -349,10 +352,6 @@ func (r *AttachmentRepo) Create(ctx context.Context, itemID uuid.UUID, doc ItemC
 			Count(ctx)
 		if err != nil {
 			log.Err(err).Msg("failed to count attachments")
-			err := tx.Rollback()
-			if err != nil {
-				return nil, err
-			}
 			return nil, err
 		}
 
@@ -365,19 +364,12 @@ func (r *AttachmentRepo) Create(ctx context.Context, itemID uuid.UUID, doc ItemC
 	itemGroup, err := tx.Entity.Query().QueryGroup().Where(group.HasEntitiesWith(entity.ID(itemID))).First(ctx)
 	if err != nil {
 		log.Err(err).Msg("failed to get item group")
-		err := tx.Rollback()
-		if err != nil {
-			return nil, err
-		}
 		return nil, err
 	}
 
 	// Upload the file to the storage bucket
 	uploadResult, err := r.UploadFile(ctx, itemGroup, doc)
 	if err != nil {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			return nil, rollbackErr
-		}
 		return nil, err
 	}
 
@@ -387,10 +379,6 @@ func (r *AttachmentRepo) Create(ctx context.Context, itemID uuid.UUID, doc ItemC
 	attachmentDb, err := bldr.Save(ctx)
 	if err != nil {
 		log.Err(err).Msg("failed to save attachment to database")
-		err = tx.Rollback()
-		if err != nil {
-			return nil, err
-		}
 		return nil, err
 	}
 
@@ -398,35 +386,38 @@ func (r *AttachmentRepo) Create(ctx context.Context, itemID uuid.UUID, doc ItemC
 		log.Err(err).Msg("failed to commit transaction")
 		return nil, err
 	}
+	committed = true
 
 	if r.thumbnail.Enabled {
 		pubsubString, err := utils.GenerateSubPubConn(r.pubSubConn, "thumbnails")
 		if err != nil {
-			log.Err(err).Msg("failed to generate pubsub connection string")
-			return nil, err
-		}
-		topic, err := pubsub.OpenTopic(ctx, pubsubString)
-		if err != nil {
-			log.Err(err).Msg("failed to open pubsub topic")
-			return nil, err
-		}
-
-		err = topic.Send(ctx, &pubsub.Message{
-			Body: []byte(fmt.Sprintf("attachment_created:%s", attachmentDb.ID.String())),
-			Metadata: map[string]string{
-				"group_id":      itemGroup.ID.String(),
-				"attachment_id": attachmentDb.ID.String(),
-				"title":         doc.Title,
-				"path":          attachmentDb.Path,
-			},
-		})
-		if err != nil {
-			log.Err(err).Msg("failed to send message to topic")
-			return nil, err
+			log.Warn().Err(err).Msg("attachment saved but thumbnail notification configuration is invalid")
+		} else {
+			topic, openErr := pubsub.OpenTopic(ctx, pubsubString)
+			if openErr != nil {
+				log.Warn().Err(openErr).Msg("attachment saved but thumbnail topic could not be opened")
+			} else {
+				defer func() {
+					if shutdownErr := topic.Shutdown(ctx); shutdownErr != nil {
+						log.Warn().Err(shutdownErr).Msg("failed to shut down thumbnail topic")
+					}
+				}()
+				if sendErr := topic.Send(ctx, &pubsub.Message{
+					Body: []byte(fmt.Sprintf("attachment_created:%s", attachmentDb.ID.String())),
+					Metadata: map[string]string{
+						"group_id":      itemGroup.ID.String(),
+						"attachment_id": attachmentDb.ID.String(),
+						"title":         doc.Title,
+						"path":          attachmentDb.Path,
+					},
+				}); sendErr != nil {
+					log.Warn().Err(sendErr).Msg("attachment saved but thumbnail notification failed")
+				}
+			}
 		}
 	}
 
-	return attachmentDb, nil
+	return r.Get(ctx, itemGroup.ID, attachmentDb.ID)
 }
 
 func (r *AttachmentRepo) CreateExternalLink(ctx context.Context, entityID uuid.UUID, externalID string, title string, mimeType string, attType attachment.Type) (*ent.Attachment, error) {
@@ -483,23 +474,65 @@ func (r *AttachmentRepo) Get(ctx context.Context, gid uuid.UUID, id uuid.UUID) (
 	}
 }
 
-func (r *AttachmentRepo) Update(ctx context.Context, gid uuid.UUID, id uuid.UUID, data *ItemAttachmentUpdate) (*ent.Attachment, error) {
-	// Validate that the attachment belongs to the specified group
-	_, err := r.db.Attachment.Query().
+// GetForEntity additionally verifies that id belongs to the entity identified
+// by the route. Thumbnail IDs are accepted when their source attachment
+// belongs to entityID.
+func (r *AttachmentRepo) GetForEntity(
+	ctx context.Context,
+	gid, entityID, id uuid.UUID,
+) (*ent.Attachment, error) {
+	return r.db.Attachment.Query().
 		Where(
 			attachment.ID(id),
-			attachment.HasEntityWith(entity.HasGroupWith(group.ID(gid))),
+			attachment.Or(
+				attachment.HasEntityWith(
+					entity.ID(entityID),
+					entity.HasGroupWith(group.ID(gid)),
+				),
+				attachment.HasThumbnailWith(attachment.HasEntityWith(
+					entity.ID(entityID),
+					entity.HasGroupWith(group.ID(gid)),
+				)),
+			),
+		).
+		WithEntity().
+		WithThumbnail().
+		Only(ctx)
+}
+
+func (r *AttachmentRepo) Update(
+	ctx context.Context,
+	gid, entityID, id uuid.UUID,
+	data *ItemAttachmentUpdate,
+) (*ent.Attachment, error) {
+	tx, err := r.db.Tx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	current, err := tx.Attachment.Query().
+		Where(
+			attachment.ID(id),
+			attachment.HasEntityWith(
+				entity.ID(entityID),
+				entity.HasGroupWith(group.ID(gid)),
+			),
 		).
 		Only(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	// TODO: execute within Tx
 	typ := attachment.Type(data.Type)
-
-	bldr := r.db.Attachment.UpdateOneID(id).
-		SetType(typ)
+	bldr := tx.Attachment.UpdateOne(current).
+		SetType(typ).
+		SetTitle(data.Title)
 
 	// Primary only applies to photos
 	if typ == attachment.TypePhoto {
@@ -508,22 +541,15 @@ func (r *AttachmentRepo) Update(ctx context.Context, gid uuid.UUID, id uuid.UUID
 		bldr = bldr.SetPrimary(false)
 	}
 
-	updatedAttachment, err := bldr.Save(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	attachmentItem, err := updatedAttachment.QueryEntity().Only(ctx)
-	if err != nil {
-		return nil, err
-	}
-
 	// Only remove primary status from other photo attachments when setting a new photo as primary
 	if typ == attachment.TypePhoto && data.Primary {
-		err = r.db.Attachment.Update().
+		err = tx.Attachment.Update().
 			Where(
-				attachment.HasEntityWith(entity.ID(attachmentItem.ID)),
-				attachment.IDNEQ(updatedAttachment.ID),
+				attachment.HasEntityWith(
+					entity.ID(entityID),
+					entity.HasGroupWith(group.ID(gid)),
+				),
+				attachment.IDNEQ(id),
 				attachment.TypeEQ(attachment.TypePhoto),
 			).
 			SetPrimary(false).
@@ -533,7 +559,15 @@ func (r *AttachmentRepo) Update(ctx context.Context, gid uuid.UUID, id uuid.UUID
 		}
 	}
 
-	return r.Get(ctx, gid, updatedAttachment.ID)
+	if _, err := bldr.Save(ctx); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	committed = true
+
+	return r.GetForEntity(ctx, gid, entityID, id)
 }
 
 func (r *AttachmentRepo) Delete(ctx context.Context, gid uuid.UUID, id uuid.UUID) error {
@@ -614,6 +648,27 @@ func (r *AttachmentRepo) Delete(ctx context.Context, gid uuid.UUID, id uuid.UUID
 	return r.db.Attachment.DeleteOneID(id).Exec(ctx)
 }
 
+// DeleteForEntity rejects a route attachment ID that belongs to another
+// entity, even when both entities are in the same group.
+func (r *AttachmentRepo) DeleteForEntity(ctx context.Context, gid, entityID, id uuid.UUID) error {
+	exists, err := r.db.Attachment.Query().
+		Where(
+			attachment.ID(id),
+			attachment.HasEntityWith(
+				entity.ID(entityID),
+				entity.HasGroupWith(group.ID(gid)),
+			),
+		).
+		Exist(ctx)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return &ent.NotFoundError{}
+	}
+	return r.Delete(ctx, gid, id)
+}
+
 func (r *AttachmentRepo) Rename(ctx context.Context, gid uuid.UUID, id uuid.UUID, title string) (*ent.Attachment, error) {
 	// Validate that the attachment belongs to the specified group
 	_, err := r.db.Attachment.Query().
@@ -637,15 +692,12 @@ func (r *AttachmentRepo) CreateThumbnail(ctx context.Context, groupId, attachmen
 	log.Debug().Msg("starting thumbnail creation")
 	tx, err := r.db.Tx(ctx)
 	if err != nil {
-		return nil
+		return err
 	}
-	// If there is an error during file creation rollback the database
+	committed := false
 	defer func() {
-		if v := recover(); v != nil {
-			err := tx.Rollback()
-			if err != nil {
-				return
-			}
+		if !committed {
+			_ = tx.Rollback()
 		}
 	}()
 
@@ -736,6 +788,10 @@ func (r *AttachmentRepo) CreateThumbnail(ctx context.Context, groupId, attachmen
 		case strings.HasSuffix(title, ".jxl"):
 			contentType = "image/jxl"
 		}
+	}
+
+	if err := validateThumbnailSourceDimensions(contentType, contentBytes); err != nil {
+		return err
 	}
 
 	// Pre-read orientation once for all image types that support it
@@ -871,14 +927,19 @@ func (r *AttachmentRepo) CreateThumbnail(ctx context.Context, groupId, attachmen
 	log.Debug().Msg("finishing thumbnail creation transaction")
 	if err := tx.Commit(); err != nil {
 		log.Err(err).Msg("failed to commit transaction")
-		return nil
+		return err
 	}
+	committed = true
 	return nil
 }
 
 func (r *AttachmentRepo) CreateMissingThumbnails(ctx context.Context, groupId uuid.UUID) (int, error) {
 	ctx, span := otel.Tracer("data").Start(ctx, "repo.AttachmentRepo.CreateMissingThumbnails")
 	defer span.End()
+
+	if !r.thumbnail.Enabled {
+		return 0, nil
+	}
 
 	attachments, err := r.db.Attachment.Query().
 		Where(
@@ -892,36 +953,41 @@ func (r *AttachmentRepo) CreateMissingThumbnails(ctx context.Context, groupId uu
 
 	pubsubString, err := utils.GenerateSubPubConn(r.pubSubConn, "thumbnails")
 	if err != nil {
-		log.Err(err).Msg("failed to generate pubsub connection string")
+		return 0, fmt.Errorf("generate thumbnail pubsub connection: %w", err)
 	}
 	topic, err := pubsub.OpenTopic(ctx, pubsubString)
 	if err != nil {
-		log.Err(err).Msg("failed to open pubsub topic")
+		return 0, fmt.Errorf("open thumbnail pubsub topic: %w", err)
 	}
+	defer func() {
+		if shutdownErr := topic.Shutdown(ctx); shutdownErr != nil {
+			log.Warn().Err(shutdownErr).Msg("failed to shut down thumbnail topic")
+		}
+	}()
 
 	count := 0
 	for _, attachment := range attachments {
-		if r.thumbnail.Enabled {
-			if !attachment.QueryThumbnail().ExistX(ctx) {
-				if count > 0 && count%100 == 0 {
-					time.Sleep(2 * time.Second)
-				}
-				err = topic.Send(ctx, &pubsub.Message{
-					Body: []byte(fmt.Sprintf("attachment_created:%s", attachment.ID.String())),
-					Metadata: map[string]string{
-						"group_id":      groupId.String(),
-						"attachment_id": attachment.ID.String(),
-						"title":         attachment.Title,
-						"path":          attachment.Path,
-					},
-				})
-				if err != nil {
-					log.Err(err).Msg("failed to send message to topic")
-					continue
-				} else {
-					count++
-				}
+		exists, err := attachment.QueryThumbnail().Exist(ctx)
+		if err != nil {
+			return count, err
+		}
+		if !exists {
+			if count > 0 && count%100 == 0 {
+				time.Sleep(2 * time.Second)
 			}
+			err = topic.Send(ctx, &pubsub.Message{
+				Body: []byte(fmt.Sprintf("attachment_created:%s", attachment.ID.String())),
+				Metadata: map[string]string{
+					"group_id":      groupId.String(),
+					"attachment_id": attachment.ID.String(),
+					"title":         attachment.Title,
+					"path":          attachment.Path,
+				},
+			})
+			if err != nil {
+				return count, err
+			}
+			count++
 		}
 	}
 
@@ -1010,6 +1076,56 @@ func (r *AttachmentRepo) UploadFileByGroupID(ctx context.Context, gid uuid.UUID,
 func isImageFile(mimetype string) bool {
 	// Check file extension for image types
 	return strings.Contains(mimetype, "image/jpeg") || strings.Contains(mimetype, "image/png") || strings.Contains(mimetype, "image/gif")
+}
+
+func validateImageConfig(config image.Config) error {
+	if config.Width <= 0 || config.Height <= 0 {
+		return fmt.Errorf("invalid image dimensions %dx%d", config.Width, config.Height)
+	}
+	if config.Width > maxThumbnailSourceDimension || config.Height > maxThumbnailSourceDimension {
+		return fmt.Errorf(
+			"image dimensions %dx%d exceed maximum dimension %d",
+			config.Width,
+			config.Height,
+			maxThumbnailSourceDimension,
+		)
+	}
+	if int64(config.Width)*int64(config.Height) > maxThumbnailSourcePixels {
+		return fmt.Errorf(
+			"image dimensions %dx%d exceed maximum pixel count %d",
+			config.Width,
+			config.Height,
+			maxThumbnailSourcePixels,
+		)
+	}
+	return nil
+}
+
+func validateThumbnailSourceDimensions(contentType string, content []byte) error {
+	reader := bytes.NewReader(content)
+	var (
+		config image.Config
+		err    error
+	)
+
+	switch {
+	case isImageFile(contentType):
+		config, _, err = image.DecodeConfig(reader)
+	case contentType == "image/webp":
+		config, err = webp.DecodeConfig(reader)
+	case contentType == "image/avif":
+		config, err = avif.DecodeConfig(reader)
+	case contentType == "image/heic" || contentType == "image/heif":
+		config, err = heic.DecodeConfig(reader)
+	case contentType == "image/jxl":
+		config, err = jpegxl.DecodeConfig(reader)
+	default:
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("decode image dimensions: %w", err)
+	}
+	return validateImageConfig(config)
 }
 
 // calculateThumbnailDimensions calculates new dimensions that preserve aspect ratio
