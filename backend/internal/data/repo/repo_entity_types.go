@@ -130,6 +130,10 @@ func (r *EntityTypeRepository) Create(ctx context.Context, gid uuid.UUID, data E
 
 // Update updates an existing entity type.
 func (r *EntityTypeRepository) Update(ctx context.Context, gid uuid.UUID, data EntityTypeUpdate) (EntityTypeSummary, error) {
+	if err := assertEntityTypeInGroup(ctx, r.db.EntityType, gid, data.ID); err != nil {
+		return EntityTypeSummary{}, err
+	}
+
 	if data.DefaultTemplateID != nil {
 		if err := assertEntityTemplateInGroup(ctx, r.db.EntityTemplate, gid, *data.DefaultTemplateID); err != nil {
 			return EntityTypeSummary{}, err
@@ -158,7 +162,10 @@ func (r *EntityTypeRepository) Update(ctx context.Context, gid uuid.UUID, data E
 	}
 
 	et, err := r.db.EntityType.Query().
-		Where(entitytype.ID(data.ID)).
+		Where(
+			entitytype.ID(data.ID),
+			entitytype.HasGroupWith(group.ID(gid)),
+		).
 		WithDefaultTemplate().
 		Only(ctx)
 	if err != nil {

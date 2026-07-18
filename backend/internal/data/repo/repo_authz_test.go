@@ -97,6 +97,104 @@ func Test_EntityPatch_RejectsForeignTag(t *testing.T) {
 	assert.True(t, ent.IsNotFound(err), "expected NotFound for cross-group tag in Patch, got %T: %v", err, err)
 }
 
+func Test_EntityUpdate_RejectsForeignTargetBeforeSideEffects(t *testing.T) {
+	ctx := context.Background()
+	itemET := useItemEntityType(t)
+	foreignGID, _, foreignTypeID := makeForeignGroup(t)
+	foreign, err := tRepos.Entities.Create(ctx, foreignGID, EntityCreate{
+		Name:         "foreign-update-target",
+		EntityTypeID: foreignTypeID,
+	})
+	require.NoError(t, err)
+
+	out, err := tRepos.Entities.UpdateByGroup(ctx, tGroup.ID, EntityUpdate{
+		ID:           foreign.ID,
+		Name:         "should-not-be-visible-or-written",
+		Quantity:     1,
+		EntityTypeID: itemET.ID,
+		Fields: []EntityFieldData{{
+			Type:      "text",
+			Name:      "should-not-exist",
+			TextValue: "secret",
+		}},
+	})
+	require.Error(t, err)
+	assert.True(t, ent.IsNotFound(err), "expected NotFound for cross-group update target, got %T: %v", err, err)
+	assert.Equal(t, uuid.Nil, out.ID, "foreign entity must not be returned")
+
+	got, err := tRepos.Entities.GetOneByGroup(ctx, foreignGID, foreign.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "foreign-update-target", got.Name)
+	assert.Empty(t, got.Fields, "rejected update must not create fields on the foreign row")
+}
+
+func Test_EntityPatch_RejectsForeignTarget(t *testing.T) {
+	ctx := context.Background()
+	foreignGID, _, foreignTypeID := makeForeignGroup(t)
+	foreign, err := tRepos.Entities.Create(ctx, foreignGID, EntityCreate{
+		Name:         "foreign-patch-target",
+		Quantity:     1,
+		EntityTypeID: foreignTypeID,
+	})
+	require.NoError(t, err)
+
+	quantity := 7.0
+	err = tRepos.Entities.Patch(ctx, tGroup.ID, foreign.ID, EntityPatch{Quantity: &quantity})
+	require.Error(t, err)
+	assert.True(t, ent.IsNotFound(err), "expected NotFound for cross-group patch target, got %T: %v", err, err)
+
+	got, err := tRepos.Entities.GetOneByGroup(ctx, foreignGID, foreign.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 1.0, got.Quantity)
+}
+
+func Test_EntityContainerUpdate_RejectsForeignTargetWithoutDisclosure(t *testing.T) {
+	ctx := context.Background()
+	foreignGID, _, _ := makeForeignGroup(t)
+	foreignContainerType, err := tRepos.EntityTypes.GetDefault(ctx, foreignGID, true)
+	require.NoError(t, err)
+	foreign, err := tRepos.Entities.CreateContainer(ctx, foreignGID, EntityCreate{
+		Name:         "foreign-container",
+		EntityTypeID: foreignContainerType.ID,
+	})
+	require.NoError(t, err)
+
+	out, err := tRepos.Entities.UpdateContainer(ctx, tGroup.ID, foreign.ID, EntityUpdate{
+		Name: "should-not-be-visible-or-written",
+	})
+	require.Error(t, err)
+	assert.True(t, ent.IsNotFound(err), "expected NotFound for cross-group container target, got %T: %v", err, err)
+	assert.Equal(t, uuid.Nil, out.ID, "foreign container must not be returned")
+
+	got, err := tRepos.Entities.GetContainerByGroup(ctx, foreignGID, foreign.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "foreign-container", got.Name)
+}
+
+func Test_EntityTypeUpdate_RejectsForeignTargetWithoutDisclosure(t *testing.T) {
+	ctx := context.Background()
+	foreignGID, _, foreignTypeID := makeForeignGroup(t)
+
+	out, err := tRepos.EntityTypes.Update(ctx, tGroup.ID, EntityTypeUpdate{
+		ID:   foreignTypeID,
+		Name: "should-not-be-visible-or-written",
+	})
+	require.Error(t, err)
+	assert.True(t, ent.IsNotFound(err), "expected NotFound for cross-group entity type, got %T: %v", err, err)
+	assert.Equal(t, uuid.Nil, out.ID, "foreign entity type must not be returned")
+
+	types, err := tRepos.EntityTypes.GetAll(ctx, foreignGID)
+	require.NoError(t, err)
+	foreignTypeFound := false
+	for _, entityType := range types {
+		if entityType.ID == foreignTypeID {
+			foreignTypeFound = true
+			assert.NotEqual(t, "should-not-be-visible-or-written", entityType.Name)
+		}
+	}
+	assert.True(t, foreignTypeFound)
+}
+
 func Test_MaintEntryCreate_RejectsForeignItem(t *testing.T) {
 	itemET := useItemEntityType(t)
 	foreignGID, _, _ := makeForeignGroup(t)
@@ -147,4 +245,57 @@ func Test_EntityTemplateCreate_RejectsForeignDefaultLocation(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.True(t, ent.IsNotFound(err), "expected NotFound for cross-group DefaultLocationID, got %T: %v", err, err)
+}
+
+func Test_EntityTemplateCreateAndUpdate_RejectForeignDefaultTags(t *testing.T) {
+	ctx := context.Background()
+	_, foreignTagID, _ := makeForeignGroup(t)
+	foreignTags := []uuid.UUID{foreignTagID}
+
+	_, err := tRepos.EntityTemplates.Create(ctx, tGroup.ID, EntityTemplateCreate{
+		Name:          "foreign-tag-template",
+		DefaultTagIDs: &foreignTags,
+	})
+	require.Error(t, err)
+	assert.True(t, ent.IsNotFound(err), "expected NotFound for cross-group DefaultTagIDs, got %T: %v", err, err)
+
+	template, err := tRepos.EntityTemplates.Create(ctx, tGroup.ID, EntityTemplateCreate{
+		Name: "own-template",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = tRepos.EntityTemplates.Delete(context.Background(), tGroup.ID, template.ID)
+	})
+
+	_, err = tRepos.EntityTemplates.Update(ctx, tGroup.ID, EntityTemplateUpdate{
+		ID:            template.ID,
+		Name:          "should-not-be-written",
+		DefaultTagIDs: &foreignTags,
+	})
+	require.Error(t, err)
+	assert.True(t, ent.IsNotFound(err), "expected NotFound for cross-group DefaultTagIDs, got %T: %v", err, err)
+
+	got, err := tRepos.EntityTemplates.GetOne(ctx, tGroup.ID, template.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "own-template", got.Name)
+	assert.Empty(t, got.DefaultTags)
+}
+
+func Test_EntityTemplateGetOne_DoesNotExposeLegacyForeignDefaultTags(t *testing.T) {
+	ctx := context.Background()
+	_, foreignTagID, _ := makeForeignGroup(t)
+
+	template, err := tClient.EntityTemplate.Create().
+		SetName("legacy-corrupt-template").
+		SetGroupID(tGroup.ID).
+		SetDefaultTagIds([]uuid.UUID{foreignTagID}).
+		Save(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = tRepos.EntityTemplates.Delete(context.Background(), tGroup.ID, template.ID)
+	})
+
+	got, err := tRepos.EntityTemplates.GetOne(ctx, tGroup.ID, template.ID)
+	require.NoError(t, err)
+	assert.Empty(t, got.DefaultTags, "legacy foreign tag IDs must never expose foreign tag names")
 }

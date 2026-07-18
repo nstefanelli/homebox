@@ -171,7 +171,7 @@ func mapEntityTemplateSummary(template *ent.EntityTemplate) EntityTemplateSummar
 	}
 }
 
-func (r *EntityTemplatesRepository) mapTemplateOut(ctx context.Context, template *ent.EntityTemplate) EntityTemplateOut {
+func (r *EntityTemplatesRepository) mapTemplateOut(ctx context.Context, gid uuid.UUID, template *ent.EntityTemplate) EntityTemplateOut {
 	fields := make([]TemplateField, 0)
 	if template.Edges.Fields != nil {
 		fields = mapTemplateFieldSlice(template.Edges.Fields)
@@ -190,7 +190,10 @@ func (r *EntityTemplatesRepository) mapTemplateOut(ctx context.Context, template
 	tags := make([]TemplateTagSummary, 0)
 	if len(template.DefaultTagIds) > 0 {
 		tagEntities, err := r.db.Tag.Query().
-			Where(tag.IDIn(template.DefaultTagIds...)).
+			Where(
+				tag.IDIn(template.DefaultTagIds...),
+				tag.HasGroupWith(group.ID(gid)),
+			).
 			All(ctx)
 		if err == nil {
 			tags = lo.Map(tagEntities, func(l *ent.Tag, _ int) TemplateTagSummary {
@@ -267,13 +270,18 @@ func (r *EntityTemplatesRepository) GetOne(ctx context.Context, gid uuid.UUID, i
 		return EntityTemplateOut{}, err
 	}
 
-	return r.mapTemplateOut(ctx, template), nil
+	return r.mapTemplateOut(ctx, gid, template), nil
 }
 
 // Create creates a new template
 func (r *EntityTemplatesRepository) Create(ctx context.Context, gid uuid.UUID, data EntityTemplateCreate) (EntityTemplateOut, error) {
 	if err := assertEntityInGroup(ctx, r.db.Entity, gid, data.DefaultLocationID); err != nil {
 		return EntityTemplateOut{}, err
+	}
+	if data.DefaultTagIDs != nil {
+		if err := assertTagsInGroup(ctx, r.db.Tag, gid, *data.DefaultTagIDs); err != nil {
+			return EntityTemplateOut{}, err
+		}
 	}
 
 	q := r.db.EntityTemplate.Create().
@@ -328,6 +336,11 @@ func (r *EntityTemplatesRepository) Create(ctx context.Context, gid uuid.UUID, d
 func (r *EntityTemplatesRepository) Update(ctx context.Context, gid uuid.UUID, data EntityTemplateUpdate) (EntityTemplateOut, error) {
 	if err := assertEntityInGroup(ctx, r.db.Entity, gid, data.DefaultLocationID); err != nil {
 		return EntityTemplateOut{}, err
+	}
+	if data.DefaultTagIDs != nil {
+		if err := assertTagsInGroup(ctx, r.db.Tag, gid, *data.DefaultTagIDs); err != nil {
+			return EntityTemplateOut{}, err
+		}
 	}
 
 	// Verify template belongs to group

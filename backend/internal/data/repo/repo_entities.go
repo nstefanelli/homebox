@@ -1693,6 +1693,15 @@ func (r *EntityRepository) UpdateByGroup(ctx context.Context, gid uuid.UUID, dat
 		return EntityOut{}, err
 	}
 
+	// Assert ownership of the row being updated before any related reads or
+	// writes. A scoped bulk update can legitimately affect zero rows without
+	// returning an error; without this guard the unscoped tag/field work below
+	// could still mutate an entity in another group.
+	if err := assertEntityInGroup(ctx, r.db.Entity, gid, data.ID); err != nil {
+		recordSpanError(span, err)
+		return EntityOut{}, err
+	}
+
 	// See EntityRepository.Create for the rationale on these cross-group
 	// reference checks. Applied before the update so a rejected request never
 	// mutates the row.
@@ -2056,6 +2065,14 @@ func (r *EntityRepository) Patch(ctx context.Context, gid, id uuid.UUID, data En
 			attribute.Bool("patch.tag_ids.set", data.TagIDs != nil),
 		))
 	defer span.End()
+
+	// A scoped bulk update reports success even when no row matches. Reject a
+	// foreign/missing target explicitly so callers do not receive a false
+	// success response and no follow-on work can observe another tenant's row.
+	if err := assertEntityInGroup(ctx, r.db.Entity, gid, id); err != nil {
+		recordSpanError(span, err)
+		return err
+	}
 
 	// See EntityRepository.Create for the rationale on these cross-group
 	// reference checks. data.TagIDs == nil means "leave tags alone"; a non-nil
@@ -2807,6 +2824,11 @@ func (r *EntityRepository) UpdateContainer(ctx context.Context, gid, id uuid.UUI
 		))
 	defer span.End()
 
+	if err := assertEntityInGroup(ctx, r.db.Entity, gid, id); err != nil {
+		recordSpanError(span, err)
+		return EntityOut{}, err
+	}
+
 	if data.ParentID != uuid.Nil {
 		validateCtx, validateSpan := entityTracer().Start(ctx, "repo.EntityRepository.UpdateContainer.validateParent")
 		// Same tenant-scope reasoning as CreateContainer above.
@@ -2852,7 +2874,7 @@ func (r *EntityRepository) UpdateContainer(ctx context.Context, gid, id uuid.UUI
 	}
 
 	r.publishMutationEvent(gid)
-	out, err := r.GetOne(ctx, id)
+	out, err := r.GetOneByGroup(ctx, gid, id)
 	recordSpanError(span, err)
 	return out, err
 }
