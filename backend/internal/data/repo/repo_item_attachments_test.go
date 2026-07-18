@@ -312,6 +312,33 @@ func TestAttachmentRepo_Delete(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestAttachmentRepo_DeleteCommitsBeforeBestEffortBlobCleanup(t *testing.T) {
+	ctx := context.Background()
+	entity := useEntities(t, 1)[0]
+	att, err := tClient.Attachment.Create().
+		SetEntityID(entity.ID).
+		SetType(attachment.TypeManual).
+		SetTitle("missing-blob").
+		SetPath("missing/documents/blob").
+		SetMimeType("application/pdf").
+		Save(ctx)
+	require.NoError(t, err)
+
+	repos := New(
+		tClient,
+		tbus,
+		config.Storage{ConnString: "file:///definitely/not/a/real/homebox/storage", PrefixPath: "/"},
+		"mem://{{ .Topic }}",
+		config.Thumbnail{Enabled: false},
+	)
+	err = repos.Attachments.Delete(ctx, tGroup.ID, att.ID)
+	require.NoError(t, err, "blob cleanup failure must not roll back committed database deletion")
+
+	exists, err := tClient.Attachment.Query().Where(attachment.ID(att.ID)).Exist(ctx)
+	require.NoError(t, err)
+	assert.False(t, exists)
+}
+
 func TestAttachmentRepo_CreateExternalLink(t *testing.T) {
 	ctx := context.Background()
 	entity := useEntities(t, 1)[0]

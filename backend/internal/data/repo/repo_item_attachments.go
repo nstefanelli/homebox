@@ -86,6 +86,11 @@ type (
 		Title   string    `json:"title"`
 		Content io.Reader `json:"content"`
 	}
+
+	attachmentBlobCandidate struct {
+		Path     string
+		MimeType string
+	}
 )
 
 const MimeTypeLinkURL = "link/url"
@@ -301,6 +306,102 @@ func (r *AttachmentRepo) GetConnString() string {
 		return fmt.Sprintf("file://%s", dir)
 	}
 	return r.storage.ConnString
+}
+
+func attachmentBlobCandidates(attachments []*ent.Attachment) []attachmentBlobCandidate {
+	candidates := make([]attachmentBlobCandidate, 0, len(attachments)*2)
+	for _, att := range attachments {
+		if att.Path != "" && !isExternalLink(att.MimeType) {
+			candidates = append(candidates, attachmentBlobCandidate{
+				Path:     att.Path,
+				MimeType: att.MimeType,
+			})
+		}
+		if thumbnail := att.Edges.Thumbnail; thumbnail != nil && thumbnail.Path != "" {
+			candidates = append(candidates, attachmentBlobCandidate{
+				Path:     thumbnail.Path,
+				MimeType: thumbnail.MimeType,
+			})
+		}
+	}
+	return candidates
+}
+
+// deleteAttachmentThumbnailsTx removes thumbnail rows inside the caller's
+// transaction. The source attachment FK uses ON DELETE SET NULL, so deleting
+// the thumbnail safely clears the edge before the source/entity is removed.
+func deleteAttachmentThumbnailsTx(
+	ctx context.Context,
+	tx *ent.Tx,
+	attachments []*ent.Attachment,
+) ([]attachmentBlobCandidate, error) {
+	candidates := attachmentBlobCandidates(attachments)
+	for _, att := range attachments {
+		if att.Edges.Thumbnail == nil {
+			continue
+		}
+		if err := tx.Attachment.DeleteOneID(att.Edges.Thumbnail.ID).Exec(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return candidates, nil
+}
+
+// cleanupUnreferencedBlobs is intentionally post-commit: database state is the
+// source of truth, and a storage failure must never roll back references after
+// their files have already been removed. Cleanup is best-effort; unremoved
+// blobs are harmless orphans and can be retried later.
+func (r *AttachmentRepo) cleanupUnreferencedBlobs(
+	ctx context.Context,
+	candidates []attachmentBlobCandidate,
+) {
+	paths := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.Path == "" || isExternalLink(candidate.MimeType) {
+			continue
+		}
+		paths[candidate.Path] = struct{}{}
+	}
+	if len(paths) == 0 {
+		return
+	}
+
+	var bucket *blob.Bucket
+	for path := range paths {
+		attachmentRef, err := r.db.Attachment.Query().
+			Where(attachment.Path(path)).
+			Exist(ctx)
+		if err != nil {
+			log.Warn().Err(err).Str("path", path).Msg("failed to check attachment blob references")
+			continue
+		}
+		templateRef, err := r.db.EntityTemplate.Query().
+			Where(entitytemplate.PhotoPath(path)).
+			Exist(ctx)
+		if err != nil {
+			log.Warn().Err(err).Str("path", path).Msg("failed to check template blob references")
+			continue
+		}
+		if attachmentRef || templateRef {
+			continue
+		}
+
+		if bucket == nil {
+			bucket, err = blob.OpenBucket(ctx, r.GetConnString())
+			if err != nil {
+				log.Warn().Err(err).Msg("database deletion committed but blob cleanup bucket could not be opened")
+				return
+			}
+		}
+		if err := bucket.Delete(ctx, r.fullPath(path)); err != nil {
+			log.Warn().Err(err).Str("path", path).Msg("database deletion committed but blob cleanup failed")
+		}
+	}
+	if bucket != nil {
+		if err := bucket.Close(); err != nil {
+			log.Warn().Err(err).Msg("failed to close blob cleanup bucket")
+		}
+	}
 }
 
 func (r *AttachmentRepo) Create(ctx context.Context, itemID uuid.UUID, doc ItemCreateAttachment, typ attachment.Type, primary bool) (*ent.Attachment, error) {
@@ -574,78 +675,42 @@ func (r *AttachmentRepo) Delete(ctx context.Context, gid uuid.UUID, id uuid.UUID
 	ctx, span := otel.Tracer("data").Start(ctx, "repo.AttachmentRepo.Delete")
 	defer span.End()
 
-	// Validate that the attachment belongs to the specified group
-	doc, err := r.db.Attachment.Query().
+	tx, err := r.db.Tx(ctx)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	doc, err := tx.Attachment.Query().
 		Where(
 			attachment.ID(id),
 			attachment.HasEntityWith(entity.HasGroupWith(group.ID(gid))),
 		).
+		WithThumbnail().
 		Only(ctx)
 	if err != nil {
 		return err
 	}
 
-	if isExternalLink(doc.MimeType) {
-		return r.db.Attachment.DeleteOneID(id).Exec(ctx)
-	}
-
-	all, err := r.db.Attachment.Query().Where(attachment.Path(doc.Path)).All(ctx)
+	candidates, err := deleteAttachmentThumbnailsTx(ctx, tx, []*ent.Attachment{doc})
 	if err != nil {
 		return err
 	}
-	// If this is the last attachment for this path, delete the file - unless
-	// an entity template's photo still references this same content-addressed
-	// path, in which case the blob must be kept alive for the template.
-	if len(all) == 1 {
-		templateStillReferencesPath, err := r.db.EntityTemplate.Query().
-			Where(entitytemplate.PhotoPath(doc.Path)).
-			Exist(ctx)
-		if err != nil {
-			return err
-		}
-
-		thumb, err := doc.QueryThumbnail().First(ctx)
-		if err != nil && !ent.IsNotFound(err) {
-			log.Err(err).Msg("failed to query thumbnail for attachment")
-			return err
-		}
-		if thumb != nil {
-			thumbBucket, err := blob.OpenBucket(ctx, r.GetConnString())
-			if err != nil {
-				log.Err(err).Msg("failed to open bucket for thumbnail deletion")
-				return err
-			}
-			err = thumbBucket.Delete(ctx, r.fullPath(thumb.Path))
-			if err != nil {
-				return err
-			}
-			_ = doc.Update().SetNillableThumbnailID(nil).SaveX(ctx)
-			_ = thumb.Update().SetNillableThumbnailID(nil).SaveX(ctx)
-			err = r.db.Attachment.DeleteOneID(thumb.ID).Exec(ctx)
-			if err != nil {
-				return err
-			}
-		}
-		if !templateStillReferencesPath {
-			bucket, err := blob.OpenBucket(ctx, r.GetConnString())
-			if err != nil {
-				log.Err(err).Msg("failed to open bucket")
-				return err
-			}
-			defer func(bucket *blob.Bucket) {
-				err := bucket.Close()
-				if err != nil {
-					log.Err(err).Msg("failed to close bucket")
-				}
-			}(bucket)
-			err = bucket.Delete(ctx, r.fullPath(doc.Path))
-			if err != nil {
-				return err
-			}
-		}
+	if err := tx.Attachment.DeleteOneID(id).Exec(ctx); err != nil {
+		return err
 	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
 
-	return r.db.Attachment.DeleteOneID(id).Exec(ctx)
+	r.cleanupUnreferencedBlobs(ctx, candidates)
+	return nil
 }
 
 // DeleteForEntity rejects a route attachment ID that belongs to another

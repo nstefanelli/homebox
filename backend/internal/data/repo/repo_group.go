@@ -330,55 +330,87 @@ func (r *GroupRepository) GroupDelete(ctx context.Context, id uuid.UUID) error {
 	if err != nil {
 		return err
 	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
 
-	itm, err := tx.Entity.Query().
+	entities, err := tx.Entity.Query().
 		Where(entity.HasGroupWith(group.ID(id))).
-		WithGroup().
-		WithAttachments().
+		WithAttachments(func(aq *ent.AttachmentQuery) {
+			aq.WithThumbnail()
+		}).
 		All(ctx)
 	if err != nil {
 		return err
 	}
 
-	// Delete all attachments (and their files) before deleting the entities
-	for _, it := range itm {
-		for _, att := range it.Edges.Attachments {
-			if err := r.attachments.Delete(ctx, id, att.ID); err != nil {
-				log.Err(err).Str("attachment_id", att.ID.String()).Msg("failed to delete attachment during entity deletion")
-				// Continue with other attachments even if one fails
+	attachments := make([]*ent.Attachment, 0)
+	for _, e := range entities {
+		attachments = append(attachments, e.Edges.Attachments...)
+	}
+	candidates, err := deleteAttachmentThumbnailsTx(ctx, tx, attachments)
+	if err != nil {
+		return err
+	}
+
+	// Every user whose default points at the deleted group must be reassigned
+	// atomically. Prefer another current membership; otherwise clear it.
+	defaultUsers, err := tx.User.Query().
+		Where(user.DefaultGroupID(id)).
+		All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, member := range defaultUsers {
+		replacement, err := tx.Group.Query().
+			Where(
+				group.IDNEQ(id),
+				group.HasUsersWith(user.ID(member.ID)),
+			).
+			Order(ent.Asc(group.FieldCreatedAt)).
+			First(ctx)
+		switch {
+		case err == nil:
+			if err := tx.User.UpdateOneID(member.ID).SetDefaultGroupID(replacement.ID).Exec(ctx); err != nil {
+				return err
 			}
+		case ent.IsNotFound(err):
+			if err := tx.User.UpdateOneID(member.ID).ClearDefaultGroupID().Exec(ctx); err != nil {
+				return err
+			}
+		default:
+			return err
 		}
 	}
 
-	// Delete all entities from the database
 	if _, err := tx.Entity.Delete().
 		Where(entity.HasGroupWith(group.ID(id))).
 		Exec(ctx); err != nil {
-		if rerr := tx.Rollback(); rerr != nil {
-			log.Error().Err(rerr).Msg("failed to rollback transaction")
-		}
 		return err
 	}
 
-	// Delete any associated notifiers
 	if _, err := tx.Notifier.Delete().
 		Where(notifier.HasGroupWith(group.ID(id))).
 		Exec(ctx); err != nil {
-		if rerr := tx.Rollback(); rerr != nil {
-			log.Error().Err(rerr).Msg("failed to rollback transaction")
-		}
 		return err
 	}
 
-	// Delete the group
 	if err := tx.Group.DeleteOneID(id).Exec(ctx); err != nil {
-		if rerr := tx.Rollback(); rerr != nil {
-			log.Error().Err(rerr).Msg("failed to rollback transaction")
-		}
 		return err
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+
+	if r.attachments != nil {
+		r.attachments.cleanupUnreferencedBlobs(ctx, candidates)
+	}
+	return nil
 }
 
 func (r *GroupRepository) InvitationGet(ctx context.Context, token []byte) (GroupInvitation, error) {

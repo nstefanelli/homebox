@@ -1568,55 +1568,9 @@ func (r *EntityRepository) Delete(ctx context.Context, id uuid.UUID) error {
 		trace.WithAttributes(attribute.String("entity.id", id.String())))
 	defer span.End()
 
-	loadCtx, loadSpan := entityTracer().Start(ctx, "repo.EntityRepository.Delete.load")
-	e, err := r.db.Entity.Query().
-		Where(entity.ID(id)).
-		WithGroup().
-		WithAttachments().
-		Only(loadCtx)
-	if err != nil {
-		recordSpanError(loadSpan, err)
-		loadSpan.End()
-		recordSpanError(span, err)
-		return err
-	}
-	loadSpan.End()
-
-	// Get the group ID for attachment deletion
-	var gid uuid.UUID
-	if e.Edges.Group != nil {
-		gid = e.Edges.Group.ID
-	}
-	span.SetAttributes(
-		attribute.String("group.id", gid.String()),
-		attribute.Int("entity.attachments.count", len(e.Edges.Attachments)),
-	)
-
-	if len(e.Edges.Attachments) > 0 {
-		attCtx, attSpan := entityTracer().Start(ctx, "repo.EntityRepository.Delete.attachments",
-			trace.WithAttributes(attribute.Int("attachments.count", len(e.Edges.Attachments))))
-		for _, att := range e.Edges.Attachments {
-			err := r.attachments.Delete(attCtx, gid, att.ID)
-			if err != nil {
-				recordSpanError(attSpan, err)
-				log.Err(err).Str("attachment_id", att.ID.String()).Msg("failed to delete attachment during entity deletion")
-			}
-		}
-		attSpan.End()
-	}
-
-	_, deleteSpan := entityTracer().Start(ctx, "repo.EntityRepository.Delete.entity")
-	err = r.db.Entity.DeleteOneID(id).Exec(ctx)
-	if err != nil {
-		recordSpanError(deleteSpan, err)
-		deleteSpan.End()
-		recordSpanError(span, err)
-		return err
-	}
-	deleteSpan.End()
-
-	r.publishMutationEvent(id)
-	return nil
+	err := r.deleteEntity(ctx, uuid.Nil, id)
+	recordSpanError(span, err)
+	return err
 }
 
 func (r *EntityRepository) DeleteByGroup(ctx context.Context, gid, id uuid.UUID) error {
@@ -1627,52 +1581,55 @@ func (r *EntityRepository) DeleteByGroup(ctx context.Context, gid, id uuid.UUID)
 		))
 	defer span.End()
 
-	loadCtx, loadSpan := entityTracer().Start(ctx, "repo.EntityRepository.DeleteByGroup.load")
-	e, err := r.db.Entity.Query().
-		Where(
-			entity.ID(id),
-			entity.HasGroupWith(group.ID(gid)),
-		).
-		WithAttachments().
-		Only(loadCtx)
+	err := r.deleteEntity(ctx, gid, id)
+	recordSpanError(span, err)
+	return err
+}
+
+func (r *EntityRepository) deleteEntity(ctx context.Context, gid, id uuid.UUID) error {
+	tx, err := r.db.Tx(ctx)
 	if err != nil {
-		recordSpanError(loadSpan, err)
-		loadSpan.End()
-		recordSpanError(span, err)
 		return err
 	}
-	loadSpan.End()
-
-	span.SetAttributes(attribute.Int("entity.attachments.count", len(e.Edges.Attachments)))
-
-	if len(e.Edges.Attachments) > 0 {
-		attCtx, attSpan := entityTracer().Start(ctx, "repo.EntityRepository.DeleteByGroup.attachments",
-			trace.WithAttributes(attribute.Int("attachments.count", len(e.Edges.Attachments))))
-		for _, att := range e.Edges.Attachments {
-			err := r.attachments.Delete(attCtx, gid, att.ID)
-			if err != nil {
-				recordSpanError(attSpan, err)
-				log.Err(err).Str("attachment_id", att.ID.String()).Msg("failed to delete attachment during entity deletion")
-			}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
 		}
-		attSpan.End()
-	}
+	}()
 
-	_, deleteSpan := entityTracer().Start(ctx, "repo.EntityRepository.DeleteByGroup.entity")
-	_, err = r.db.Entity.
-		Delete().
-		Where(
-			entity.ID(id),
-			entity.HasGroupWith(group.ID(gid)),
-		).Exec(ctx)
+	predicates := []predicate.Entity{entity.ID(id)}
+	if gid != uuid.Nil {
+		predicates = append(predicates, entity.HasGroupWith(group.ID(gid)))
+	}
+	e, err := tx.Entity.Query().
+		Where(predicates...).
+		WithGroup().
+		WithAttachments(func(aq *ent.AttachmentQuery) {
+			aq.WithThumbnail()
+		}).
+		Only(ctx)
 	if err != nil {
-		recordSpanError(deleteSpan, err)
-		deleteSpan.End()
-		recordSpanError(span, err)
 		return err
 	}
-	deleteSpan.End()
+	if e.Edges.Group == nil {
+		return &ent.NotFoundError{}
+	}
+	gid = e.Edges.Group.ID
 
+	candidates, err := deleteAttachmentThumbnailsTx(ctx, tx, e.Edges.Attachments)
+	if err != nil {
+		return err
+	}
+	if err := tx.Entity.DeleteOneID(id).Exec(ctx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+
+	r.attachments.cleanupUnreferencedBlobs(ctx, candidates)
 	r.publishMutationEvent(gid)
 	return nil
 }
@@ -1687,111 +1644,90 @@ func (r *EntityRepository) WipeInventory(ctx context.Context, gid uuid.UUID, wip
 		))
 	defer span.End()
 
-	deleted := 0
-
-	// Wipe maintenance records if requested
-	// IMPORTANT: Must delete maintenance records BEFORE entities since they are linked to entities
-	if wipeMaintenance {
-		maintCtx, maintSpan := entityTracer().Start(ctx, "repo.EntityRepository.WipeInventory.maintenance")
-		maintenanceCount, err := r.db.MaintenanceEntry.Delete().
-			Where(maintenanceentry.HasEntityWith(entity.HasGroupWith(group.ID(gid)))).
-			Exec(maintCtx)
-		if err != nil {
-			recordSpanError(maintSpan, err)
-			log.Err(err).Msg("failed to delete maintenance entries during wipe inventory")
-		} else {
-			maintSpan.SetAttributes(attribute.Int("deleted.count", maintenanceCount))
-			log.Info().Int("count", maintenanceCount).Msg("deleted maintenance entries during wipe inventory")
-			deleted += maintenanceCount
-		}
-		maintSpan.End()
-	}
-
-	loadCtx, loadSpan := entityTracer().Start(ctx, "repo.EntityRepository.WipeInventory.loadEntities")
-	entities, err := r.db.Entity.Query().
-		Where(entity.HasGroupWith(group.ID(gid))).
-		WithAttachments().
-		All(loadCtx)
+	tx, err := r.db.Tx(ctx)
 	if err != nil {
-		recordSpanError(loadSpan, err)
-		loadSpan.End()
 		recordSpanError(span, err)
 		return 0, err
 	}
-	loadSpan.SetAttributes(attribute.Int("entities.count", len(entities)))
-	loadSpan.End()
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
 
-	entCtx, entSpan := entityTracer().Start(ctx, "repo.EntityRepository.WipeInventory.deleteEntities",
-		trace.WithAttributes(attribute.Int("entities.count", len(entities))))
-	entityDeleted := 0
-	attachmentsDeleted := 0
+	entityPredicates := []predicate.Entity{entity.HasGroupWith(group.ID(gid))}
+	if !wipeContainers {
+		entityPredicates = append(
+			entityPredicates,
+			entity.HasEntityTypeWith(entitytype.IsLocation(false)),
+		)
+	}
+
+	entities, err := tx.Entity.Query().
+		Where(entityPredicates...).
+		WithAttachments(func(aq *ent.AttachmentQuery) {
+			aq.WithThumbnail()
+		}).
+		All(ctx)
+	if err != nil {
+		recordSpanError(span, err)
+		return 0, err
+	}
+
+	attachments := make([]*ent.Attachment, 0)
 	for _, e := range entities {
-		for _, att := range e.Edges.Attachments {
-			err := r.attachments.Delete(entCtx, gid, att.ID)
-			if err != nil {
-				recordSpanError(entSpan, err)
-				log.Err(err).Str("attachment_id", att.ID.String()).Msg("failed to delete attachment during wipe inventory")
-				continue
-			}
-			attachmentsDeleted++
-		}
-
-		_, err = r.db.Entity.
-			Delete().
-			Where(
-				entity.ID(e.ID),
-				entity.HasGroupWith(group.ID(gid)),
-			).Exec(entCtx)
-		if err != nil {
-			recordSpanError(entSpan, err)
-			log.Err(err).Str("entity_id", e.ID.String()).Msg("failed to delete entity during wipe inventory")
-			continue
-		}
-
-		entityDeleted++
+		attachments = append(attachments, e.Edges.Attachments...)
 	}
-	entSpan.SetAttributes(
-		attribute.Int("entities.deleted.count", entityDeleted),
-		attribute.Int("attachments.deleted.count", attachmentsDeleted),
-	)
-	entSpan.End()
-	deleted += entityDeleted
+	candidates, err := deleteAttachmentThumbnailsTx(ctx, tx, attachments)
+	if err != nil {
+		recordSpanError(span, err)
+		return 0, err
+	}
 
-	// Wipe tags if requested
+	deleted := 0
+	if wipeMaintenance {
+		count, err := tx.MaintenanceEntry.Delete().
+			Where(maintenanceentry.HasEntityWith(entity.HasGroupWith(group.ID(gid)))).
+			Exec(ctx)
+		if err != nil {
+			recordSpanError(span, err)
+			return 0, err
+		}
+		deleted += count
+	}
+
+	entityCount, err := tx.Entity.Delete().
+		Where(entityPredicates...).
+		Exec(ctx)
+	if err != nil {
+		recordSpanError(span, err)
+		return 0, err
+	}
+	deleted += entityCount
+
 	if wipeTags {
-		tagCtx, tagSpan := entityTracer().Start(ctx, "repo.EntityRepository.WipeInventory.tags")
-		tagCount, err := r.db.Tag.Delete().Where(tag.HasGroupWith(group.ID(gid))).Exec(tagCtx)
+		tagCount, err := tx.Tag.Delete().
+			Where(tag.HasGroupWith(group.ID(gid))).
+			Exec(ctx)
 		if err != nil {
-			recordSpanError(tagSpan, err)
-			log.Err(err).Msg("failed to delete tags during wipe inventory")
-		} else {
-			tagSpan.SetAttributes(attribute.Int("deleted.count", tagCount))
-			log.Info().Int("count", tagCount).Msg("deleted tags during wipe inventory")
-			deleted += tagCount
+			recordSpanError(span, err)
+			return 0, err
 		}
-		tagSpan.End()
+		deleted += tagCount
 	}
 
-	// Wipe containers (location-type entities) if requested
-	if wipeContainers {
-		containerCtx, containerSpan := entityTracer().Start(ctx, "repo.EntityRepository.WipeInventory.containers")
-		containerCount, err := r.db.Entity.Delete().
-			Where(
-				entity.HasGroupWith(group.ID(gid)),
-				entity.HasEntityTypeWith(entitytype.IsLocation(true)),
-			).Exec(containerCtx)
-		if err != nil {
-			recordSpanError(containerSpan, err)
-			log.Err(err).Msg("failed to delete containers during wipe inventory")
-		} else {
-			containerSpan.SetAttributes(attribute.Int("deleted.count", containerCount))
-			log.Info().Int("count", containerCount).Msg("deleted containers during wipe inventory")
-			deleted += containerCount
-		}
-		containerSpan.End()
+	if err := tx.Commit(); err != nil {
+		recordSpanError(span, err)
+		return 0, err
 	}
+	committed = true
 
-	span.SetAttributes(attribute.Int("deleted.count.total", deleted))
+	r.attachments.cleanupUnreferencedBlobs(ctx, candidates)
+	span.SetAttributes(
+		attribute.Int("deleted.count.total", deleted),
+		attribute.Int("entities.deleted.count", entityCount),
+	)
 	r.publishMutationEvent(gid)
 	return deleted, nil
 }

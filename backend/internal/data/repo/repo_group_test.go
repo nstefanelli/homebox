@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/usergroup"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/types"
 )
 
@@ -55,6 +56,53 @@ func Test_Group_Update(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "test2", g.Name)
 	assert.Equal(t, "EUR", g.Currency)
+}
+
+func Test_Group_DeleteReassignsEveryAffectedDefaultGroup(t *testing.T) {
+	ctx := context.Background()
+	first := userFactory()
+	first.DefaultGroupID = tGroup.ID
+	firstUser, err := tRepos.Users.Create(ctx, first)
+	require.NoError(t, err)
+
+	deletedGroup, err := tRepos.Groups.GroupCreate(ctx, "delete-default", firstUser.ID)
+	require.NoError(t, err)
+	replacement, err := tRepos.Groups.GroupCreate(ctx, "replacement-default", firstUser.ID)
+	require.NoError(t, err)
+
+	second := userFactory()
+	second.DefaultGroupID = tGroup.ID
+	secondUser, err := tRepos.Users.Create(ctx, second)
+	require.NoError(t, err)
+	_, err = tClient.UserGroup.Create().
+		SetUserID(secondUser.ID).
+		SetGroupID(deletedGroup.ID).
+		SetRole(usergroup.RoleUser).
+		Save(ctx)
+	require.NoError(t, err)
+
+	// Remove the bootstrap-group memberships so firstUser has exactly one
+	// replacement and secondUser has no replacement.
+	_, err = tClient.UserGroup.Delete().
+		Where(
+			usergroup.UserIDIn(firstUser.ID, secondUser.ID),
+			usergroup.GroupID(tGroup.ID),
+		).
+		Exec(ctx)
+	require.NoError(t, err)
+	require.NoError(t, tRepos.Users.UpdateDefaultGroup(ctx, firstUser.ID, deletedGroup.ID))
+	require.NoError(t, tRepos.Users.UpdateDefaultGroup(ctx, secondUser.ID, deletedGroup.ID))
+
+	require.NoError(t, tRepos.Groups.GroupDelete(ctx, deletedGroup.ID))
+
+	gotFirst, err := tClient.User.Get(ctx, firstUser.ID)
+	require.NoError(t, err)
+	require.NotNil(t, gotFirst.DefaultGroupID)
+	assert.Equal(t, replacement.ID, *gotFirst.DefaultGroupID)
+
+	gotSecond, err := tClient.User.Get(ctx, secondUser.ID)
+	require.NoError(t, err)
+	assert.Nil(t, gotSecond.DefaultGroupID)
 }
 
 // TODO: Fix this test at some point, the data itself in production/development is working fine, it only fails on the test

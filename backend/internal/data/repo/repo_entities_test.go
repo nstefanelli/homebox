@@ -883,7 +883,12 @@ func TestEntityRepository_WipeInventory_OnlyItems(t *testing.T) {
 	_, err = tRepos.Tags.GetOneByGroup(context.Background(), tGroup.ID, tagObj.ID)
 	require.NoError(t, err, "Tag should still exist")
 
+	// Containers are retained unless wipeContainers is explicitly requested.
+	_, err = tRepos.Entities.GetOneByGroup(context.Background(), tGroup.ID, container.ID)
+	require.NoError(t, err, "Container should still exist")
+
 	// Cleanup
+	_ = tRepos.Entities.Delete(context.Background(), container.ID)
 	_ = tRepos.Tags.DeleteByGroup(context.Background(), tGroup.ID, tagObj.ID)
 }
 
