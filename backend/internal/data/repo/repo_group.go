@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	stdsql "database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -516,6 +517,69 @@ func (r *GroupRepository) IntegrationsSet(ctx context.Context, gid uuid.UUID, da
 
 func (r *GroupRepository) RemoveMember(ctx context.Context, groupID, userID uuid.UUID) error {
 	return r.db.Group.UpdateOneID(groupID).RemoveUserIDs(userID).Exec(ctx)
+}
+
+// RemoveMemberAndReassignDefault removes one membership and, when necessary,
+// points the user's default at their oldest remaining group. Both mutations
+// commit together so a failed reassignment cannot strand a user with a
+// default group they no longer belong to.
+func (r *GroupRepository) RemoveMemberAndReassignDefault(ctx context.Context, userID, removedGroupID uuid.UUID) error {
+	tx, err := r.db.BeginTx(ctx, &stdsql.TxOptions{Isolation: stdsql.LevelSerializable})
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			if rollbackErr := tx.Rollback(); rollbackErr != nil {
+				log.Warn().Err(rollbackErr).Msg("failed to rollback member removal")
+			}
+		}
+	}()
+
+	member, err := tx.User.Get(ctx, userID)
+	if err != nil {
+		return err
+	}
+
+	deleted, err := tx.UserGroup.Delete().
+		Where(
+			usergroup.UserID(userID),
+			usergroup.GroupID(removedGroupID),
+		).
+		Exec(ctx)
+	if err != nil {
+		return err
+	}
+	if deleted != 1 {
+		return &ent.NotFoundError{}
+	}
+
+	if member.DefaultGroupID != nil && *member.DefaultGroupID == removedGroupID {
+		replacement, err := tx.Group.Query().
+			Where(group.HasUsersWith(user.ID(userID))).
+			Order(
+				ent.Asc(group.FieldCreatedAt),
+				ent.Asc(group.FieldID),
+			).
+			First(ctx)
+		if err != nil {
+			if ent.IsNotFound(err) {
+				return fmt.Errorf("cannot remove membership: user has no remaining group")
+			}
+			return err
+		}
+
+		if err := tx.User.UpdateOneID(userID).SetDefaultGroupID(replacement.ID).Exec(ctx); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 
 func (r *GroupRepository) InvitationDecrement(ctx context.Context, id uuid.UUID) error {

@@ -145,6 +145,60 @@ func Test_Group_IsMember(t *testing.T) {
 	assert.False(t, isMember)
 }
 
+func Test_Group_RemoveMemberAndReassignDefault(t *testing.T) {
+	ctx := context.Background()
+	data := userFactory()
+	data.DefaultGroupID = tGroup.ID
+	member, err := tRepos.Users.Create(ctx, data)
+	require.NoError(t, err)
+
+	removed, err := tRepos.Groups.GroupCreate(ctx, "removed-membership", member.ID)
+	require.NoError(t, err)
+	replacement, err := tRepos.Groups.GroupCreate(ctx, "replacement-membership", member.ID)
+	require.NoError(t, err)
+
+	// Leave exactly one eligible replacement so the expected choice is clear.
+	_, err = tClient.UserGroup.Delete().
+		Where(
+			usergroup.UserID(member.ID),
+			usergroup.GroupID(tGroup.ID),
+		).
+		Exec(ctx)
+	require.NoError(t, err)
+	require.NoError(t, tRepos.Users.UpdateDefaultGroup(ctx, member.ID, removed.ID))
+
+	require.NoError(t, tRepos.Groups.RemoveMemberAndReassignDefault(ctx, member.ID, removed.ID))
+
+	isMember, err := tRepos.Groups.IsMember(ctx, removed.ID, member.ID)
+	require.NoError(t, err)
+	assert.False(t, isMember)
+
+	got, err := tClient.User.Get(ctx, member.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.DefaultGroupID)
+	assert.Equal(t, replacement.ID, *got.DefaultGroupID)
+}
+
+func Test_Group_RemoveMemberAndReassignDefault_RollsBackWithoutReplacement(t *testing.T) {
+	ctx := context.Background()
+	data := userFactory()
+	data.DefaultGroupID = tGroup.ID
+	member, err := tRepos.Users.Create(ctx, data)
+	require.NoError(t, err)
+
+	err = tRepos.Groups.RemoveMemberAndReassignDefault(ctx, member.ID, tGroup.ID)
+	require.Error(t, err)
+
+	isMember, memberErr := tRepos.Groups.IsMember(ctx, tGroup.ID, member.ID)
+	require.NoError(t, memberErr)
+	assert.True(t, isMember, "membership deletion must roll back when default reassignment fails")
+
+	got, getErr := tClient.User.Get(ctx, member.ID)
+	require.NoError(t, getErr)
+	require.NotNil(t, got.DefaultGroupID)
+	assert.Equal(t, tGroup.ID, *got.DefaultGroupID)
+}
+
 func Test_Group_Integrations_RoundTrip(t *testing.T) {
 	ctx := context.Background()
 
