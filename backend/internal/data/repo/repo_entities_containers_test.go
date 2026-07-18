@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/samber/lo"
@@ -120,6 +121,73 @@ func TestEntityRepository_Query_IsContainerFilter(t *testing.T) {
 	ids := lo.Map(res.Items, func(e EntitySummary, _ int) string { return e.ID.String() })
 	assert.Contains(t, ids, toteEntity.ID.String())
 	assert.NotContains(t, ids, shelf.ID.String())
+}
+
+func TestEntityRepository_GetOneByGroup_ContainerTotalPrice(t *testing.T) {
+	ctx := context.Background()
+	tote := useToteEntityType(t)
+	itemType := useItemEntityType(t)
+
+	root, err := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+		Name:         "priced-root",
+		EntityTypeID: tote.ID,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tRepos.Entities.Delete(ctx, root.ID) })
+
+	nested, err := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+		Name:         "priced-nested",
+		ParentID:     root.ID,
+		EntityTypeID: tote.ID,
+	})
+	require.NoError(t, err)
+
+	createPricedItem := func(name string, parentID uuid.UUID, quantity, price float64) EntityOut {
+		t.Helper()
+		out, createErr := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+			Name:         name,
+			ParentID:     parentID,
+			EntityTypeID: itemType.ID,
+			Quantity:     quantity,
+		})
+		require.NoError(t, createErr)
+		require.NoError(t, tClient.Entity.UpdateOneID(out.ID).SetPurchasePrice(price).Exec(ctx))
+		return out
+	}
+
+	createPricedItem("direct", root.ID, 2, 10.5)
+	createPricedItem("nested", nested.ID, 3, 4)
+
+	sold := createPricedItem("sold", nested.ID, 5, 100)
+	require.NoError(t, tClient.Entity.UpdateOneID(sold.ID).SetSoldDate(time.Now()).Exec(ctx))
+
+	archived := createPricedItem("archived", root.ID, 7, 200)
+	require.NoError(t, tClient.Entity.UpdateOneID(archived.ID).SetArchived(true).Exec(ctx))
+
+	// A legacy corrupt cross-tenant edge must not leak into this group's total.
+	foreignGID, _, foreignTypeID := makeForeignGroup(t)
+	foreign, err := tRepos.Entities.Create(ctx, foreignGID, EntityCreate{
+		Name:         "foreign-priced",
+		EntityTypeID: foreignTypeID,
+		Quantity:     10,
+	})
+	require.NoError(t, err)
+	require.NoError(t, tClient.Entity.UpdateOneID(foreign.ID).
+		SetParentID(root.ID).
+		SetPurchasePrice(999).
+		Exec(ctx))
+
+	got, err := tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, root.ID)
+	require.NoError(t, err)
+	assert.InDelta(t, 33, got.TotalPrice, 0.001)
+
+	// Corrupt cycles terminate at the depth bound and DISTINCT prevents
+	// descendants reached more than once from inflating the total.
+	require.NoError(t, tClient.Entity.UpdateOneID(root.ID).SetParentID(nested.ID).Exec(ctx))
+	got, err = tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, root.ID)
+	require.NoError(t, err)
+	assert.InDelta(t, 33, got.TotalPrice, 0.001)
+	require.NoError(t, tClient.Entity.UpdateOneID(root.ID).ClearParent().Exec(ctx))
 }
 
 // TestEntityRepository_CreateFromTemplate_CopiesPhoto verifies that creating

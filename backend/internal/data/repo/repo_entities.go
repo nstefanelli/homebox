@@ -510,6 +510,21 @@ func (r *EntityRepository) getOneTx(
 			return EntityOut{}, err
 		}
 		out.Location = location
+
+		if e.Edges.EntityType != nil && e.Edges.EntityType.IsLocation {
+			var entClient *ent.Client
+			if tx != nil {
+				entClient = tx.Client()
+			} else {
+				entClient = r.db
+			}
+			totalPrice, err := descendantInventoryValue(ctx, entClient, effectiveGID, e.ID)
+			if err != nil {
+				recordSpanError(span, err)
+				return EntityOut{}, err
+			}
+			out.TotalPrice = totalPrice
+		}
 	}
 	span.SetAttributes(
 		attribute.String("entity.id", out.ID.String()),
@@ -519,6 +534,68 @@ func (r *EntityRepository) getOneTx(
 		attribute.Int("entity.children.count", len(out.Children)),
 	)
 	return out, nil
+}
+
+// descendantInventoryValue returns the purchase value of the unsold,
+// non-archived item descendants of a location. The recursive walk is scoped
+// at every hop so legacy cross-group edges cannot affect another tenant's
+// totals. DISTINCT prevents cycles from counting an entity repeatedly, while
+// the depth guard keeps corrupt hierarchies from recursing without bound.
+func descendantInventoryValue(
+	ctx context.Context,
+	client *ent.Client,
+	gid, rootID uuid.UUID,
+) (float64, error) {
+	const query = `
+		WITH RECURSIVE descendants(id, depth) AS (
+			SELECT e.id, 1
+			FROM entities e
+			WHERE e.entity_children = $1
+			  AND e.group_entities = $2
+
+			UNION ALL
+
+			SELECT e.id, d.depth + 1
+			FROM entities e
+			JOIN descendants d ON e.entity_children = d.id
+			WHERE e.group_entities = $2
+			  AND d.depth < $3
+		),
+		unique_descendants AS (
+			SELECT DISTINCT id
+			FROM descendants
+		)
+		SELECT COALESCE(SUM(e.purchase_price * e.quantity), 0)
+		FROM unique_descendants d
+		JOIN entities e ON e.id = d.id
+		JOIN entity_types et ON et.id = e.entity_type_entities
+		WHERE e.group_entities = $2
+		  AND et.group_entity_types = $2
+		  AND et.is_location = false
+		  AND e.archived = false
+		  AND e.sold_date IS NULL`
+
+	rows, err := client.RawQueryContext(ctx, query, rootID, gid, maxHierarchyDepth)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return 0, err
+		}
+		return 0, nil
+	}
+
+	var total float64
+	if err := rows.Scan(&total); err != nil {
+		return 0, err
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	return total, nil
 }
 
 // nearestLocationAncestor walks the parent chain and returns the first
