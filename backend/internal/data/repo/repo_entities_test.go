@@ -224,6 +224,98 @@ func TestEntityRepository_Create_RejectsNonFiniteQuantity(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestEntityRepository_Update_RollsBackEntityAndTagsWhenFieldWriteFails(t *testing.T) {
+	ctx := context.Background()
+	itemET := useItemEntityType(t)
+	tags := useTags(t, 1)
+
+	created, err := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+		Name:         "atomic-update-original",
+		Quantity:     1,
+		EntityTypeID: itemET.ID,
+		TagIDs:       []uuid.UUID{tags[0].ID},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tRepos.Entities.Delete(context.Background(), created.ID) })
+
+	_, err = tRepos.Entities.UpdateByGroup(ctx, tGroup.ID, EntityUpdate{
+		ID:           created.ID,
+		Name:         "must-roll-back",
+		Quantity:     2,
+		EntityTypeID: itemET.ID,
+		TagIDs:       []uuid.UUID{},
+		Fields: []EntityFieldData{{
+			Type: "not-a-valid-field-type",
+			Name: "invalid",
+		}},
+	})
+	require.Error(t, err)
+
+	got, err := tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "atomic-update-original", got.Name)
+	assert.Equal(t, 1.0, got.Quantity)
+	require.Len(t, got.Tags, 1)
+	assert.Equal(t, tags[0].ID, got.Tags[0].ID)
+	assert.Empty(t, got.Fields)
+}
+
+func TestEntityRepository_RejectsHierarchyCycles(t *testing.T) {
+	ctx := context.Background()
+	itemET := useItemEntityType(t)
+	containerET := useContainerEntityType(t)
+
+	create := func(name string, entityTypeID, parentID uuid.UUID) EntityOut {
+		t.Helper()
+		out, err := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+			Name:         name,
+			Quantity:     1,
+			EntityTypeID: entityTypeID,
+			ParentID:     parentID,
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = tRepos.Entities.Delete(context.Background(), out.ID) })
+		return out
+	}
+
+	root := create("cycle-root", itemET.ID, uuid.Nil)
+	child := create("cycle-child", itemET.ID, root.ID)
+	grandchild := create("cycle-grandchild", itemET.ID, child.ID)
+
+	_, err := tRepos.Entities.UpdateByGroup(ctx, tGroup.ID, EntityUpdate{
+		ID:           root.ID,
+		Name:         root.Name,
+		Quantity:     1,
+		EntityTypeID: itemET.ID,
+		ParentID:     grandchild.ID,
+	})
+	require.ErrorContains(t, err, "hierarchy cycle")
+
+	err = tRepos.Entities.Patch(ctx, tGroup.ID, child.ID, EntityPatch{
+		ParentID: child.ID,
+	})
+	require.ErrorContains(t, err, "hierarchy cycle")
+
+	rootContainer := create("container-cycle-root", containerET.ID, uuid.Nil)
+	childContainer := create("container-cycle-child", containerET.ID, rootContainer.ID)
+	_, err = tRepos.Entities.UpdateContainer(ctx, tGroup.ID, rootContainer.ID, EntityUpdate{
+		Name:     rootContainer.Name,
+		ParentID: childContainer.ID,
+	})
+	require.ErrorContains(t, err, "hierarchy cycle")
+
+	gotRoot, err := tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, root.ID)
+	require.NoError(t, err)
+	assert.Nil(t, gotRoot.Parent)
+	gotChild, err := tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, child.ID)
+	require.NoError(t, err)
+	require.NotNil(t, gotChild.Parent)
+	assert.Equal(t, root.ID, gotChild.Parent.ID)
+	gotContainerRoot, err := tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, rootContainer.ID)
+	require.NoError(t, err)
+	assert.Nil(t, gotContainerRoot.Parent)
+}
+
 func TestEntityRepository_Create_WithParent(t *testing.T) {
 	containerET := useContainerEntityType(t)
 	itemET := useItemEntityType(t)

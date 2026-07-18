@@ -112,6 +112,50 @@ func TestEntityTemplatesRepository_Update(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestEntityTemplatesRepository_Create_RollsBackOnFieldFailure(t *testing.T) {
+	ctx := context.Background()
+	before, err := tRepos.EntityTemplates.GetAll(ctx, tGroup.ID)
+	require.NoError(t, err)
+
+	data := templateFactory()
+	data.Name = "template-create-must-roll-back"
+	data.Fields = []TemplateField{{
+		Type: "not-a-valid-field-type",
+		Name: "invalid",
+	}}
+
+	_, err = tRepos.EntityTemplates.Create(ctx, tGroup.ID, data)
+	require.Error(t, err)
+
+	after, err := tRepos.EntityTemplates.GetAll(ctx, tGroup.ID)
+	require.NoError(t, err)
+	assert.Len(t, after, len(before), "template row must roll back when a field fails")
+}
+
+func TestEntityTemplatesRepository_Update_RollsBackOnFieldFailure(t *testing.T) {
+	ctx := context.Background()
+	created, err := tRepos.EntityTemplates.Create(ctx, tGroup.ID, templateFactory())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = tRepos.EntityTemplates.Delete(context.Background(), tGroup.ID, created.ID)
+	})
+
+	_, err = tRepos.EntityTemplates.Update(ctx, tGroup.ID, EntityTemplateUpdate{
+		ID:   created.ID,
+		Name: "template-update-must-roll-back",
+		Fields: []TemplateField{{
+			Type: "not-a-valid-field-type",
+			Name: "invalid",
+		}},
+	})
+	require.Error(t, err)
+
+	got, err := tRepos.EntityTemplates.GetOne(ctx, tGroup.ID, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, created.Name, got.Name)
+	assert.Empty(t, got.Fields)
+}
+
 func TestEntityTemplatesRepository_Delete(t *testing.T) {
 	data := templateFactory()
 

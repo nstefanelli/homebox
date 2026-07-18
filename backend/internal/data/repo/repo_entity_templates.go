@@ -275,16 +275,29 @@ func (r *EntityTemplatesRepository) GetOne(ctx context.Context, gid uuid.UUID, i
 
 // Create creates a new template
 func (r *EntityTemplatesRepository) Create(ctx context.Context, gid uuid.UUID, data EntityTemplateCreate) (EntityTemplateOut, error) {
-	if err := assertEntityInGroup(ctx, r.db.Entity, gid, data.DefaultLocationID); err != nil {
+	tx, err := r.db.Tx(ctx)
+	if err != nil {
+		return EntityTemplateOut{}, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			if rollbackErr := tx.Rollback(); rollbackErr != nil {
+				log.Warn().Err(rollbackErr).Msg("failed to rollback transaction during template create")
+			}
+		}
+	}()
+
+	if err := assertEntityInGroup(ctx, tx.Entity, gid, data.DefaultLocationID); err != nil {
 		return EntityTemplateOut{}, err
 	}
 	if data.DefaultTagIDs != nil {
-		if err := assertTagsInGroup(ctx, r.db.Tag, gid, *data.DefaultTagIDs); err != nil {
+		if err := assertTagsInGroup(ctx, tx.Tag, gid, *data.DefaultTagIDs); err != nil {
 			return EntityTemplateOut{}, err
 		}
 	}
 
-	q := r.db.EntityTemplate.Create().
+	q := tx.EntityTemplate.Create().
 		SetName(data.Name).
 		SetDescription(data.Description).
 		SetNotes(data.Notes).
@@ -315,7 +328,7 @@ func (r *EntityTemplatesRepository) Create(ctx context.Context, gid uuid.UUID, d
 
 	// Create template fields
 	for _, field := range data.Fields {
-		_, err = r.db.TemplateField.Create().
+		_, err = tx.TemplateField.Create().
 			SetEntityTemplateID(template.ID).
 			SetType(templatefield.Type(field.Type)).
 			SetName(field.Name).
@@ -328,23 +341,41 @@ func (r *EntityTemplatesRepository) Create(ctx context.Context, gid uuid.UUID, d
 		}
 	}
 
+	if err := tx.Commit(); err != nil {
+		return EntityTemplateOut{}, err
+	}
+	committed = true
+
 	r.publishMutationEvent(gid)
 	return r.GetOne(ctx, gid, template.ID)
 }
 
 // Update updates an existing template
 func (r *EntityTemplatesRepository) Update(ctx context.Context, gid uuid.UUID, data EntityTemplateUpdate) (EntityTemplateOut, error) {
-	if err := assertEntityInGroup(ctx, r.db.Entity, gid, data.DefaultLocationID); err != nil {
+	tx, err := r.db.Tx(ctx)
+	if err != nil {
+		return EntityTemplateOut{}, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			if rollbackErr := tx.Rollback(); rollbackErr != nil {
+				log.Warn().Err(rollbackErr).Msg("failed to rollback transaction during template update")
+			}
+		}
+	}()
+
+	if err := assertEntityInGroup(ctx, tx.Entity, gid, data.DefaultLocationID); err != nil {
 		return EntityTemplateOut{}, err
 	}
 	if data.DefaultTagIDs != nil {
-		if err := assertTagsInGroup(ctx, r.db.Tag, gid, *data.DefaultTagIDs); err != nil {
+		if err := assertTagsInGroup(ctx, tx.Tag, gid, *data.DefaultTagIDs); err != nil {
 			return EntityTemplateOut{}, err
 		}
 	}
 
 	// Verify template belongs to group
-	template, err := r.db.EntityTemplate.Query().
+	template, err := tx.EntityTemplate.Query().
 		Where(
 			entitytemplate.ID(data.ID),
 			entitytemplate.HasGroupWith(group.ID(gid)),
@@ -392,7 +423,7 @@ func (r *EntityTemplatesRepository) Update(ctx context.Context, gid uuid.UUID, d
 	}
 
 	// Get existing fields
-	existingFields, err := r.db.TemplateField.Query().
+	existingFields, err := tx.TemplateField.Query().
 		Where(templatefield.HasEntityTemplateWith(entitytemplate.ID(data.ID))).
 		All(ctx)
 
@@ -407,7 +438,7 @@ func (r *EntityTemplatesRepository) Update(ctx context.Context, gid uuid.UUID, d
 	for _, field := range data.Fields {
 		if field.ID == nil || *field.ID == uuid.Nil {
 			// Create new field
-			_, err = r.db.TemplateField.Create().
+			_, err = tx.TemplateField.Create().
 				SetEntityTemplateID(data.ID).
 				SetType(templatefield.Type(field.Type)).
 				SetName(field.Name).
@@ -421,7 +452,8 @@ func (r *EntityTemplatesRepository) Update(ctx context.Context, gid uuid.UUID, d
 		} else {
 			// Update existing field
 			updatedFieldIDs[*field.ID] = true
-			_, err = r.db.TemplateField.Update().
+			var updated int
+			updated, err = tx.TemplateField.Update().
 				Where(
 					templatefield.ID(*field.ID),
 					templatefield.HasEntityTemplateWith(entitytemplate.ID(data.ID)),
@@ -435,18 +467,27 @@ func (r *EntityTemplatesRepository) Update(ctx context.Context, gid uuid.UUID, d
 				log.Err(err).Msg("failed to update template field")
 				return EntityTemplateOut{}, err
 			}
+			if updated != 1 {
+				return EntityTemplateOut{}, &ent.NotFoundError{}
+			}
 		}
 	}
 
 	// Delete fields that are no longer present
 	for _, field := range existingFields {
 		if !updatedFieldIDs[field.ID] {
-			err = r.db.TemplateField.DeleteOne(field).Exec(ctx)
+			err = tx.TemplateField.DeleteOne(field).Exec(ctx)
 			if err != nil {
 				log.Err(err).Msg("failed to delete template field")
+				return EntityTemplateOut{}, err
 			}
 		}
 	}
+
+	if err := tx.Commit(); err != nil {
+		return EntityTemplateOut{}, err
+	}
+	committed = true
 
 	r.publishMutationEvent(gid)
 	return r.GetOne(ctx, gid, template.ID)
