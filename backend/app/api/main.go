@@ -145,6 +145,13 @@ func main() {
 }
 
 func run(cfg *config.Config) error {
+	// Demo mode seeds a fixed, publicly known account. Only explicit
+	// development mode may use the convenient public default password; every
+	// deployed (or unrecognized) mode must provide a non-trivial credential.
+	if err := validateDemoConfig(cfg); err != nil {
+		return err
+	}
+
 	app := new(cfg)
 	defer app.stopRateLimiters()
 	app.setupLogger()

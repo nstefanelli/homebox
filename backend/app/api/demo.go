@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -10,18 +11,52 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/sysadminsmedia/homebox/backend/internal/core/services"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent"
+	"github.com/sysadminsmedia/homebox/backend/internal/sys/config"
 )
 
 const (
-	// demoPasswordEnv is the env var operators set when running demo mode in
-	// production, overriding the hardcoded development default below.
-	// When set, the value is accepted verbatim regardless of length —
-	// PasswordMinLength is bypassed for demo seeding (see SetupDemo).
+	// demoPasswordEnv is the env var operators set when running demo mode
+	// outside development, overriding the hardcoded development default below.
 	demoPasswordEnv = "HBOX_DEMO_PASSWORD" // #nosec G101 -- an environment variable name, not a credential value.
-	// demoPasswordDefault is the password used when demoPasswordEnv is unset.
-	// Public knowledge — only safe to leave at the default in development.
+	// demoPasswordDefault is public knowledge and is therefore only available
+	// while running explicitly in development mode.
 	demoPasswordDefault = "demodemo"
+	// demoPasswordMinLength is the minimum acceptable length for a demo
+	// password outside development mode.
+	demoPasswordMinLength = 12
 )
+
+// resolveDemoPassword keeps the public default available for local development
+// without allowing it to become an implicit credential on a deployed instance.
+// Unknown modes fail closed too: a misspelled production mode must not restore
+// the development password.
+func resolveDemoPassword(mode, configured string) (string, error) {
+	if mode == config.ModeDevelopment {
+		if configured == "" {
+			return demoPasswordDefault, nil
+		}
+		return configured, nil
+	}
+
+	if len(configured) < demoPasswordMinLength {
+		return "", fmt.Errorf(
+			"refusing to enable demo mode outside development: %s must be set to at least %d characters",
+			demoPasswordEnv,
+			demoPasswordMinLength,
+		)
+	}
+
+	return configured, nil
+}
+
+func validateDemoConfig(cfg *config.Config) error {
+	if !cfg.Demo {
+		return nil
+	}
+
+	_, err := resolveDemoPassword(cfg.Mode, os.Getenv(demoPasswordEnv))
+	return err
+}
 
 func (a *app) SetupDemo() error {
 	csvText := `HB.import_ref,HB.location,HB.tags,HB.quantity,HB.name,HB.description,HB.insured,HB.serial_number,HB.model_number,HB.manufacturer,HB.notes,HB.purchase_from,HB.purchase_price,HB.purchase_date,HB.lifetime_warranty,HB.warranty_expires,HB.warranty_details,HB.sold_to,HB.sold_price,HB.sold_date,HB.sold_notes
@@ -36,9 +71,9 @@ func (a *app) SetupDemo() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	demoPassword := os.Getenv(demoPasswordEnv)
-	if demoPassword == "" {
-		demoPassword = demoPasswordDefault
+	demoPassword, err := resolveDemoPassword(a.conf.Mode, os.Getenv(demoPasswordEnv))
+	if err != nil {
+		return err
 	}
 
 	registration := services.UserRegistration{
@@ -53,10 +88,12 @@ func (a *app) SetupDemo() error {
 		return nil
 	}
 
-	// Otherwise, register the demo user. Skip PasswordMinLength so operators
-	// can use any HBOX_DEMO_PASSWORD; public registration still enforces it.
+	// Otherwise, register the demo user. Production credentials have already
+	// passed the stronger demoPasswordMinLength check. Keep the bypass here for
+	// legacy development fixtures that intentionally use shorter passwords;
+	// public registration still enforces services.PasswordMinLength.
 	log.Debug().Msg("Registering demo user")
-	_, err := a.services.User.RegisterUser(ctx, registration, services.SkipPasswordValidation())
+	_, err = a.services.User.RegisterUser(ctx, registration, services.SkipPasswordValidation())
 	if err != nil {
 		if ent.IsConstraintError(err) {
 			// Concurrent creation race: treat as exists and skip

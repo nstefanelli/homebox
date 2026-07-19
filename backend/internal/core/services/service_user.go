@@ -68,8 +68,9 @@ type registerOptions struct {
 }
 
 // SkipPasswordValidation bypasses the PasswordMinLength floor for this
-// registration. Reserved for demo seeding, where the operator-supplied
-// HBOX_DEMO_PASSWORD must be accepted as-is regardless of length.
+// registration. Reserved for demo seeding: deployed demo credentials are
+// validated before registration, while local development may retain legacy
+// short fixture passwords.
 func SkipPasswordValidation() RegisterOption {
 	return func(o *registerOptions) { o.skipPasswordValidation = true }
 }
