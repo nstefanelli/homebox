@@ -263,6 +263,7 @@
           return {
             type: "link",
             name: field.name,
+            translateName: false,
             text: url.text,
             href: url.url,
           } as AnyDetail;
@@ -270,6 +271,7 @@
 
         return {
           name: field.name,
+          translateName: false,
           text: field.textValue,
         };
       }),

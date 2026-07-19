@@ -5,7 +5,7 @@
         <span v-if="currentEntityType" class="inline-flex items-center gap-2">
           <MdiMapMarkerOutline v-if="currentEntityType.isLocation && !currentEntityType.isContainer" class="size-4" />
           <MdiPackageVariantClosed v-else class="size-4" />
-          <span>{{ t(currentEntityType.name) }}</span>
+          <span>{{ currentEntityType.name }}</span>
         </span>
       </SelectValue>
     </SelectTrigger>
@@ -14,7 +14,7 @@
         <div class="flex items-center gap-2">
           <MdiMapMarkerOutline v-if="type.isLocation && !type.isContainer" class="size-4" />
           <MdiPackageVariantClosed v-else class="size-4" />
-          <span>{{ t(type.name) }}</span>
+          <span>{{ type.name }}</span>
           <Badge v-if="type.isContainer" variant="outline" class="text-xs">
             {{ t("components.entityTypes.card.badge_is_container") }}
           </Badge>

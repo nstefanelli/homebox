@@ -318,7 +318,7 @@
 
           <div class="mr-auto min-w-0">
             <div class="flex items-center gap-2">
-              <span class="font-medium">{{ t(et.name) }}</span>
+              <span class="font-medium">{{ et.name }}</span>
               <Badge v-if="et.isLocation" variant="secondary" class="text-xs">
                 {{ t("components.entityTypes.card.badge_container") }}
               </Badge>

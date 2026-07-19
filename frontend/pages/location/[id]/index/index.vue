@@ -236,6 +236,7 @@
       ...(location.value.fields || []).map(field => {
         return {
           name: field.name,
+          translateName: false,
           text: field.textValue,
         } as AnyDetail;
       }),

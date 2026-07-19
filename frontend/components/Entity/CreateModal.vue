@@ -244,7 +244,7 @@
         :autofocus="true"
         :label="
           $t('components.entity.create_modal.entity_name', {
-            type: selectedEntityType ? t(selectedEntityType.name) : '',
+            type: selectedEntityType?.name || '',
           })
         "
         :max-length="255"
@@ -255,7 +255,7 @@
         v-model.number="form.quantity"
         :label="
           $t('components.entity.create_modal.entity_quantity', {
-            type: t(selectedEntityType ? selectedEntityType.name : 'global.entity'),
+            type: selectedEntityType?.name || t('global.entity'),
           })
         "
         type="number"
@@ -275,7 +275,7 @@
         v-model="form.description"
         :label="
           $t('components.entity.create_modal.entity_description', {
-            type: t(selectedEntityType ? selectedEntityType.name : 'global.entity'),
+            type: selectedEntityType?.name || t('global.entity'),
           })
         "
         :max-length="1000"
@@ -316,7 +316,7 @@
       <PhotoUploader
         :label="
           $t('components.entity.create_modal.entity_photo', {
-            type: t(selectedEntityType ? selectedEntityType.name : 'global.entity'),
+            type: selectedEntityType?.name || t('global.entity'),
           })
         "
         :button-label="$t('components.entity.create_modal.upload_photos')"
@@ -963,7 +963,7 @@
     if (loading.value) {
       toast.error(
         t("components.entity.create_modal.toast.already_creating", {
-          type: t(selectedEntityType.value ? selectedEntityType.value.name : "global.entity"),
+          type: selectedEntityType.value?.name || t("global.entity"),
         })
       );
       return;
@@ -1146,7 +1146,7 @@
       if (error) {
         toast.error(
           t("components.entity.create_modal.toast.create_failed", {
-            type: t(selectedEntityType.value ? selectedEntityType.value.name : "global.entity"),
+            type: selectedEntityType.value?.name || t("global.entity"),
           })
         );
         return;
@@ -1154,7 +1154,7 @@
 
       toast.success(
         t("components.entity.create_modal.toast.create_success", {
-          type: t(selectedEntityType.value ? selectedEntityType.value.name : "global.entity"),
+          type: selectedEntityType.value?.name || t("global.entity"),
         })
       );
 
@@ -1233,7 +1233,7 @@
         selectedEntityType.value?.isContainer
           ? t("components.entity.create_modal.batch_failed")
           : t("components.entity.create_modal.toast.create_failed", {
-              type: t(selectedEntityType.value ? selectedEntityType.value.name : "global.entity"),
+              type: selectedEntityType.value?.name || t("global.entity"),
             })
       );
     } finally {

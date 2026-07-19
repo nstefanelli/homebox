@@ -205,7 +205,7 @@
 
 <template>
   <BaseContainer>
-    <Title>{{ t("menu.collection_options") }}</Title>
+    <Title>{{ t("menu.collection") }}</Title>
 
     <section>
       <Card class="p-3">
