@@ -145,7 +145,7 @@ func Test_EntityPatch_RejectsForeignTarget(t *testing.T) {
 
 	got, err := tRepos.Entities.GetOneByGroup(ctx, foreignGID, foreign.ID)
 	require.NoError(t, err)
-	assert.Equal(t, 1.0, got.Quantity)
+	assert.InDelta(t, 1, got.Quantity, 0.000001)
 }
 
 func Test_EntityContainerUpdate_RejectsForeignTargetWithoutDisclosure(t *testing.T) {

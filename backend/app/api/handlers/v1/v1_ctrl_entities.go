@@ -6,8 +6,6 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
-	"math"
-	"math/big"
 	"net/http"
 	"strings"
 	"time"
@@ -118,6 +116,7 @@ func (ctrl *V1Controller) HandleEntitiesGetAll() errchain.HandlerFunc {
 
 	return func(w http.ResponseWriter, r *http.Request) error {
 		query := extractQuery(r)
+		query.IncludeInventoryValue = true
 		spanCtx, span := startEntityCtrlSpan(r.Context(), "controller.V1.HandleEntitiesGetAll",
 			attribute.String("query.search", query.Search),
 			attribute.Int("query.page", query.Page),
@@ -154,29 +153,15 @@ func (ctrl *V1Controller) HandleEntitiesGetAll() errchain.HandlerFunc {
 			return validate.NewRequestError(err, http.StatusInternalServerError)
 		}
 
-		_, totalSpan := startEntityCtrlSpan(spanCtx, "controller.V1.HandleEntitiesGetAll.totalPrice",
-			attribute.Int("items.count", len(items.Items)))
-		totalPrice := new(big.Int)
-		for _, item := range items.Items {
-			if !item.SoldDate.Time().IsZero() {
-				continue
-			}
-			totalPrice.Add(totalPrice, big.NewInt(int64(math.Round(item.PurchasePrice*100))))
-		}
-
-		totalPriceFloat, _ := new(big.Float).Quo(new(big.Float).SetInt(totalPrice), big.NewFloat(100)).Float64()
-		totalSpan.SetAttributes(attribute.Float64("total_price", totalPriceFloat))
-		totalSpan.End()
-
 		span.SetAttributes(
 			attribute.Int("response.items.count", len(items.Items)),
 			attribute.Int("response.total", items.Total),
-			attribute.Float64("response.total_price", totalPriceFloat),
+			attribute.Float64("response.total_price", items.FilteredInventoryValue),
 		)
 
 		return server.JSON(w, http.StatusOK, repo.EntityListResult{
 			PaginationResult: items,
-			TotalPrice:       totalPriceFloat,
+			TotalPrice:       items.FilteredInventoryValue,
 		})
 	}
 }

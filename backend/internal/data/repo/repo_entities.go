@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	entsql "entgo.io/ent/dialect/sql"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"github.com/samber/lo"
@@ -73,6 +74,11 @@ type (
 		FilterChildren   bool         `json:"filterChildren"` // when true, only return root entities (no parent)
 		Fields           []FieldQuery `json:"fields"`
 		OrderBy          string       `json:"orderBy"`
+
+		// IncludeInventoryValue asks QueryByGroup to calculate the value of all
+		// matching inventory independently of pagination. It is an internal
+		// response concern, not a client-controlled filter.
+		IncludeInventoryValue bool `json:"-"`
 	}
 
 	DuplicateOptions struct {
@@ -755,7 +761,114 @@ func entityQuerySpanAttrs(gid uuid.UUID, q EntityQuery) []attribute.KeyValue {
 		attribute.Bool("query.is_container.set", isContSet),
 		attribute.Bool("query.is_container.value", isContValue),
 		attribute.Bool("query.asset_id.set", !q.AssetID.Nil()),
+		attribute.Bool("query.include_inventory_value", q.IncludeInventoryValue),
 	}
+}
+
+// inventoryValuePredicates define Homebox's current-inventory value semantic:
+// unsold, non-archived, non-location entities, valued as purchase price times
+// quantity, with both the entity and its type scoped to the tenant.
+func inventoryValuePredicates(gid uuid.UUID) []predicate.Entity {
+	return []predicate.Entity{
+		entity.HasGroupWith(group.ID(gid)),
+		entity.Archived(false),
+		entity.SoldDateIsNil(),
+		entity.HasEntityTypeWith(
+			entitytype.IsLocation(false),
+			entitytype.HasGroupWith(group.ID(gid)),
+		),
+	}
+}
+
+func inventoryValueFromQuery(ctx context.Context, gid uuid.UUID, qb *ent.EntityQuery) (float64, error) {
+	qb = qb.Where(inventoryValuePredicates(gid)...)
+
+	var result []struct {
+		Total *float64 `json:"total"`
+	}
+	err := qb.Aggregate(func(selector *entsql.Selector) string {
+		expression := fmt.Sprintf(
+			"SUM(%s * %s)",
+			selector.C(entity.FieldPurchasePrice),
+			selector.C(entity.FieldQuantity),
+		)
+		return entsql.As(expression, "total")
+	}).Scan(ctx, &result)
+	if err != nil {
+		return 0, err
+	}
+	if len(result) == 0 {
+		return 0, nil
+	}
+	return orDefault(result[0].Total, 0), nil
+}
+
+func applyEntityTypeQueryFilters(qb *ent.EntityQuery, gid uuid.UUID, q EntityQuery) *ent.EntityQuery {
+	// Default (nil) remains items-only for backward compatibility.
+	if q.IsLocation != nil && *q.IsLocation {
+		qb = qb.Where(entity.HasEntityTypeWith(
+			entitytype.IsLocation(true),
+			entitytype.HasGroupWith(group.ID(gid)),
+		))
+	} else {
+		qb = qb.Where(
+			entity.Or(
+				entity.Not(entity.HasEntityType()),
+				entity.HasEntityTypeWith(
+					entitytype.IsLocation(false),
+					entitytype.HasGroupWith(group.ID(gid)),
+				),
+			),
+		)
+	}
+
+	if q.IsContainer == nil {
+		return qb
+	}
+	if *q.IsContainer {
+		return qb.Where(entity.HasEntityTypeWith(
+			entitytype.IsContainer(true),
+			entitytype.HasGroupWith(group.ID(gid)),
+		))
+	}
+	return qb.Where(
+		entity.Or(
+			entity.Not(entity.HasEntityType()),
+			entity.HasEntityTypeWith(
+				entitytype.IsContainer(false),
+				entitytype.HasGroupWith(group.ID(gid)),
+			),
+		),
+	)
+}
+
+func prepareEntityFetchQuery(qb *ent.EntityQuery, q EntityQuery) *ent.EntityQuery {
+	switch q.OrderBy {
+	case "createdAt":
+		qb = qb.Order(ent.Desc(entity.FieldCreatedAt))
+	case "updatedAt":
+		qb = qb.Order(ent.Desc(entity.FieldUpdatedAt))
+	case "assetId":
+		qb = qb.Order(ent.Asc(entity.FieldAssetID))
+	default: // "name"
+		qb = qb.Order(ent.Asc(entity.FieldName))
+	}
+
+	qb = qb.
+		WithTag().
+		WithParent().
+		WithEntityType().
+		WithAttachments(func(aq *ent.AttachmentQuery) {
+			aq.Where(attachment.Primary(true))
+			aq.WithThumbnail()
+		})
+
+	if q.Page != -1 || q.PageSize != -1 {
+		qb = qb.
+			Offset(calculateOffset(q.Page, q.PageSize)).
+			Limit(q.PageSize)
+	}
+	return qb
 }
 
 // QueryByGroup returns a list of entities that belong to a specific group based on the provided query.
@@ -768,35 +881,7 @@ func (r *EntityRepository) QueryByGroup(ctx context.Context, gid uuid.UUID, q En
 		entity.HasGroupWith(group.ID(gid)),
 	)
 
-	// Filter by entity type (location vs item) when specified.
-	// Default (nil) = items only (excludes locations for backward compat)
-	switch {
-	case q.IsLocation != nil && *q.IsLocation:
-		qb = qb.Where(entity.HasEntityTypeWith(entitytype.IsLocation(true)))
-	default:
-		// nil or false: exclude locations
-		qb = qb.Where(
-			entity.Or(
-				entity.Not(entity.HasEntityType()),
-				entity.HasEntityTypeWith(entitytype.IsLocation(false)),
-			),
-		)
-	}
-
-	// Filter by container flag when specified (composes with IsLocation above).
-	if q.IsContainer != nil {
-		if *q.IsContainer {
-			qb = qb.Where(entity.HasEntityTypeWith(entitytype.IsContainer(true)))
-		} else {
-			// Entities with no entity type are trivially not containers.
-			qb = qb.Where(
-				entity.Or(
-					entity.Not(entity.HasEntityType()),
-					entity.HasEntityTypeWith(entitytype.IsContainer(false)),
-				),
-			)
-		}
-	}
+	qb = applyEntityTypeQueryFilters(qb, gid, q)
 
 	if q.FilterChildren {
 		qb = qb.Where(entity.Not(entity.HasParent()))
@@ -912,6 +997,21 @@ func (r *EntityRepository) QueryByGroup(ctx context.Context, gid uuid.UUID, q En
 
 	span.SetAttributes(attribute.Int("query.predicates.and.count", len(andPredicates)))
 
+	filteredInventoryValue := float64(0)
+	var err error
+	if q.IncludeInventoryValue {
+		valueCtx, valueSpan := entityTracer().Start(ctx, "repo.EntityRepository.QueryByGroup.inventoryValue")
+		filteredInventoryValue, err = inventoryValueFromQuery(valueCtx, gid, qb.Clone())
+		if err != nil {
+			recordSpanError(valueSpan, err)
+			valueSpan.End()
+			recordSpanError(span, err)
+			return PaginationResult[EntitySummary]{}, err
+		}
+		valueSpan.SetAttributes(attribute.Float64("inventory.value", filteredInventoryValue))
+		valueSpan.End()
+	}
+
 	countCtx, countSpan := entityTracer().Start(ctx, "repo.EntityRepository.QueryByGroup.count")
 	count, err := qb.Count(countCtx)
 	if err != nil {
@@ -923,34 +1023,7 @@ func (r *EntityRepository) QueryByGroup(ctx context.Context, gid uuid.UUID, q En
 	countSpan.SetAttributes(attribute.Int("query.total.count", count))
 	countSpan.End()
 
-	// Order
-	switch q.OrderBy {
-	case "createdAt":
-		qb = qb.Order(ent.Desc(entity.FieldCreatedAt))
-	case "updatedAt":
-		qb = qb.Order(ent.Desc(entity.FieldUpdatedAt))
-	case "assetId":
-		qb = qb.Order(ent.Asc(entity.FieldAssetID))
-	default: // "name"
-		qb = qb.Order(ent.Asc(entity.FieldName))
-	}
-
-	qb = qb.
-		WithTag().
-		WithParent().
-		WithEntityType().
-		WithAttachments(func(aq *ent.AttachmentQuery) {
-			aq.Where(
-				attachment.Primary(true),
-			)
-			aq.WithThumbnail()
-		})
-
-	if q.Page != -1 || q.PageSize != -1 {
-		qb = qb.
-			Offset(calculateOffset(q.Page, q.PageSize)).
-			Limit(q.PageSize)
-	}
+	qb = prepareEntityFetchQuery(qb, q)
 
 	fetchCtx, fetchSpan := entityTracer().Start(ctx, "repo.EntityRepository.QueryByGroup.fetch")
 	entities, err := mapEntitiesSummaryErr(qb.All(fetchCtx))
@@ -987,10 +1060,11 @@ func (r *EntityRepository) QueryByGroup(ctx context.Context, gid uuid.UUID, q En
 	)
 
 	return PaginationResult[EntitySummary]{
-		Page:     q.Page,
-		PageSize: q.PageSize,
-		Total:    count,
-		Items:    entities,
+		Page:                   q.Page,
+		PageSize:               q.PageSize,
+		Total:                  count,
+		Items:                  entities,
+		FilteredInventoryValue: filteredInventoryValue,
 	}, nil
 }
 

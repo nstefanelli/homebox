@@ -3,8 +3,10 @@ package repo
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/usergroup"
@@ -103,6 +105,115 @@ func Test_Group_DeleteReassignsEveryAffectedDefaultGroup(t *testing.T) {
 	gotSecond, err := tClient.User.Get(ctx, secondUser.ID)
 	require.NoError(t, err)
 	assert.Nil(t, gotSecond.DefaultGroupID)
+}
+
+func Test_Group_InventoryValuationSemantics(t *testing.T) {
+	ctx := context.Background()
+	inventoryGroup, err := tRepos.Groups.GroupCreate(ctx, "inventory-stats-"+uuid.NewString(), uuid.Nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tRepos.Groups.GroupDelete(ctx, inventoryGroup.ID) })
+
+	locationType, err := tRepos.EntityTypes.GetDefault(ctx, inventoryGroup.ID, true)
+	require.NoError(t, err)
+	itemType, err := tRepos.EntityTypes.GetDefault(ctx, inventoryGroup.ID, false)
+	require.NoError(t, err)
+	inventoryTag, err := tRepos.Tags.Create(ctx, inventoryGroup.ID, TagCreate{Name: "valued"})
+	require.NoError(t, err)
+
+	root, err := tRepos.Entities.Create(ctx, inventoryGroup.ID, EntityCreate{
+		Name:         "root-location",
+		EntityTypeID: locationType.ID,
+	})
+	require.NoError(t, err)
+	nested, err := tRepos.Entities.Create(ctx, inventoryGroup.ID, EntityCreate{
+		Name:         "nested-location",
+		ParentID:     root.ID,
+		EntityTypeID: locationType.ID,
+	})
+	require.NoError(t, err)
+
+	start := time.Now().Add(-time.Minute)
+	createPriced := func(name string, parentID uuid.UUID, quantity, price float64) EntityOut {
+		t.Helper()
+		out, createErr := tRepos.Entities.Create(ctx, inventoryGroup.ID, EntityCreate{
+			Name:         name,
+			ParentID:     parentID,
+			EntityTypeID: itemType.ID,
+			Quantity:     quantity,
+			TagIDs:       []uuid.UUID{inventoryTag.ID},
+		})
+		require.NoError(t, createErr)
+		require.NoError(t, tClient.Entity.UpdateOneID(out.ID).SetPurchasePrice(price).Exec(ctx))
+		return out
+	}
+
+	createPriced("direct-active", root.ID, 2, 10.5)
+	createPriced("nested-active", nested.ID, 3, 4)
+	sold := createPriced("sold", nested.ID, 5, 100)
+	require.NoError(t, tClient.Entity.UpdateOneID(sold.ID).SetSoldDate(time.Now()).Exec(ctx))
+	archived := createPriced("archived", root.ID, 7, 200)
+	require.NoError(t, tClient.Entity.UpdateOneID(archived.ID).SetArchived(true).Exec(ctx))
+
+	foreignGroupID, _, foreignTypeID := makeForeignGroup(t)
+	t.Cleanup(func() { _ = tRepos.Groups.GroupDelete(ctx, foreignGroupID) })
+	foreign, err := tRepos.Entities.Create(ctx, foreignGroupID, EntityCreate{
+		Name:         "foreign-corrupt-child",
+		EntityTypeID: foreignTypeID,
+		Quantity:     10,
+	})
+	require.NoError(t, err)
+	require.NoError(t, tClient.Entity.UpdateOneID(foreign.ID).
+		SetParentID(root.ID).
+		SetPurchasePrice(999).
+		AddTagIDs(inventoryTag.ID).
+		Exec(ctx))
+
+	// Legacy corruption can also point an entity in this group at a foreign
+	// entity type. Type tenant scoping must exclude it everywhere.
+	crossType, err := tRepos.Entities.Create(ctx, inventoryGroup.ID, EntityCreate{
+		Name:         "foreign-type",
+		ParentID:     root.ID,
+		EntityTypeID: itemType.ID,
+		Quantity:     1,
+		TagIDs:       []uuid.UUID{inventoryTag.ID},
+	})
+	require.NoError(t, err)
+	require.NoError(t, tClient.Entity.UpdateOneID(crossType.ID).
+		SetEntityTypeID(foreignTypeID).
+		SetPurchasePrice(555).
+		Exec(ctx))
+
+	stats, err := tRepos.Groups.StatsGroup(ctx, inventoryGroup.ID)
+	require.NoError(t, err)
+	assert.InDelta(t, 33, stats.TotalItemPrice, 0.001)
+	assert.Equal(t, 3, stats.TotalItems, "sold items remain in the item count, while archived and foreign-typed rows do not")
+	assert.Equal(t, 2, stats.TotalLocations)
+
+	locations, err := tRepos.Groups.StatsLocationsByPurchasePrice(ctx, inventoryGroup.ID)
+	require.NoError(t, err)
+	locationTotals := lo.SliceToMap(locations, func(item TotalsByOrganizer) (string, float64) {
+		return item.Name, item.Total
+	})
+	assert.InDelta(t, 33, locationTotals["root-location"], 0.001)
+	assert.InDelta(t, 12, locationTotals["nested-location"], 0.001)
+
+	tags, err := tRepos.Groups.StatsTagsByPurchasePrice(ctx, inventoryGroup.ID)
+	require.NoError(t, err)
+	require.Len(t, tags, 1)
+	assert.Equal(t, inventoryTag.ID, tags[0].ID)
+	assert.InDelta(t, 33, tags[0].Total, 0.001)
+
+	overTime, err := tRepos.Groups.StatsPurchasePrice(ctx, inventoryGroup.ID, start, time.Now().Add(time.Minute))
+	require.NoError(t, err)
+	assert.InDelta(t, 0, overTime.PriceAtStart, 0.001)
+	assert.InDelta(t, 33, overTime.PriceAtEnd, 0.001)
+	entryTotal := lo.SumBy(overTime.Entries, func(entry ValueOverTimeEntry) float64 {
+		return entry.Value
+	})
+	assert.InDelta(t, 33, entryTotal, 0.001)
+	assert.ElementsMatch(t, []string{"direct-active", "nested-active"}, lo.Map(overTime.Entries, func(entry ValueOverTimeEntry, _ int) string {
+		return entry.Name
+	}))
 }
 
 // TODO: Fix this test at some point, the data itself in production/development is working fine, it only fails on the test

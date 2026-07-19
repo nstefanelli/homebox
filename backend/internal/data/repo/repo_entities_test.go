@@ -201,6 +201,72 @@ func TestEntityRepository_Create_WithFractionalQuantity(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestEntityRepository_QueryByGroup_FilteredInventoryValueIgnoresPagination(t *testing.T) {
+	ctx := context.Background()
+	itemType := useItemEntityType(t)
+	prefix := "inventory-filter-" + uuid.NewString()
+	createdIDs := make([]uuid.UUID, 0, 6)
+	t.Cleanup(func() {
+		for _, id := range createdIDs {
+			_ = tRepos.Entities.Delete(ctx, id)
+		}
+	})
+
+	createPriced := func(suffix string, quantity, price float64) EntityOut {
+		t.Helper()
+		out, err := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+			Name:         prefix + "-" + suffix,
+			Quantity:     quantity,
+			EntityTypeID: itemType.ID,
+		})
+		require.NoError(t, err)
+		createdIDs = append(createdIDs, out.ID)
+		require.NoError(t, tClient.Entity.UpdateOneID(out.ID).SetPurchasePrice(price).Exec(ctx))
+		return out
+	}
+
+	createPriced("active-a", 2, 10)
+	createPriced("active-b", 3, 5)
+
+	sold := createPriced("sold", 4, 100)
+	require.NoError(t, tClient.Entity.UpdateOneID(sold.ID).SetSoldDate(time.Now()).Exec(ctx))
+
+	archived := createPriced("archived", 1, 999)
+	require.NoError(t, tClient.Entity.UpdateOneID(archived.ID).SetArchived(true).Exec(ctx))
+
+	// A matching entity with a legacy cross-tenant type edge must be excluded
+	// from both the visible query and its aggregate.
+	_, _, foreignTypeID := makeForeignGroup(t)
+	corrupt := createPriced("foreign-type", 1, 777)
+	require.NoError(t, tClient.Entity.UpdateOneID(corrupt.ID).SetEntityTypeID(foreignTypeID).Exec(ctx))
+
+	createPriced("other-search", 1, 123)
+
+	result, err := tRepos.Entities.QueryByGroup(ctx, tGroup.ID, EntityQuery{
+		Page:                  1,
+		PageSize:              1,
+		Search:                prefix + "-active",
+		IncludeInventoryValue: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Items, 1)
+	assert.Equal(t, 2, result.Total)
+	assert.InDelta(t, 35, result.FilteredInventoryValue, 0.001,
+		"the total must include every filtered row, not only the current page")
+
+	result, err = tRepos.Entities.QueryByGroup(ctx, tGroup.ID, EntityQuery{
+		Page:                  1,
+		PageSize:              1,
+		Search:                prefix,
+		IncludeArchived:       true,
+		IncludeInventoryValue: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 5, result.Total, "active, sold, archived, and unrelated-suffix rows use the search filter; corrupt type is excluded")
+	assert.InDelta(t, 158, result.FilteredInventoryValue, 0.001,
+		"archived and sold rows remain excluded even when the list includes archived entities")
+}
+
 func TestEntityRepository_Create_RejectsNonFiniteQuantity(t *testing.T) {
 	containerET := useContainerEntityType(t)
 	itemET := useItemEntityType(t)
@@ -254,7 +320,7 @@ func TestEntityRepository_Update_RollsBackEntityAndTagsWhenFieldWriteFails(t *te
 	got, err := tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, created.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "atomic-update-original", got.Name)
-	assert.Equal(t, 1.0, got.Quantity)
+	assert.InDelta(t, 1, got.Quantity, 0.000001)
 	require.Len(t, got.Tags, 1)
 	assert.Equal(t, tags[0].ID, got.Tags[0].ID)
 	assert.Empty(t, got.Fields)

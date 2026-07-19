@@ -3,10 +3,11 @@ package repo
 import "github.com/samber/lo"
 
 type PaginationResult[T any] struct {
-	Page     int `json:"page"`
-	PageSize int `json:"pageSize"`
-	Total    int `json:"total"`
-	Items    []T `json:"items"`
+	Page                   int     `json:"page"`
+	PageSize               int     `json:"pageSize"`
+	Total                  int     `json:"total"`
+	Items                  []T     `json:"items"`
+	FilteredInventoryValue float64 `json:"-"`
 }
 
 // EntityListResult is the response type for paginated entity queries,

@@ -3,24 +3,27 @@ package repo
 import (
 	"context"
 	stdsql "database/sql"
-	"fmt"
+	"errors"
 	"strings"
 	"time"
 
-	"entgo.io/ent/dialect/sql"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"github.com/samber/lo"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/entity"
-	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/entitytype"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/group"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/groupinvitationtoken"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/notifier"
-	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/tag"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/user"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/usergroup"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/types"
+)
+
+var (
+	ErrInvitationExpired   = errors.New("invitation expired")
+	ErrInvitationExhausted = errors.New("invitation used up")
+	ErrAlreadyGroupMember  = errors.New("user already a member of this group")
 )
 
 type GroupRepository struct {
@@ -125,20 +128,53 @@ func (r *GroupRepository) GetAllGroups(ctx context.Context, userID uuid.UUID) ([
 func (r *GroupRepository) StatsLocationsByPurchasePrice(ctx context.Context, gid uuid.UUID) ([]TotalsByOrganizer, error) {
 	var v []TotalsByOrganizer
 
-	// Query entities that are containers (is_location=true) and sum purchase prices of their children
+	// Attribute every qualifying descendant item to each location in its
+	// ancestor chain. DISTINCT makes legacy cycles non-inflating and the depth
+	// guard keeps the recursive walk bounded.
 	q := `
-		SELECT parent.id, parent.name,
-			COALESCE(SUM(child.purchase_price), 0) AS total
-		FROM entities parent
-		JOIN entity_types et ON et.id = parent.entity_type_entities
-		LEFT JOIN entities child ON child.entity_children = parent.id
-			AND child.entity_type_entities IN (SELECT id FROM entity_types WHERE is_location = false)
-		WHERE parent.group_entities = $1 AND et.is_location = true
-		GROUP BY parent.id, parent.name
-		HAVING COALESCE(SUM(child.purchase_price), 0) > 0
+		WITH RECURSIVE location_descendants(root_id, entity_id, depth) AS (
+			SELECT root.id, child.id, 1
+			FROM entities root
+			JOIN entity_types root_type ON root_type.id = root.entity_type_entities
+			JOIN entities child ON child.entity_children = root.id
+			WHERE root.group_entities = $1
+			  AND root_type.group_entity_types = $1
+			  AND root_type.is_location = true
+			  AND child.group_entities = $1
+
+			UNION ALL
+
+			SELECT descendants.root_id, child.id, descendants.depth + 1
+			FROM location_descendants descendants
+			JOIN entities child ON child.entity_children = descendants.entity_id
+			WHERE child.group_entities = $1
+			  AND descendants.depth < $2
+		),
+		unique_descendants AS (
+			SELECT DISTINCT root_id, entity_id
+			FROM location_descendants
+		)
+		SELECT root.id, root.name,
+			COALESCE(SUM(item.purchase_price * item.quantity), 0) AS total
+		FROM entities root
+		JOIN entity_types root_type ON root_type.id = root.entity_type_entities
+		JOIN unique_descendants descendants ON descendants.root_id = root.id
+		JOIN entities item ON item.id = descendants.entity_id
+		JOIN entity_types item_type ON item_type.id = item.entity_type_entities
+		WHERE root.group_entities = $1
+		  AND root_type.group_entity_types = $1
+		  AND root_type.is_location = true
+		  AND item.group_entities = $1
+		  AND item_type.group_entity_types = $1
+		  AND item_type.is_location = false
+		  AND item.archived = false
+		  AND item.sold_date IS NULL
+		GROUP BY root.id, root.name
+		HAVING COALESCE(SUM(item.purchase_price * item.quantity), 0) <> 0
+		ORDER BY lower(root.name), root.id
 	`
 
-	rows, err := r.db.Sql().QueryContext(ctx, q, gid)
+	rows, err := r.db.Sql().QueryContext(ctx, q, gid, maxHierarchyDepth)
 	if err != nil {
 		return nil, err
 	}
@@ -158,77 +194,86 @@ func (r *GroupRepository) StatsLocationsByPurchasePrice(ctx context.Context, gid
 func (r *GroupRepository) StatsTagsByPurchasePrice(ctx context.Context, gid uuid.UUID) ([]TotalsByOrganizer, error) {
 	var v []TotalsByOrganizer
 
-	err := r.db.Tag.Query().
-		Where(
-			tag.HasGroupWith(group.ID(gid)),
-		).
-		GroupBy(tag.FieldID, tag.FieldName).
-		Aggregate(func(sq *sql.Selector) string {
-			entityTable := sql.Table(entity.Table)
+	q := `
+		SELECT t.id, t.name,
+			COALESCE(SUM(e.purchase_price * e.quantity), 0) AS total
+		FROM tags t
+		JOIN tag_entities te ON te.tag_id = t.id
+		JOIN entities e ON e.id = te.entity_id
+		JOIN entity_types et ON et.id = e.entity_type_entities
+		WHERE t.group_tags = $1
+		  AND e.group_entities = $1
+		  AND et.group_entity_types = $1
+		  AND et.is_location = false
+		  AND e.archived = false
+		  AND e.sold_date IS NULL
+		GROUP BY t.id, t.name
+		HAVING COALESCE(SUM(e.purchase_price * e.quantity), 0) <> 0
+		ORDER BY lower(t.name), t.id`
 
-			jt := sql.Table(tag.EntitiesTable)
-
-			sq.Join(jt).On(sq.C(tag.FieldID), jt.C(tag.EntitiesPrimaryKey[0]))
-			sq.Join(entityTable).On(jt.C(tag.EntitiesPrimaryKey[1]), entityTable.C(entity.FieldID))
-
-			return sql.As(sql.Sum(entityTable.C(entity.FieldPurchasePrice)), "total")
-		}).
-		Scan(ctx, &v)
+	rows, err := r.db.Sql().QueryContext(ctx, q, gid)
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = rows.Close() }()
 
-	return v, err
+	for rows.Next() {
+		var item TotalsByOrganizer
+		if err := rows.Scan(&item.ID, &item.Name, &item.Total); err != nil {
+			return nil, err
+		}
+		v = append(v, item)
+	}
+	return v, rows.Err()
 }
 
 func (r *GroupRepository) StatsPurchasePrice(ctx context.Context, gid uuid.UUID, start, end time.Time) (*ValueOverTime, error) {
 	// Get the Totals for the Start and End of the Given Time Period
 	q := `
 	SELECT
-		SUM(CASE WHEN e.created_at < $1 THEN e.purchase_price ELSE 0 END) AS price_at_start,
-		SUM(CASE WHEN e.created_at < $2 THEN e.purchase_price ELSE 0 END) AS price_at_end
+		COALESCE(SUM(CASE WHEN e.created_at < $1 THEN e.purchase_price * e.quantity ELSE 0 END), 0) AS price_at_start,
+		COALESCE(SUM(CASE WHEN e.created_at < $2 THEN e.purchase_price * e.quantity ELSE 0 END), 0) AS price_at_end
 	FROM entities e
 	JOIN entity_types et ON et.id = e.entity_type_entities
-	WHERE e.group_entities = $3 AND e.archived = false AND et.is_location = false
+	WHERE e.group_entities = $3
+	  AND et.group_entity_types = $3
+	  AND e.archived = false
+	  AND e.sold_date IS NULL
+	  AND et.is_location = false
 `
 	stats := ValueOverTime{
 		Start: start,
 		End:   end,
 	}
 
-	var maybeStart *float64
-	var maybeEnd *float64
-
 	row := r.db.Sql().QueryRowContext(ctx, q, sqliteDateFormat(start), sqliteDateFormat(end), gid)
-	err := row.Scan(&maybeStart, &maybeEnd)
+	err := row.Scan(&stats.PriceAtStart, &stats.PriceAtEnd)
 	if err != nil {
 		return nil, err
 	}
-
-	stats.PriceAtStart = orDefault(maybeStart, 0)
-	stats.PriceAtEnd = orDefault(maybeEnd, 0)
 
 	type itemPriceEntry struct {
 		Name          string    `json:"name"`
 		CreatedAt     time.Time `json:"created_at"`
 		PurchasePrice float64   `json:"purchase_price"`
+		Quantity      float64   `json:"quantity"`
 	}
 
 	var v []itemPriceEntry
 
 	// Get Created Date and Price of all entities between start and end
+	predicates := append(
+		inventoryValuePredicates(gid),
+		entity.CreatedAtGTE(start),
+		entity.CreatedAtLTE(end),
+	)
 	err = r.db.Entity.Query().
-		Where(
-			entity.HasGroupWith(group.ID(gid)),
-			entity.CreatedAtGTE(start),
-			entity.CreatedAtLTE(end),
-			entity.Archived(false),
-			entity.HasEntityTypeWith(entitytype.IsLocation(false)),
-		).
+		Where(predicates...).
 		Select(
 			entity.FieldName,
 			entity.FieldCreatedAt,
 			entity.FieldPurchasePrice,
+			entity.FieldQuantity,
 		).
 		Scan(ctx, &v)
 
@@ -239,7 +284,8 @@ func (r *GroupRepository) StatsPurchasePrice(ctx context.Context, gid uuid.UUID,
 	stats.Entries = lo.Map(v, func(vv itemPriceEntry, _ int) ValueOverTimeEntry {
 		return ValueOverTimeEntry{
 			Date:  vv.CreatedAt,
-			Value: vv.PurchasePrice,
+			Value: vv.PurchasePrice * vv.Quantity,
+			Name:  vv.Name,
 		}
 	})
 
@@ -250,14 +296,15 @@ func (r *GroupRepository) StatsGroup(ctx context.Context, gid uuid.UUID) (GroupS
 	q := `
 		SELECT
             (SELECT COUNT(*) FROM user_groups WHERE group_id = $2) AS total_users,
-            (SELECT COUNT(*) FROM entities e JOIN entity_types et ON et.id = e.entity_type_entities WHERE e.group_entities = $2 AND e.archived = false AND et.is_location = false) AS total_items,
-            (SELECT COUNT(*) FROM entities e JOIN entity_types et ON et.id = e.entity_type_entities WHERE e.group_entities = $2 AND et.is_location = true) AS total_locations,
+            (SELECT COUNT(*) FROM entities e JOIN entity_types et ON et.id = e.entity_type_entities WHERE e.group_entities = $2 AND et.group_entity_types = $2 AND e.archived = false AND et.is_location = false) AS total_items,
+            (SELECT COUNT(*) FROM entities e JOIN entity_types et ON et.id = e.entity_type_entities WHERE e.group_entities = $2 AND et.group_entity_types = $2 AND et.is_location = true) AS total_locations,
             (SELECT COUNT(*) FROM tags WHERE group_tags = $2) AS total_tags,
-            (SELECT SUM(e.purchase_price*e.quantity) FROM entities e JOIN entity_types et ON et.id = e.entity_type_entities WHERE e.group_entities = $2 AND e.archived = false AND et.is_location = false) AS total_item_price,
+            (SELECT SUM(e.purchase_price * e.quantity) FROM entities e JOIN entity_types et ON et.id = e.entity_type_entities WHERE e.group_entities = $2 AND et.group_entity_types = $2 AND e.archived = false AND e.sold_date IS NULL AND et.is_location = false) AS total_item_price,
             (SELECT COUNT(*)
                 FROM entities e
                 JOIN entity_types et ON et.id = e.entity_type_entities
                     WHERE e.group_entities = $2
+                    AND et.group_entity_types = $2
                     AND e.archived = false
                     AND et.is_location = false
                     AND (e.lifetime_warranty = true OR e.warranty_expires > $1)
@@ -596,7 +643,7 @@ func (r *GroupRepository) InvitationDecrement(ctx context.Context, id uuid.UUID)
 		return err
 	}
 	if n == 0 {
-		return fmt.Errorf("invitation used up")
+		return ErrInvitationExhausted
 	}
 	return nil
 }
@@ -624,13 +671,13 @@ func (r *GroupRepository) InvitationAccept(ctx context.Context, token []byte, us
 		if err := tx.Rollback(); err != nil {
 			log.Warn().Err(err).Msg("failed to rollback transaction")
 		}
-		return Group{}, fmt.Errorf("invitation expired")
+		return Group{}, ErrInvitationExpired
 	}
 	if invitation.Uses <= 0 {
 		if err := tx.Rollback(); err != nil {
 			log.Warn().Err(err).Msg("failed to rollback transaction")
 		}
-		return Group{}, fmt.Errorf("invitation used up")
+		return Group{}, ErrInvitationExhausted
 	}
 
 	// 3. Check membership
@@ -647,7 +694,7 @@ func (r *GroupRepository) InvitationAccept(ctx context.Context, token []byte, us
 		if err := tx.Rollback(); err != nil {
 			log.Warn().Err(err).Msg("failed to rollback transaction")
 		}
-		return Group{}, fmt.Errorf("user already a member of this group")
+		return Group{}, ErrAlreadyGroupMember
 	}
 
 	// 4. Add member with role=user; ownership is reserved for whoever created the group.
@@ -680,7 +727,7 @@ func (r *GroupRepository) InvitationAccept(ctx context.Context, token []byte, us
 		if err := tx.Rollback(); err != nil {
 			log.Warn().Err(err).Msg("failed to rollback transaction")
 		}
-		return Group{}, fmt.Errorf("invitation used up")
+		return Group{}, ErrInvitationExhausted
 	}
 
 	if err := tx.Commit(); err != nil {
