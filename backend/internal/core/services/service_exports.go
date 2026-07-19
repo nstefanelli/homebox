@@ -689,7 +689,7 @@ func (s *ExportService) publishExportJob(ctx context.Context, gid, exportID uuid
 	if err != nil {
 		return err
 	}
-	defer func() { _ = topic.Shutdown(ctx) }()
+	defer func() { _ = utils.ShutdownPubSubTopic(ctx, conn, topic) }()
 	return topic.Send(ctx, &pubsub.Message{
 		Body: []byte("collection_export:" + exportID.String()),
 		Metadata: map[string]string{
@@ -712,7 +712,7 @@ func (s *ExportService) publishImportJob(ctx context.Context, gid, userID, impor
 	if err != nil {
 		return err
 	}
-	defer func() { _ = topic.Shutdown(ctx) }()
+	defer func() { _ = utils.ShutdownPubSubTopic(ctx, conn, topic) }()
 	return topic.Send(ctx, &pubsub.Message{
 		Body: []byte("collection_import:" + gid.String()),
 		Metadata: map[string]string{

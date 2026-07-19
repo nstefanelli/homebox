@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,6 +21,16 @@ const pubSubShutdownTimeout = 5 * time.Second
 
 func pubSubShutdownContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(ctx), pubSubShutdownTimeout)
+}
+
+func pubSubAlreadyShutdown(err error) bool {
+	if err == nil || gcerrors.Code(err) != gcerrors.FailedPrecondition {
+		return false
+	}
+
+	message := err.Error()
+	return strings.Contains(message, "pubsub: Topic has been Shutdown") ||
+		strings.Contains(message, "pubsub: Subscription has been Shutdown")
 }
 
 //nolint:gocyclo // Registration is intentionally a flat catalog of independent background tasks.
@@ -125,8 +136,8 @@ func registerRecurringTasks(app *app, cfg *config.Config, runner *graceful.Runne
 			defer func(topic *pubsub.Topic) {
 				shutdownCtx, cancel := pubSubShutdownContext(ctx)
 				defer cancel()
-				err := topic.Shutdown(shutdownCtx)
-				if err != nil {
+				err := utils.ShutdownPubSubTopic(shutdownCtx, pubsubString, topic)
+				if err != nil && !pubSubAlreadyShutdown(err) {
 					log.Err(err).Msg("fail to shutdown pubsub topic")
 				}
 			}(topic)
@@ -140,7 +151,7 @@ func registerRecurringTasks(app *app, cfg *config.Config, runner *graceful.Runne
 				shutdownCtx, cancel := pubSubShutdownContext(ctx)
 				defer cancel()
 				err := topic.Shutdown(shutdownCtx)
-				if err != nil {
+				if err != nil && !pubSubAlreadyShutdown(err) {
 					log.Err(err).Msg("fail to shutdown pubsub topic")
 				}
 			}(subscription)
@@ -239,7 +250,7 @@ func runJobSubscription(ctx context.Context, cfg *config.Config, topicName strin
 	defer func() {
 		shutdownCtx, cancel := pubSubShutdownContext(ctx)
 		defer cancel()
-		if err := topic.Shutdown(shutdownCtx); err != nil {
+		if err := utils.ShutdownPubSubTopic(shutdownCtx, conn, topic); err != nil && !pubSubAlreadyShutdown(err) {
 			log.Err(err).Str("topic", topicName).Msg("failed to shutdown pubsub topic")
 		}
 	}()
@@ -252,7 +263,7 @@ func runJobSubscription(ctx context.Context, cfg *config.Config, topicName strin
 	defer func() {
 		shutdownCtx, cancel := pubSubShutdownContext(ctx)
 		defer cancel()
-		if err := sub.Shutdown(shutdownCtx); err != nil {
+		if err := sub.Shutdown(shutdownCtx); err != nil && !pubSubAlreadyShutdown(err) {
 			log.Err(err).Str("topic", topicName).Msg("failed to shutdown pubsub subscription")
 		}
 	}()

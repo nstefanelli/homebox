@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
@@ -27,7 +28,7 @@ func TestRunJobSubscriptionStopsCleanlyOnCancellation(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.Database.PubSubConnString = "mem://{{ .Topic }}"
-	const topicName = "run-job-subscription-shutdown-test"
+	topicName := "run-job-subscription-shutdown-" + uuid.NewString()
 
 	handled := make(chan struct{}, 1)
 	done := make(chan error, 1)
@@ -67,6 +68,13 @@ func TestRunJobSubscriptionStopsCleanlyOnCancellation(t *testing.T) {
 			return false
 		}
 	}, 3*time.Second, 20*time.Millisecond)
+
+	// mem:// returns the same portable topic handle to publishers and
+	// subscribers. A short-lived publisher can therefore shut the handle down
+	// before the long-running subscriber's deferred cleanup sees it.
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), time.Second)
+	require.NoError(t, topic.Shutdown(shutdownCtx))
+	shutdownCancel()
 
 	cancel()
 

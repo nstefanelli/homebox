@@ -3100,6 +3100,7 @@ func (r *EntityRepository) CreateContainer(ctx context.Context, gid uuid.UUID, d
 			attribute.String("entity.name", data.Name),
 			attribute.Bool("entity.parent_id.set", data.ParentID != uuid.Nil),
 			attribute.Bool("entity.entity_type_id.set", data.EntityTypeID != uuid.Nil),
+			attribute.Int64("entity.asset_id", int64(data.AssetID)),
 		))
 	defer span.End()
 
@@ -3137,7 +3138,8 @@ func (r *EntityRepository) CreateContainer(ctx context.Context, gid uuid.UUID, d
 	q := r.db.Entity.Create().
 		SetName(data.Name).
 		SetDescription(data.Description).
-		SetGroupID(gid)
+		SetGroupID(gid).
+		SetAssetID(int64(data.AssetID))
 
 	if data.ParentID != uuid.Nil {
 		q.SetParentID(data.ParentID)

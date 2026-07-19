@@ -506,7 +506,7 @@ func (r *AttachmentRepo) Create(ctx context.Context, itemID uuid.UUID, doc ItemC
 				log.Warn().Err(openErr).Msg("attachment saved but thumbnail topic could not be opened")
 			} else {
 				defer func() {
-					if shutdownErr := topic.Shutdown(ctx); shutdownErr != nil {
+					if shutdownErr := utils.ShutdownPubSubTopic(ctx, pubsubString, topic); shutdownErr != nil {
 						log.Warn().Err(shutdownErr).Msg("failed to shut down thumbnail topic")
 					}
 				}()
@@ -1074,7 +1074,7 @@ func (r *AttachmentRepo) CreateMissingThumbnails(ctx context.Context, groupId uu
 		return 0, fmt.Errorf("open thumbnail pubsub topic: %w", err)
 	}
 	defer func() {
-		if shutdownErr := topic.Shutdown(ctx); shutdownErr != nil {
+		if shutdownErr := utils.ShutdownPubSubTopic(ctx, pubsubString, topic); shutdownErr != nil {
 			log.Warn().Err(shutdownErr).Msg("failed to shut down thumbnail topic")
 		}
 	}()

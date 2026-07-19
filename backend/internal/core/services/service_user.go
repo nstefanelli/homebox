@@ -252,16 +252,12 @@ func (svc *UserService) RegisterUser(ctx context.Context, data UserRegistration,
 		}
 
 		log.Debug().Msg("creating default locations")
-		locsCreated := 0
-		for _, loc := range defaultLocations() {
-			_, err := svc.repos.Entities.CreateContainer(bootstrapCtx, usr.DefaultGroupID, loc)
-			if err != nil {
-				recordServiceSpanError(bootstrapSpan, err)
-				bootstrapSpan.End()
-				recordServiceSpanError(span, err)
-				return repo.UserOut{}, cleanup(err)
-			}
-			locsCreated++
+		locsCreated, err := createDefaultLocations(bootstrapCtx, svc.repos, usr.DefaultGroupID)
+		if err != nil {
+			recordServiceSpanError(bootstrapSpan, err)
+			bootstrapSpan.End()
+			recordServiceSpanError(span, err)
+			return repo.UserOut{}, cleanup(err)
 		}
 
 		// Seeding locations lazily creates the "Location" entity type, but the
@@ -656,15 +652,11 @@ func (svc *UserService) registerOIDCUser(ctx context.Context, issuer, subject, e
 	}
 
 	log.Debug().Msg("creating default locations for OIDC user")
-	locsCreated := 0
-	for _, loc := range defaultLocations() {
-		_, err := svc.repos.Entities.CreateContainer(bootstrapCtx, group.ID, loc)
-		if err != nil {
-			recordServiceSpanError(bootstrapSpan, err)
-			bootstrapSpan.End()
-			return repo.UserOut{}, cleanup(fmt.Errorf("create default location: %w", err))
-		}
-		locsCreated++
+	locsCreated, err := createDefaultLocations(bootstrapCtx, svc.repos, group.ID)
+	if err != nil {
+		recordServiceSpanError(bootstrapSpan, err)
+		bootstrapSpan.End()
+		return repo.UserOut{}, cleanup(fmt.Errorf("create default locations: %w", err))
 	}
 
 	// Ensure both default entity types exist (see RegisterUser): seeding
