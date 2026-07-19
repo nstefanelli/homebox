@@ -3,12 +3,12 @@ package v1
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/hay-kot/httpkit/errchain"
-	"github.com/samber/lo"
 	"github.com/sysadminsmedia/homebox/backend/internal/core/services"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/repo"
 	"github.com/sysadminsmedia/homebox/backend/internal/sys/validate"
@@ -34,9 +34,45 @@ type (
 	}
 
 	CreateRequest struct {
-		Name string `json:"name" validate:"required"`
+		Name string `json:"name" validate:"required,min=1,max=255"`
 	}
 )
+
+func mapGroupActionError(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	switch {
+	case errors.Is(err, services.ErrGroupOwnerRequired):
+		return validate.NewRequestError(err, http.StatusForbidden)
+	case errors.Is(err, services.ErrGroupOwnerCannotLeave):
+		return validate.NewRequestError(err, http.StatusConflict)
+	case errors.Is(err, services.ErrGroupMemberNotFound):
+		return validate.NewRequestError(err, http.StatusNotFound)
+	case errors.Is(err, services.ErrInvalidGroupName),
+		errors.Is(err, services.ErrInvalidGroupCurrency),
+		errors.Is(err, services.ErrInvalidInvitation):
+		return validate.NewRequestError(err, http.StatusBadRequest)
+	default:
+		return err
+	}
+}
+
+func mapInvitationAcceptError(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	switch {
+	case errors.Is(err, repo.ErrAlreadyGroupMember):
+		return validate.NewRequestError(err, http.StatusConflict)
+	case errors.Is(err, repo.ErrInvitationExpired), errors.Is(err, repo.ErrInvitationExhausted):
+		return validate.NewRequestError(err, http.StatusBadRequest)
+	default:
+		return err
+	}
+}
 
 // HandleGroupGet godoc
 //
@@ -67,6 +103,7 @@ func (ctrl *V1Controller) HandleGroupGet() errchain.HandlerFunc {
 func (ctrl *V1Controller) HandleGroupUpdate() errchain.HandlerFunc {
 	fn := func(r *http.Request, body repo.GroupUpdate) (repo.Group, error) {
 		auth := services.NewContext(r.Context())
+		body.Currency = strings.TrimSpace(body.Currency)
 
 		ok := ctrl.svc.Currencies.IsSupported(body.Currency)
 		if !ok {
@@ -75,7 +112,8 @@ func (ctrl *V1Controller) HandleGroupUpdate() errchain.HandlerFunc {
 			)
 		}
 
-		return ctrl.svc.Group.UpdateGroup(auth, body)
+		out, err := ctrl.svc.Group.UpdateGroup(auth, body)
+		return out, mapGroupActionError(err)
 	}
 
 	return adapters.Action(fn, http.StatusOK)
@@ -101,7 +139,7 @@ func (ctrl *V1Controller) HandleGroupInvitationsCreate() errchain.HandlerFunc {
 
 		invitation, token, err := ctrl.svc.Group.NewInvitation(auth, body.Uses, body.ExpiresAt)
 		if err != nil {
-			return GroupInvitation{}, err
+			return GroupInvitation{}, mapGroupActionError(err)
 		}
 
 		return GroupInvitation{
@@ -144,7 +182,8 @@ func (ctrl *V1Controller) HandleGroupsGetAll() errchain.HandlerFunc {
 func (ctrl *V1Controller) HandleGroupCreate() errchain.HandlerFunc {
 	fn := func(r *http.Request, body CreateRequest) (repo.Group, error) {
 		auth := services.NewContext(r.Context())
-		return ctrl.svc.Group.CreateGroup(auth, body.Name)
+		out, err := ctrl.svc.Group.CreateGroup(auth, body.Name)
+		return out, mapGroupActionError(err)
 	}
 
 	return adapters.Action(fn, http.StatusCreated)
@@ -161,33 +200,8 @@ func (ctrl *V1Controller) HandleGroupCreate() errchain.HandlerFunc {
 func (ctrl *V1Controller) HandleGroupDelete() errchain.HandlerFunc {
 	fn := func(r *http.Request) (any, error) {
 		auth := services.NewContext(r.Context())
-
-		// Get the current user to check their groups
-		currentUser, err := ctrl.repo.Users.GetOneID(auth, auth.UID)
-		if err != nil {
-			return nil, err
-		}
-
-		// Safeguard: prevent deleting if this is the user's only group
-		if len(currentUser.GroupIDs) <= 1 {
-			return nil, validate.NewRequestError(errors.New("cannot delete the only group you are a member of"), http.StatusBadRequest)
-		}
-
-		// If the group being deleted is the user's default group, reassign to another group
-		if currentUser.DefaultGroupID == auth.GID {
-			// Find another group the user is a member of
-			newDefaultGroupID, _ := lo.Find(currentUser.GroupIDs, func(gid uuid.UUID) bool {
-				return gid != auth.GID
-			})
-
-			// Update the user's default group
-			if err := ctrl.repo.Users.UpdateDefaultGroup(auth, auth.UID, newDefaultGroupID); err != nil {
-				return nil, err
-			}
-		}
-
-		err = ctrl.svc.Group.DeleteGroup(auth)
-		return nil, err
+		err := ctrl.svc.Group.DeleteGroup(auth)
+		return nil, mapGroupActionError(err)
 	}
 
 	return adapters.Command(fn, http.StatusNoContent)
@@ -204,7 +218,8 @@ func (ctrl *V1Controller) HandleGroupDelete() errchain.HandlerFunc {
 func (ctrl *V1Controller) HandleGroupInvitationsGetAll() errchain.HandlerFunc {
 	fn := func(r *http.Request) ([]repo.GroupInvitation, error) {
 		auth := services.NewContext(r.Context())
-		return ctrl.repo.Groups.InvitationGetAll(auth, auth.GID)
+		out, err := ctrl.svc.Group.GetInvitations(auth)
+		return out, mapGroupActionError(err)
 	}
 
 	return adapters.Command(fn, http.StatusOK)
@@ -240,22 +255,8 @@ func (ctrl *V1Controller) HandleGroupMemberRemove() errchain.HandlerFunc {
 	fn := func(r *http.Request, userID uuid.UUID) (any, error) {
 		auth := services.NewContext(r.Context())
 
-		// Safeguard: prevent user from removing themselves
-		if userID == auth.UID {
-			return nil, validate.NewRequestError(errors.New("cannot remove yourself from the group"), http.StatusBadRequest)
-		}
-
-		// Safeguard: prevent removing the last member
-		members, err := ctrl.repo.Users.GetUsersByGroupID(auth, auth.GID)
-		if err != nil {
-			return nil, err
-		}
-		if len(members) <= 1 {
-			return nil, validate.NewRequestError(errors.New("cannot remove the last member from the group"), http.StatusBadRequest)
-		}
-
-		err = ctrl.svc.Group.RemoveMember(auth, userID)
-		return nil, err
+		err := ctrl.svc.Group.RemoveMember(auth, userID)
+		return nil, mapGroupActionError(err)
 	}
 
 	return adapters.CommandID("user_id", fn, http.StatusNoContent)
@@ -274,7 +275,7 @@ func (ctrl *V1Controller) HandleGroupInvitationsDelete() errchain.HandlerFunc {
 	fn := func(r *http.Request, id uuid.UUID) (any, error) {
 		auth := services.NewContext(r.Context())
 		err := ctrl.svc.Group.DeleteInvitation(auth, id)
-		return nil, err
+		return nil, mapGroupActionError(err)
 	}
 
 	return adapters.CommandID("id", fn, http.StatusNoContent)
@@ -300,10 +301,7 @@ func (ctrl *V1Controller) HandleGroupInvitationsAccept() errchain.HandlerFunc {
 		auth := services.NewContext(r.Context())
 		group, err := ctrl.svc.Group.AcceptInvitation(auth, token)
 		if err != nil {
-			if errors.Is(err, errors.New("user already a member of this group")) {
-				return GroupAcceptInvitationResponse{}, validate.NewRequestError(err, http.StatusBadRequest)
-			}
-			return GroupAcceptInvitationResponse{}, err
+			return GroupAcceptInvitationResponse{}, mapInvitationAcceptError(err)
 		}
 
 		return GroupAcceptInvitationResponse{ID: group.ID, Name: group.Name}, nil

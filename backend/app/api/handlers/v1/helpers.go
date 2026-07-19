@@ -22,7 +22,7 @@ func GetHBURL(r *http.Request, options *config.Options, fallback string) string 
 
 	// 2. Use X-Forwarded headers if TrustProxy is enabled
 	if options.TrustProxy {
-		if xfHost := r.Header.Get("X-Forwarded-Host"); xfHost != "" {
+		if xfHost := firstHeaderValue(r.Header.Get("X-Forwarded-Host")); validProxyHost(xfHost) {
 			scheme := getScheme(r, options.TrustProxy)
 			return scheme + "://" + xfHost
 		}
@@ -149,12 +149,12 @@ func SecureBaseURL(r *http.Request, options *config.Options) string {
 func stripPathFromURL(rawURL string) string {
 	// Validate that the URL has a scheme; if not, return empty string
 	if !strings.Contains(rawURL, "://") {
-		log.Warn().Str("url", rawURL).Msg("URL missing scheme")
+		log.Warn().Int("url_length", len(rawURL)).Msg("URL missing scheme")
 		return ""
 	}
 
 	parsedURL, err := url.Parse(rawURL)
-	if err != nil {
+	if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != schemeHTTPS) || parsedURL.Host == "" || parsedURL.User != nil {
 		log.Err(err).Msg("failed to parse URL")
 		return ""
 	}

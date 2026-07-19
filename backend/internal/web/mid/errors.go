@@ -25,7 +25,7 @@ func Errors(log zerolog.Logger) errchain.ErrorHandler {
 				var resp ErrorResponse
 				var code int
 
-				traceID := r.Context().Value(middleware.RequestIDKey).(string)
+				traceID, _ := r.Context().Value(middleware.RequestIDKey).(string)
 				log.Err(err).
 					Ctx(r.Context()).
 					Stack().
@@ -62,12 +62,20 @@ func Errors(log zerolog.Logger) errchain.ErrorHandler {
 				case validate.IsRequestError(err):
 					var requestError *validate.RequestError
 					errors.As(err, &requestError) // nolint
-					resp.Error = requestError.Error()
 
 					if requestError.Status == 0 {
 						code = http.StatusBadRequest
 					} else {
 						code = requestError.Status
+					}
+					// Expected 4xx failures may contain useful validation detail.
+					// Never serialize the wrapped cause of a 5xx response: those
+					// causes commonly contain SQL, filesystem, or upstream details
+					// that belong only in server logs.
+					if code >= http.StatusInternalServerError {
+						resp.Error = http.StatusText(code)
+					} else {
+						resp.Error = requestError.Error()
 					}
 				case ent.IsNotFound(err):
 					resp.Error = "Not Found"

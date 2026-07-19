@@ -18,7 +18,7 @@ func DecodeQuery[T any](r *http.Request) (T, error) {
 	var v T
 	err := queryDecoder.Decode(&v, r.URL.Query())
 	if err != nil {
-		return v, errors.Wrap(err, "decoding error")
+		return v, validate.NewRequestError(errors.Wrap(err, "query decoding error"), http.StatusBadRequest)
 	}
 
 	err = validate.Check(v)
@@ -38,7 +38,7 @@ func DecodeBody[T any](r *http.Request) (T, error) {
 
 	err := server.Decode(r, &val)
 	if err != nil {
-		return val, errors.Wrap(err, "body decoding error")
+		return val, validate.NewRequestError(errors.Wrap(err, "body decoding error"), http.StatusBadRequest)
 	}
 
 	err = validate.Check(val)
@@ -49,7 +49,7 @@ func DecodeBody[T any](r *http.Request) (T, error) {
 	if v, ok := any(val).(Validator); ok {
 		err = v.Validate()
 		if err != nil {
-			return val, errors.Wrap(err, "validation error")
+			return val, validate.NewRequestError(errors.Wrap(err, "validation error"), http.StatusBadRequest)
 		}
 	}
 

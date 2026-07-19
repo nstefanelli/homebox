@@ -217,3 +217,23 @@ func TestFirstHeaderValue(t *testing.T) {
 		})
 	}
 }
+
+func TestGetHBURLValidatesTrustedForwardedHost(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest("GET", "/api/v1/labelmaker/item/id", nil)
+	req.Header.Set("X-Forwarded-Proto", schemeHTTPS)
+	req.Header.Set("X-Forwarded-Host", "public.example.com, internal.example.com")
+	assert.Equal(t, "https://public.example.com", GetHBURL(req, &config.Options{TrustProxy: true}, ""))
+
+	req.Header.Set("X-Forwarded-Host", "evil.example/path")
+	assert.Empty(t, GetHBURL(req, &config.Options{TrustProxy: true}, ""))
+}
+
+func TestStripPathFromURLAcceptsOnlyCredentialFreeHTTPOrigins(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "https://homebox.example", stripPathFromURL("https://homebox.example/items?token=secret"))
+	assert.Empty(t, stripPathFromURL("javascript://alert/path"))
+	assert.Empty(t, stripPathFromURL("https://user:secret@homebox.example/path"))
+}

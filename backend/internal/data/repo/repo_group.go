@@ -70,8 +70,8 @@ type (
 	}
 
 	GroupUpdate struct {
-		Name     string `json:"name"`
-		Currency string `json:"currency"`
+		Name     string `json:"name"     validate:"required,min=1,max=255"`
+		Currency string `json:"currency" validate:"required,min=1,max=16"`
 	}
 
 	GroupInvitationCreate struct {
