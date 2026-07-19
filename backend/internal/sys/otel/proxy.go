@@ -216,6 +216,8 @@ func (c *httpClient) UploadTraces(ctx context.Context, protoSpans []*tracepb.Res
 	}
 
 	// Create HTTP request
+	// #nosec G704 -- c.url is the operator-configured OTLP endpoint; the
+	// request method/path are fixed and no request-supplied URL is forwarded.
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.url, bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("failed to create HTTP request: %w", err)
@@ -227,6 +229,8 @@ func (c *httpClient) UploadTraces(ctx context.Context, protoSpans []*tracepb.Res
 	}
 
 	// Send request
+	// #nosec G704 -- the client sends only to the operator-configured OTLP
+	// endpoint captured above, never to a URL from the telemetry payload.
 	resp, err := c.client.Do(httpReq)
 	if err != nil {
 		return fmt.Errorf("failed to send HTTP request: %w", err)

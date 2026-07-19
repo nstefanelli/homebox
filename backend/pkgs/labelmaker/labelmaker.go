@@ -13,7 +13,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"text/template"
 	"time"
@@ -197,7 +196,7 @@ func GenerateLabel(w io.Writer, params *GenerateParameters, cfg *config.Config) 
 
 	// If LabelServiceUrl is configured, fetch the label from the URL instead of generating it
 	if cfg != nil && cfg.LabelMaker.LabelServiceUrl != nil && *cfg.LabelMaker.LabelServiceUrl != "" {
-		log.Printf("LabelServiceUrl configured: %s", *cfg.LabelMaker.LabelServiceUrl)
+		log.Printf("External label service configured")
 
 		return fetchLabelFromURL(w, *cfg.LabelMaker.LabelServiceUrl, params, cfg)
 	}
@@ -343,7 +342,7 @@ func fetchLabelFromURL(w io.Writer, serviceURL string, params *GenerateParameter
 	// Parse the base URL
 	baseURL, err := url.Parse(serviceURL)
 	if err != nil {
-		return fmt.Errorf("failed to parse service URL %s: %w", serviceURL, err)
+		return fmt.Errorf("failed to parse label service URL: %w", err)
 	}
 
 	// Build query parameters with the same attributes passed to print command
@@ -370,7 +369,7 @@ func fetchLabelFromURL(w io.Writer, serviceURL string, params *GenerateParameter
 	baseURL.RawQuery = query.Encode()
 	finalServiceURL := baseURL.String()
 
-	log.Printf("Fetching label from URL: %s", finalServiceURL)
+	log.Printf("Fetching label from configured external service")
 
 	// Use configured timeout or default to 30 seconds
 	timeout := 30 * time.Second
@@ -386,7 +385,7 @@ func fetchLabelFromURL(w io.Writer, serviceURL string, params *GenerateParameter
 	// Create HTTP request with custom headers
 	req, err := http.NewRequest("GET", finalServiceURL, nil)
 	if err != nil {
-		return fmt.Errorf("failed to create request for URL %s: %w", finalServiceURL, err)
+		return fmt.Errorf("failed to create label service request: %w", err)
 	}
 
 	// Set custom headers
@@ -396,12 +395,17 @@ func fetchLabelFromURL(w io.Writer, serviceURL string, params *GenerateParameter
 	// Make HTTP request to the label service
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to fetch label from URL %s: %w", finalServiceURL, err)
+		return fmt.Errorf("failed to fetch label: %w", err)
 	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Printf("failed to close label service response: %v", closeErr)
+		}
+	}()
 
 	// Check if the response status is OK
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("label service returned status %d for URL %s", resp.StatusCode, finalServiceURL)
+		return fmt.Errorf("label service returned status %d", resp.StatusCode)
 	}
 
 	// Check if the response is an image
@@ -415,16 +419,28 @@ func fetchLabelFromURL(w io.Writer, serviceURL string, params *GenerateParameter
 	if cfg != nil {
 		maxResponseSize = cfg.Web.MaxUploadSize << 20
 	}
-	limitedReader := io.LimitReader(resp.Body, maxResponseSize)
-
-	// Copy the response body to the writer
-	_, err = io.Copy(w, limitedReader)
+	if resp.ContentLength > maxResponseSize {
+		return fmt.Errorf("label service response exceeds limit %d", maxResponseSize)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize+1))
 	if err != nil {
-		return fmt.Errorf("failed to write fetched label data: %w", err)
+		return fmt.Errorf("failed to read fetched label data: %w", err)
+	}
+	if int64(len(body)) > maxResponseSize {
+		return fmt.Errorf("label service response exceeds limit %d", maxResponseSize)
+	}
+	// Do not trust the remote Content-Type header. Without byte-level
+	// validation, a compromised label service could claim image/* while
+	// returning active HTML that Homebox would otherwise serve from its own
+	// origin. The handler also buffers output before committing headers.
+	detectedContentType := http.DetectContentType(body)
+	if !strings.HasPrefix(detectedContentType, "image/") {
+		return fmt.Errorf("label service response body is not an image")
 	}
 
-	if err := resp.Body.Close(); err != nil {
-		log.Printf("failed to close response body: %v", err)
+	_, err = w.Write(body)
+	if err != nil {
+		return fmt.Errorf("failed to write fetched label data: %w", err)
 	}
 
 	return nil
@@ -470,8 +486,7 @@ func splitCommandTemplate(s string) []string {
 }
 
 func PrintLabel(cfg *config.Config, params *GenerateParameters) error {
-	tmpFile := filepath.Join(os.TempDir(), fmt.Sprintf("label-%d.png", time.Now().UnixNano()))
-	f, err := os.OpenFile(tmpFile, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600)
+	f, err := os.CreateTemp("", "homebox-label-*.png")
 	if err != nil {
 		return err
 	}
@@ -543,6 +558,8 @@ func PrintLabel(cfg *config.Config, params *GenerateParameters) error {
 		return nil
 	}
 
+	// #nosec G204 -- the executable and argv template are operator-controlled;
+	// user substitutions are confined to one pre-split argv token above.
 	command := exec.Command(commandParts[0], commandParts[1:]...)
 
 	_, err = command.CombinedOutput()

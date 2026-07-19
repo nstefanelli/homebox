@@ -37,6 +37,7 @@
   const loading = ref(true);
   const saving = ref(false);
   const error = ref<string | null>(null);
+  const ownershipLoadFailed = ref(false);
 
   const group = ref<Group | null>(null);
   const currencies = ref<CurrenciesCurrency[]>([]);
@@ -84,14 +85,6 @@
   };
 
   watch(
-    () => selectedCollection.value?.id,
-    () => {
-      void loadSettings();
-    },
-    { immediate: true }
-  );
-
-  watch(
     currencyCode,
     async () => {
       if (!currencyCode.value) return;
@@ -105,7 +98,7 @@
   );
 
   const save = async () => {
-    if (!selectedCollection.value) return;
+    if (!selectedCollection.value || !integrationsStore.isOwner) return;
 
     saving.value = true;
     error.value = null;
@@ -179,6 +172,7 @@
   }
 
   const integrationsLoading = ref(true);
+  const integrationsLoadFailed = ref(false);
   const savingIntegrations = ref(false);
   const testingAI = ref(false);
   const testingBarcode = ref(false);
@@ -199,9 +193,15 @@
   const testBarcodeResult = ref<TestConnectionResponse | null>(null);
 
   const providerOptions = computed(() => [
-    { value: PROVIDER_INHERIT_OPTION, label: t("profile.integrations.provider_inherit") },
+    {
+      value: PROVIDER_INHERIT_OPTION,
+      label: t("profile.integrations.provider_inherit"),
+    },
     { value: "disabled", label: t("profile.integrations.provider_disabled") },
-    { value: "openai_compatible", label: t("profile.integrations.provider_openai_compatible") },
+    {
+      value: "openai_compatible",
+      label: t("profile.integrations.provider_openai_compatible"),
+    },
     { value: "anthropic", label: t("profile.integrations.provider_anthropic") },
   ]);
 
@@ -245,11 +245,19 @@
   );
 
   function clearAiApiKey() {
-    aiApiKey.value = { sentinelPresent: aiApiKey.value.sentinelPresent, value: "", cleared: true };
+    aiApiKey.value = {
+      sentinelPresent: aiApiKey.value.sentinelPresent,
+      value: "",
+      cleared: true,
+    };
   }
 
   function clearBarcodeToken() {
-    barcodeToken.value = { sentinelPresent: barcodeToken.value.sentinelPresent, value: "", cleared: true };
+    barcodeToken.value = {
+      sentinelPresent: barcodeToken.value.sentinelPresent,
+      value: "",
+      cleared: true,
+    };
   }
 
   const envHint = computed(() => {
@@ -291,23 +299,61 @@
     }
 
     integrationsLoading.value = true;
+    integrationsLoadFailed.value = false;
 
     try {
       await integrationsStore.refresh();
       if (integrationsStore.data) {
         applyIntegrationsData(integrationsStore.data);
       }
-    } catch (e) {
+    } catch {
+      integrationsLoadFailed.value = true;
       toast.error(t("profile.integrations.toast.failed_load"));
     } finally {
       integrationsLoading.value = false;
     }
   };
 
+  const initializeSettings = async () => {
+    if (!selectedCollection.value) {
+      loading.value = false;
+      integrationsLoading.value = false;
+      return;
+    }
+
+    loading.value = true;
+    integrationsLoading.value = true;
+    ownershipLoadFailed.value = false;
+    integrationsLoadFailed.value = false;
+
+    try {
+      await integrationsStore.ensureFetched();
+    } catch {
+      ownershipLoadFailed.value = true;
+      integrationsLoadFailed.value = true;
+      toast.error(t("collection.permissions_load_failed"));
+      loading.value = false;
+      integrationsLoading.value = false;
+      return;
+    }
+
+    if (!integrationsStore.isOwner) {
+      loading.value = false;
+      integrationsLoading.value = false;
+      return;
+    }
+
+    if (integrationsStore.data) {
+      applyIntegrationsData(integrationsStore.data);
+    }
+    integrationsLoading.value = false;
+    await loadSettings();
+  };
+
   watch(
     () => selectedCollection.value?.id,
     () => {
-      void loadIntegrations();
+      void initializeSettings();
     },
     { immediate: true }
   );
@@ -347,36 +393,52 @@
   };
 
   const testAI = async () => {
+    if (!integrationsStore.isOwner) return;
+
     testingAI.value = true;
     testAIResult.value = null;
 
     try {
       const res = await api.group.testAI();
       if (res.error || !res.data) {
-        testAIResult.value = { ok: false, detail: t("profile.integrations.toast.test_failed") };
+        testAIResult.value = {
+          ok: false,
+          detail: t("profile.integrations.toast.test_failed"),
+        };
         return;
       }
       testAIResult.value = res.data;
     } catch (e) {
-      testAIResult.value = { ok: false, detail: t("profile.integrations.toast.test_failed") };
+      testAIResult.value = {
+        ok: false,
+        detail: t("profile.integrations.toast.test_failed"),
+      };
     } finally {
       testingAI.value = false;
     }
   };
 
   const testBarcode = async () => {
+    if (!integrationsStore.isOwner) return;
+
     testingBarcode.value = true;
     testBarcodeResult.value = null;
 
     try {
       const res = await api.group.testBarcode();
       if (res.error || !res.data) {
-        testBarcodeResult.value = { ok: false, detail: t("profile.integrations.toast.test_failed") };
+        testBarcodeResult.value = {
+          ok: false,
+          detail: t("profile.integrations.toast.test_failed"),
+        };
         return;
       }
       testBarcodeResult.value = res.data;
     } catch (e) {
-      testBarcodeResult.value = { ok: false, detail: t("profile.integrations.toast.test_failed") };
+      testBarcodeResult.value = {
+        ok: false,
+        detail: t("profile.integrations.toast.test_failed"),
+      };
     } finally {
       testingBarcode.value = false;
     }
@@ -392,6 +454,17 @@
     <div v-else>
       <div v-if="!selectedCollection" class="rounded-md border bg-card p-4 text-sm text-muted-foreground">
         {{ $t("components.collection.selector.select_collection") }}
+      </div>
+
+      <div v-else-if="ownershipLoadFailed" class="flex items-center gap-2 rounded-md border bg-card p-4 text-sm">
+        <span class="text-destructive">{{ $t("collection.permissions_load_failed") }}</span>
+        <Button variant="outline" size="sm" @click="initializeSettings">
+          {{ $t("profile.integrations.retry") }}
+        </Button>
+      </div>
+
+      <div v-else-if="!integrationsStore.isOwner" class="rounded-md border bg-card p-4 text-sm text-muted-foreground">
+        {{ $t("collection.owner_only") }}
       </div>
 
       <div v-else class="space-y-4">
@@ -428,13 +501,24 @@
         <div class="space-y-4 rounded-md border bg-card p-4">
           <header class="flex items-center gap-2">
             <div>
-              <h2 class="text-lg font-semibold">{{ $t("profile.integrations.title") }}</h2>
-              <p class="text-sm text-muted-foreground">{{ $t("profile.integrations.subtitle") }}</p>
+              <h2 class="text-lg font-semibold">
+                {{ $t("profile.integrations.title") }}
+              </h2>
+              <p class="text-sm text-muted-foreground">
+                {{ $t("profile.integrations.subtitle") }}
+              </p>
             </div>
           </header>
 
           <div v-if="integrationsLoading" class="text-sm text-muted-foreground">
             {{ $t("global.loading") }}
+          </div>
+
+          <div v-else-if="integrationsLoadFailed" class="flex items-center gap-2 rounded-md border p-3 text-sm">
+            <span class="text-destructive">{{ $t("profile.integrations.toast.failed_load") }}</span>
+            <Button variant="outline" size="sm" @click="loadIntegrations">
+              {{ $t("profile.integrations.retry") }}
+            </Button>
           </div>
 
           <template v-else>
@@ -449,7 +533,9 @@
               </h3>
 
               <div>
-                <Label for="ai-provider"> {{ $t("profile.integrations.provider_label") }} </Label>
+                <Label for="ai-provider">
+                  {{ $t("profile.integrations.provider_label") }}
+                </Label>
                 <Select
                   id="ai-provider"
                   :model-value="providerSelectValue"
@@ -492,20 +578,23 @@
                   type="button"
                   class="mb-2 inline-flex items-center justify-center rounded-md p-2 text-muted-foreground hover:text-foreground"
                   :title="$t('profile.integrations.clear_field')"
+                  :aria-label="$t('profile.integrations.clear_field')"
                   @click="clearAiApiKey"
                 >
                   <MdiClose class="size-4" />
                 </button>
               </div>
 
-              <p v-if="envHint" class="text-sm text-muted-foreground">{{ envHint }}</p>
+              <p v-if="envHint" class="text-sm text-muted-foreground">
+                {{ envHint }}
+              </p>
 
               <div v-if="integrationsStore.isOwner" class="flex items-center gap-2">
                 <Button variant="outline" size="sm" :disabled="testingAI" @click="testAI">
                   <MdiLoading v-if="testingAI" class="mr-2 inline-block animate-spin" />
                   <span>{{ $t("profile.integrations.test") }}</span>
                 </Button>
-                <span v-if="testAIResult" class="flex items-center gap-1 text-sm">
+                <span v-if="testAIResult" class="flex items-center gap-1 text-sm" aria-live="polite">
                   <MdiCheck v-if="testAIResult.ok" class="size-4 text-green-500" />
                   <MdiAlertCircleOutline v-else class="size-4 text-destructive" />
                   <span :class="testAIResult.ok ? 'text-green-500' : 'text-destructive'">
@@ -534,6 +623,7 @@
                   type="button"
                   class="mb-2 inline-flex items-center justify-center rounded-md p-2 text-muted-foreground hover:text-foreground"
                   :title="$t('profile.integrations.clear_field')"
+                  :aria-label="$t('profile.integrations.clear_field')"
                   @click="clearBarcodeToken"
                 >
                   <MdiClose class="size-4" />
@@ -551,7 +641,7 @@
                   <MdiLoading v-if="testingBarcode" class="mr-2 inline-block animate-spin" />
                   <span>{{ $t("profile.integrations.test") }}</span>
                 </Button>
-                <span v-if="testBarcodeResult" class="flex items-center gap-1 text-sm">
+                <span v-if="testBarcodeResult" class="flex items-center gap-1 text-sm" aria-live="polite">
                   <MdiCheck v-if="testBarcodeResult.ok" class="size-4 text-green-500" />
                   <MdiAlertCircleOutline v-else class="size-4 text-destructive" />
                   <span :class="testBarcodeResult.ok ? 'text-green-500' : 'text-destructive'">

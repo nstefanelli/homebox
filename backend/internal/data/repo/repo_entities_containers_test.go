@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/samber/lo"
@@ -114,12 +115,81 @@ func TestEntityRepository_Query_IsContainerFilter(t *testing.T) {
 	res, err := tRepos.Entities.QueryByGroup(context.Background(), tGroup.ID, EntityQuery{
 		IsLocation:  lo.ToPtr(true),
 		IsContainer: lo.ToPtr(true),
+		Page:        -1,
+		PageSize:    -1,
 	})
 	require.NoError(t, err)
 
 	ids := lo.Map(res.Items, func(e EntitySummary, _ int) string { return e.ID.String() })
 	assert.Contains(t, ids, toteEntity.ID.String())
 	assert.NotContains(t, ids, shelf.ID.String())
+}
+
+func TestEntityRepository_GetOneByGroup_ContainerTotalPrice(t *testing.T) {
+	ctx := context.Background()
+	tote := useToteEntityType(t)
+	itemType := useItemEntityType(t)
+
+	root, err := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+		Name:         "priced-root",
+		EntityTypeID: tote.ID,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tRepos.Entities.Delete(ctx, root.ID) })
+
+	nested, err := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+		Name:         "priced-nested",
+		ParentID:     root.ID,
+		EntityTypeID: tote.ID,
+	})
+	require.NoError(t, err)
+
+	createPricedItem := func(name string, parentID uuid.UUID, quantity, price float64) EntityOut {
+		t.Helper()
+		out, createErr := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+			Name:         name,
+			ParentID:     parentID,
+			EntityTypeID: itemType.ID,
+			Quantity:     quantity,
+		})
+		require.NoError(t, createErr)
+		require.NoError(t, tClient.Entity.UpdateOneID(out.ID).SetPurchasePrice(price).Exec(ctx))
+		return out
+	}
+
+	createPricedItem("direct", root.ID, 2, 10.5)
+	createPricedItem("nested", nested.ID, 3, 4)
+
+	sold := createPricedItem("sold", nested.ID, 5, 100)
+	require.NoError(t, tClient.Entity.UpdateOneID(sold.ID).SetSoldDate(time.Now()).Exec(ctx))
+
+	archived := createPricedItem("archived", root.ID, 7, 200)
+	require.NoError(t, tClient.Entity.UpdateOneID(archived.ID).SetArchived(true).Exec(ctx))
+
+	// A legacy corrupt cross-tenant edge must not leak into this group's total.
+	foreignGID, _, foreignTypeID := makeForeignGroup(t)
+	foreign, err := tRepos.Entities.Create(ctx, foreignGID, EntityCreate{
+		Name:         "foreign-priced",
+		EntityTypeID: foreignTypeID,
+		Quantity:     10,
+	})
+	require.NoError(t, err)
+	require.NoError(t, tClient.Entity.UpdateOneID(foreign.ID).
+		SetParentID(root.ID).
+		SetPurchasePrice(999).
+		Exec(ctx))
+
+	got, err := tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, root.ID)
+	require.NoError(t, err)
+	assert.InDelta(t, 33, got.TotalPrice, 0.001)
+
+	// Corrupt cycles terminate at the depth bound and DISTINCT prevents
+	// descendants reached more than once from inflating the total.
+	require.NoError(t, tClient.Entity.UpdateOneID(root.ID).SetParentID(nested.ID).Exec(ctx))
+	got, err = tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, root.ID)
+	require.NoError(t, err)
+	assert.InDelta(t, 33, got.TotalPrice, 0.001)
+	require.NoError(t, tClient.Entity.UpdateOneID(root.ID).ClearParent().Exec(ctx))
 }
 
 // TestEntityRepository_CreateFromTemplate_CopiesPhoto verifies that creating
@@ -148,6 +218,69 @@ func TestEntityRepository_CreateFromTemplate_CopiesPhoto(t *testing.T) {
 	require.NotEmpty(t, out.Attachments, "created entity must carry the template photo attachment")
 	assert.Equal(t, "grp/documents/deadbeef", out.Attachments[0].Path)
 	assert.True(t, out.Attachments[0].Primary)
+}
+
+func TestEntityRepository_CreateFromTemplate_PreservesTypedFields(t *testing.T) {
+	ctx := context.Background()
+	containerType := useContainerEntityType(t)
+	itemType := useItemEntityType(t)
+	container, err := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+		Name:         "typed-field-parent",
+		EntityTypeID: containerType.ID,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tRepos.Entities.Delete(ctx, container.ID) })
+
+	timeValue := time.Date(2026, time.May, 6, 7, 8, 9, 0, time.UTC)
+	fields := []EntityFieldData{
+		{Type: "text", Name: "text", TextValue: "kept"},
+		{Type: testFieldTypeNumber, Name: "number", NumberValue: 73},
+		{Type: testFieldTypeBoolean, Name: "boolean", BooleanValue: true},
+		{Type: "time", Name: "time", TimeValue: timeValue},
+	}
+	assertFields := func(out EntityOut) {
+		t.Helper()
+		require.Len(t, out.Fields, 4)
+		byName := lo.SliceToMap(out.Fields, func(field EntityFieldData) (string, EntityFieldData) {
+			return field.Name, field
+		})
+		assert.Equal(t, "kept", byName["text"].TextValue)
+		assert.Equal(t, 73, byName["number"].NumberValue)
+		assert.True(t, byName["boolean"].BooleanValue)
+		assert.WithinDuration(t, timeValue, byName["time"].TimeValue, time.Second)
+	}
+
+	single, err := tRepos.Entities.CreateFromTemplate(ctx, tGroup.ID, EntityCreateFromTemplate{
+		Name:         "typed-field-single",
+		Quantity:     1,
+		ParentID:     container.ID,
+		EntityTypeID: itemType.ID,
+		Fields:       fields,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tRepos.Entities.Delete(ctx, single.ID) })
+	assertFields(single)
+
+	batch, err := tRepos.Entities.CreateFromTemplateBatch(ctx, tGroup.ID, EntityBatchCreateFromTemplate{
+		Template: EntityCreateFromTemplate{
+			Quantity:     1,
+			ParentID:     container.ID,
+			EntityTypeID: itemType.ID,
+			Fields:       fields,
+		},
+		Count:      2,
+		NamePrefix: "typed-field-batch",
+	})
+	require.NoError(t, err)
+	require.Len(t, batch, 2)
+	t.Cleanup(func() {
+		for _, out := range batch {
+			_ = tRepos.Entities.Delete(ctx, out.ID)
+		}
+	})
+	for _, out := range batch {
+		assertFields(out)
+	}
 }
 
 func TestEntityRepository_CreateFromTemplateBatch(t *testing.T) {

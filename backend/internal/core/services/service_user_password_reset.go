@@ -17,6 +17,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+const passwordResetWorkTimeout = 30 * time.Second
+
 // MailerReady reports whether the SMTP mailer is configured and usable. The
 // HTTP forgot-password handler uses this to short-circuit with a clear error
 // when SMTP is missing, so the user sees something actionable instead of a
@@ -50,17 +52,22 @@ func (svc *UserService) RequestPasswordReset(ctx context.Context, email, baseURL
 		return ErrorMailerNotConfigured
 	}
 
-	// Detach from the request context so a client disconnect or timeout
-	// doesn't abort the email send halfway through. Errors are logged, never
+	// Detach cancellation from the request so a client disconnect does not
+	// abort the email halfway through, but retain request values and put a hard
+	// ceiling on the database and SMTP work. Errors are logged, never
 	// propagated — surfacing them would re-introduce the enumeration leak.
-	go svc.processResetRequest(email, baseURL)
+	workerCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), passwordResetWorkTimeout)
+	go func() {
+		defer cancel()
+		svc.processResetRequest(workerCtx, email, baseURL)
+	}()
 
 	span.SetAttributes(attribute.String("reset.outcome", "queued"))
 	return nil
 }
 
-func (svc *UserService) processResetRequest(email, baseURL string) {
-	ctx, span := entityServiceTracer().Start(context.Background(), "service.UserService.processResetRequest",
+func (svc *UserService) processResetRequest(ctx context.Context, email, baseURL string) {
+	ctx, span := entityServiceTracer().Start(ctx, "service.UserService.processResetRequest",
 		trace.WithAttributes(attribute.Int("user.email.length", len(email))))
 	defer span.End()
 
@@ -81,7 +88,7 @@ func (svc *UserService) processResetRequest(email, baseURL string) {
 	span.SetAttributes(attribute.String("user.id", usr.ID.String()))
 
 	link := buildResetLink(baseURL, rawToken)
-	if err := svc.sendResetEmail(usr, link); err != nil {
+	if err := svc.sendResetEmail(ctx, usr, link); err != nil {
 		recordServiceSpanError(span, err)
 		span.SetAttributes(attribute.String("reset.outcome", "email_send_failed"))
 		log.Err(err).Str("user.id", usr.ID.String()).Msg("failed to send password reset email")
@@ -236,7 +243,7 @@ func (svc *UserService) createResetToken(ctx context.Context, email string) (str
 	return tok.Raw, usr, nil
 }
 
-func (svc *UserService) sendResetEmail(usr repo.UserOut, link string) error {
+func (svc *UserService) sendResetEmail(ctx context.Context, usr repo.UserOut, link string) error {
 	subject := "Reset your Homebox password"
 	body := buildResetEmailBody(usr.Name, link)
 
@@ -247,7 +254,7 @@ func (svc *UserService) sendResetEmail(usr repo.UserOut, link string) error {
 		SetBody(body).
 		Build()
 
-	return svc.mailer.Send(msg)
+	return svc.mailer.SendContext(ctx, msg)
 }
 
 func buildResetLink(baseURL, rawToken string) string {

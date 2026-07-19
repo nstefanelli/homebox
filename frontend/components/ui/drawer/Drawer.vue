@@ -2,11 +2,12 @@
   import type { DrawerRootEmits, DrawerRootProps } from "vaul-vue";
   import { useForwardPropsEmits } from "reka-ui";
   import { DrawerRoot } from "vaul-vue";
-  import { DialogID, useDialog } from "@/components/ui/dialog-provider/utils";
+  import { useDialog } from "@/components/ui/dialog-provider/utils";
+  import type { DialogID } from "@/components/ui/dialog-provider/utils";
 
-  const props = withDefaults(defineProps<DrawerRootProps & { dialogId: string }>(), {
+  const props = withDefaults(defineProps<DrawerRootProps & { dialogId: DialogID }>(), {
     shouldScaleBackground: true,
-  }) as DrawerRootProps & { dialogId: DialogID };
+  });
 
   const emits = defineEmits<DrawerRootEmits>();
 
@@ -14,7 +15,7 @@
 
   const isOpen = computed(() => activeDialog.value !== null && activeDialog.value === props.dialogId);
   const onOpenChange = (open: boolean) => {
-    if (!open) closeDialog(props.dialogId as any);
+    if (!open) closeDialog(props.dialogId);
   };
 
   const forwarded = useForwardPropsEmits(props, emits);

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/types"
@@ -14,7 +16,18 @@ import (
 // not one of validAIProviders. Exported (and wrapped, not just formatted) so
 // callers such as the v1 handler can distinguish this validation failure from
 // other errors via errors.Is and map it to a 400 instead of a 500.
-var ErrInvalidAIProvider = errors.New("invalid AI provider")
+var (
+	ErrInvalidAIProvider      = errors.New("invalid AI provider")
+	ErrInvalidAIBaseURL       = errors.New("invalid AI base URL")
+	ErrInvalidIntegrationData = errors.New("invalid integration field")
+)
+
+const (
+	maxIntegrationBaseURLBytes = 2048
+	maxIntegrationModelBytes   = 255
+	maxIntegrationContactBytes = 512
+	maxIntegrationSecretBytes  = 8192
+)
 
 // AI provider identifiers accepted in GroupIntegrations.AIProvider. Exported
 // so callers outside this package (handlers, tests) share one spelling rather
@@ -75,8 +88,10 @@ func NewIntegrationsService(store GroupIntegrationsStore, fallbackAI config.AICo
 //   - AIProvider == ""         -> the env AIConf is returned verbatim.
 //   - AIProvider == "disabled" -> AI is forced off (Provider/BaseURL/APIKey/Model
 //     all zeroed) but TimeoutSeconds still comes from env.
-//   - AIProvider == <anything else> -> group fields win; any of BaseURL/APIKey/Model
-//     left empty falls back to the corresponding env value, independently per field.
+//   - AIProvider == <anything else> -> group fields win; empty fields inherit
+//     env values, except an explicit group BaseURL never inherits the env API
+//     key because that would disclose an administrator secret to a tenant-
+//     selected endpoint.
 //
 // TimeoutSeconds is never UI-managed — it always comes from the env fallback.
 func (svc *IntegrationsService) EffectiveAI(ctx context.Context, gid uuid.UUID) (config.AIConf, error) {
@@ -93,12 +108,21 @@ func (svc *IntegrationsService) EffectiveAI(ctx context.Context, gid uuid.UUID) 
 			TimeoutSeconds: svc.fallbackAI.TimeoutSeconds,
 		}, nil
 	default:
+		baseURL := svc.fallbackAI.BaseURL
+		baseURLIsUntrusted := false
+		apiKey := firstNonEmpty(group.AIAPIKey, svc.fallbackAI.APIKey)
+		if group.AIBaseURL != "" {
+			baseURL = group.AIBaseURL
+			baseURLIsUntrusted = true
+			apiKey = group.AIAPIKey
+		}
 		return config.AIConf{
-			Provider:       group.AIProvider,
-			BaseURL:        firstNonEmpty(group.AIBaseURL, svc.fallbackAI.BaseURL),
-			APIKey:         firstNonEmpty(group.AIAPIKey, svc.fallbackAI.APIKey),
-			Model:          firstNonEmpty(group.AIModel, svc.fallbackAI.Model),
-			TimeoutSeconds: svc.fallbackAI.TimeoutSeconds,
+			Provider:           group.AIProvider,
+			BaseURL:            baseURL,
+			APIKey:             apiKey,
+			Model:              firstNonEmpty(group.AIModel, svc.fallbackAI.Model),
+			TimeoutSeconds:     svc.fallbackAI.TimeoutSeconds,
+			BaseURLIsUntrusted: baseURLIsUntrusted,
 		}, nil
 	}
 }
@@ -158,6 +182,15 @@ func (svc *IntegrationsService) Update(ctx context.Context, gid uuid.UUID, incom
 	if !validAIProviders[incoming.AIProvider] {
 		return fmt.Errorf("%w: %q", ErrInvalidAIProvider, incoming.AIProvider)
 	}
+	incoming.AIBaseURL = strings.TrimSpace(incoming.AIBaseURL)
+	incoming.AIModel = strings.TrimSpace(incoming.AIModel)
+	incoming.OpenFoodFactsContact = strings.TrimSpace(incoming.OpenFoodFactsContact)
+	if err := validateIntegrationFields(incoming); err != nil {
+		return err
+	}
+	if err := validateAIBaseURL(incoming.AIBaseURL); err != nil {
+		return err
+	}
 
 	stored, err := svc.repos.IntegrationsGet(ctx, gid)
 	if err != nil {
@@ -169,6 +202,51 @@ func (svc *IntegrationsService) Update(ctx context.Context, gid uuid.UUID, incom
 	merged.BarcodeTokenBarcodespider = mergeSecret(incoming.BarcodeTokenBarcodespider, stored.BarcodeTokenBarcodespider)
 
 	return svc.repos.IntegrationsSet(ctx, gid, merged)
+}
+
+func validateIntegrationFields(incoming types.GroupIntegrations) error {
+	switch {
+	case len(incoming.AIBaseURL) > maxIntegrationBaseURLBytes:
+		return fmt.Errorf("%w: AI base URL exceeds %d bytes", ErrInvalidIntegrationData, maxIntegrationBaseURLBytes)
+	case len(incoming.AIModel) > maxIntegrationModelBytes:
+		return fmt.Errorf("%w: AI model exceeds %d bytes", ErrInvalidIntegrationData, maxIntegrationModelBytes)
+	case len(incoming.OpenFoodFactsContact) > maxIntegrationContactBytes:
+		return fmt.Errorf("%w: Open Food Facts contact exceeds %d bytes", ErrInvalidIntegrationData, maxIntegrationContactBytes)
+	case strings.ContainsAny(incoming.OpenFoodFactsContact, "\r\n"):
+		return fmt.Errorf("%w: Open Food Facts contact contains a line break", ErrInvalidIntegrationData)
+	case len(incoming.AIAPIKey) > maxIntegrationSecretBytes:
+		return fmt.Errorf("%w: AI API key exceeds %d bytes", ErrInvalidIntegrationData, maxIntegrationSecretBytes)
+	case len(incoming.BarcodeTokenBarcodespider) > maxIntegrationSecretBytes:
+		return fmt.Errorf("%w: barcode token exceeds %d bytes", ErrInvalidIntegrationData, maxIntegrationSecretBytes)
+	default:
+		return nil
+	}
+}
+
+// validateAIBaseURL accepts only absolute HTTP(S) endpoints without embedded
+// credentials. AI API keys have a dedicated write-only field; allowing
+// credentials in the URL would make them indistinguishable from displayable
+// endpoint metadata and could expose them through settings responses or logs.
+func validateAIBaseURL(raw string) error {
+	if raw == "" {
+		return nil
+	}
+	if strings.Contains(raw, "#") {
+		return fmt.Errorf("%w: query strings and fragments are not supported", ErrInvalidAIBaseURL)
+	}
+
+	u, err := url.ParseRequestURI(raw)
+	if err != nil || u.Host == "" || u.User != nil {
+		return fmt.Errorf("%w: must be an absolute http/https URL without embedded credentials", ErrInvalidAIBaseURL)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("%w: scheme must be http or https", ErrInvalidAIBaseURL)
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("%w: query strings and fragments are not supported", ErrInvalidAIBaseURL)
+	}
+
+	return nil
 }
 
 // mergeSecret applies the write-only secret semantics described on Update for

@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -28,9 +29,23 @@ func generateOrPrint(ctrl *V1Controller, w http.ResponseWriter, r *http.Request,
 
 		_, err = w.Write([]byte("Printed!"))
 		return err
-	} else {
-		return labelmaker.GenerateLabel(w, &params, ctrl.config)
 	}
+
+	// Generate into a bounded in-memory buffer before writing the response.
+	// This prevents partial image/error responses and lets us set the MIME type
+	// from the actual bytes, including when an external label service is used.
+	var buf bytes.Buffer
+	if err := labelmaker.GenerateLabel(&buf, &params, ctrl.config); err != nil {
+		return err
+	}
+	contentType := http.DetectContentType(buf.Bytes())
+	if !strings.HasPrefix(contentType, "image/") {
+		return fmt.Errorf("generated label is not a valid image")
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
+	_, err := w.Write(buf.Bytes())
+	return err
 }
 
 // HandleGetLocationLabel godoc
@@ -115,7 +130,7 @@ func (ctrl *V1Controller) HandleGetAssetLabel() errchain.HandlerFunc {
 		}
 
 		auth := services.NewContext(r.Context())
-		item, err := ctrl.repo.Entities.QueryByAssetID(auth, auth.GID, repo.AssetID(assetID), 0, 1)
+		item, err := ctrl.repo.Entities.QueryByAssetID(auth, auth.GID, repo.AssetID(assetID), 1, 1)
 		if err != nil {
 			return err
 		}

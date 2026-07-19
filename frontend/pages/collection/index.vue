@@ -13,7 +13,8 @@
   import MdiWrench from "~icons/mdi/wrench";
   import MdiLogout from "~icons/mdi/logout";
   import MdiDelete from "~icons/mdi/delete";
-  import type { UserSummary } from "~/lib/api/types/data-contracts";
+  import MdiLoading from "~icons/mdi/loading";
+  import { useIntegrationsStore } from "~~/stores/integrations";
 
   definePageMeta({
     middleware: ["auth"],
@@ -27,97 +28,101 @@
   const api = useUserApi();
   const auth = useAuthContext();
   const confirm = useConfirm();
+  const integrationsStore = useIntegrationsStore();
 
   const currentPath = computed(() => route.path);
 
-  const tabs = computed(() => [
-    {
-      id: "members",
-      label: "collection.tabs.members",
-      to: "/collection/members",
-      icon: MdiAccountMultiple,
-    },
-    {
-      id: "invites",
-      label: "collection.tabs.invites",
-      to: "/collection/invites",
-      icon: MdiEmailPlus,
-    },
-    {
-      id: "notifiers",
-      label: "collection.tabs.notifiers",
-      to: "/collection/notifiers",
-      icon: MdiBell,
-    },
-    {
-      id: "settings",
-      label: "collection.tabs.settings",
-      to: "/collection/settings",
-      icon: MdiCog,
-    },
-    {
-      id: "entity-types",
-      label: "collection.tabs.entity_types",
-      to: "/collection/entity-types",
-      icon: MdiShape,
-    },
-    {
-      id: "tools",
-      label: "collection.tabs.tools",
-      to: "/collection/tools",
-      icon: MdiWrench,
-    },
-  ]);
+  const tabs = computed(() =>
+    [
+      {
+        id: "members",
+        label: "collection.tabs.members",
+        to: "/collection/members",
+        icon: MdiAccountMultiple,
+      },
+      {
+        id: "invites",
+        label: "collection.tabs.invites",
+        to: "/collection/invites",
+        icon: MdiEmailPlus,
+        ownerOnly: true,
+      },
+      {
+        id: "notifiers",
+        label: "collection.tabs.notifiers",
+        to: "/collection/notifiers",
+        icon: MdiBell,
+      },
+      {
+        id: "settings",
+        label: "collection.tabs.settings",
+        to: "/collection/settings",
+        icon: MdiCog,
+        ownerOnly: true,
+      },
+      {
+        id: "entity-types",
+        label: "collection.tabs.entity_types",
+        to: "/collection/entity-types",
+        icon: MdiShape,
+      },
+      {
+        id: "tools",
+        label: "collection.tabs.tools",
+        to: "/collection/tools",
+        icon: MdiWrench,
+      },
+    ].filter(tab => !tab.ownerOnly || integrationsStore.isOwner)
+  );
 
   const { selectedCollection, load: reloadCollections } = useCollections();
 
-  const members = ref<Array<UserSummary>>([]);
-  const membersLoading = ref(false);
+  const ownershipLoading = ref(false);
+  const ownershipLoadFailed = ref(false);
   const actionLoading = ref(false);
 
   const currentUserId = computed(() => auth.user?.id ?? "");
+  const ownershipReady = computed(
+    () => Boolean(selectedCollection.value) && integrationsStore.currentCollectionLoaded && !ownershipLoadFailed.value
+  );
+  const isActionDisabled = computed(
+    () => !selectedCollection.value || !ownershipReady.value || ownershipLoading.value || actionLoading.value
+  );
 
-  const membersCount = computed(() => members.value.length);
+  const loadOwnership = async () => {
+    if (!selectedCollection.value) return;
 
-  const isOnlyMember = computed(() => {
-    if (membersCount.value !== 1 || !currentUserId.value) return false;
-    const member = members.value[0];
-    return Boolean(member && member.id && member.id === currentUserId.value);
-  });
-  const isActionDisabled = computed(() => !selectedCollection.value || membersLoading.value || actionLoading.value);
-
-  const loadMembers = async () => {
-    if (!selectedCollection.value) {
-      members.value = [];
-      return;
-    }
-
-    membersLoading.value = true;
+    ownershipLoading.value = true;
+    ownershipLoadFailed.value = false;
     try {
-      const res = await api.group.getMembers();
-      if (res.error) {
-        const msg = t("errors.api_failure") + String(res.error);
-        toast.error(msg);
-        members.value = [];
-      } else {
-        members.value = Array.isArray(res.data) ? (res.data as Array<UserSummary>) : [];
-      }
-    } catch (e) {
-      const msg = (e as Error).message ?? String(e);
-      toast.error(msg);
-      members.value = [];
+      await integrationsStore.ensureFetched();
+    } catch {
+      ownershipLoadFailed.value = true;
+      toast.error(t("collection.permissions_load_failed"));
     } finally {
-      membersLoading.value = false;
+      ownershipLoading.value = false;
     }
   };
 
   watch(
     () => selectedCollection.value?.id,
     () => {
-      void loadMembers();
+      void loadOwnership();
     },
     { immediate: true }
   );
+
+  const finishCollectionExit = async () => {
+    await reloadCollections();
+
+    if (!selectedCollection.value) {
+      await navigateTo("/no-collections", { replace: true });
+      return;
+    }
+
+    await navigateTo("/collection/members", { replace: true });
+    window.location.reload();
+  };
 
   const handleLeaveCollection = async () => {
     if (!selectedCollection.value) return;
@@ -150,8 +155,7 @@
       }
 
       toast.success(t("collection.left_collection"));
-      await reloadCollections();
-      window.location.reload();
+      await finishCollectionExit();
     } catch (e) {
       const msg = (e as Error).message ?? String(e);
       toast.error(msg);
@@ -179,8 +183,7 @@
       }
 
       toast.success(t("collection.deleted_collection"));
-      await reloadCollections();
-      window.location.reload();
+      await finishCollectionExit();
     } catch (e) {
       const msg = (e as Error).message ?? String(e);
       toast.error(msg);
@@ -192,7 +195,7 @@
   const handleCollectionPrimaryAction = async () => {
     if (!selectedCollection.value) return;
 
-    if (isOnlyMember.value) {
+    if (integrationsStore.isOwner) {
       await handleDeleteCollection();
     } else {
       await handleLeaveCollection();
@@ -202,7 +205,7 @@
 
 <template>
   <BaseContainer>
-    <Title>{{ t("menu.collection_options") }}</Title>
+    <Title>{{ t("menu.collection") }}</Title>
 
     <section>
       <Card class="p-3">
@@ -239,15 +242,21 @@
 
         <div id="collection-header-actions" class="ml-auto flex items-center gap-1">
           <Button
+            v-if="ownershipReady"
             variant="outline"
             size="icon"
             class="size-8"
-            :aria-label="$t(isOnlyMember ? 'collection.delete_collection' : 'collection.leave_collection')"
+            :aria-label="$t(integrationsStore.isOwner ? 'collection.delete_collection' : 'collection.leave_collection')"
             :disabled="isActionDisabled"
             @click="handleCollectionPrimaryAction"
           >
-            <component :is="isOnlyMember ? MdiDelete : MdiLogout" class="size-4" />
+            <component :is="integrationsStore.isOwner ? MdiDelete : MdiLogout" class="size-4" />
           </Button>
+          <MdiLoading
+            v-else-if="ownershipLoading"
+            class="size-4 animate-spin text-muted-foreground"
+            :aria-label="$t('global.loading')"
+          />
         </div>
       </div>
     </section>

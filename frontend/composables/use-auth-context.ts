@@ -70,7 +70,6 @@ class AuthContext implements IAuthContext {
   }
 
   isAuthorized() {
-    console.debug("isAuthorized", this.token);
     return this.token;
   }
 
@@ -80,7 +79,6 @@ class AuthContext implements IAuthContext {
     // Delete the cookies
     this._token.value = null;
     this._attachmentToken.value = null;
-    console.log("Session invalidated");
   }
 
   async login(api: PublicApi, email: string, password: string, stayLoggedIn: boolean) {

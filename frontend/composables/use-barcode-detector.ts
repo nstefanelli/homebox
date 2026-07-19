@@ -1,12 +1,12 @@
 import { ref, type Ref, watch, onUnmounted } from "vue";
 import { useDocumentVisibility } from "@vueuse/core";
-import type { ItemOut, ItemSummary, LocationOut } from "~~/lib/api/types/data-contracts";
+import type { EntityOut, EntitySummary } from "~~/lib/api/types/data-contracts";
 import type { WorkerResponse } from "~~/workers/barcode-detector";
 
 export interface EntityData {
-  item?: ItemOut;
-  location?: LocationOut;
-  childItems?: ItemSummary[];
+  item?: EntityOut & { location?: EntitySummary | null };
+  location?: EntityOut;
+  childItems?: EntitySummary[];
 }
 
 export interface Point2D {
@@ -267,10 +267,8 @@ export function useBarcodeDetector(videoRef: Ref<HTMLVideoElement | undefined>) 
 
           if (msg.type === "ready") {
             isSupported.value = true;
-            console.debug("[AR] Worker ready, BarcodeDetector initialized");
             resolve();
           } else if (msg.type === "error") {
-            console.error("[AR] Worker init error:", msg.message);
             isSupported.value = false;
             reject(new Error(msg.message));
           } else if (msg.type === "result") {
@@ -279,12 +277,10 @@ export function useBarcodeDetector(videoRef: Ref<HTMLVideoElement | undefined>) 
         };
 
         worker.onerror = e => {
-          console.error("[AR] Worker error:", e);
           isSupported.value = false;
           reject(e);
         };
       } catch (e) {
-        console.error("[AR] Failed to create worker:", e);
         reject(e);
       }
     });
@@ -329,7 +325,6 @@ export function useBarcodeDetector(videoRef: Ref<HTMLVideoElement | undefined>) 
         };
         existing.lastSeen = now;
       } else {
-        console.debug("[AR] New entity detected:", key);
         const entity: DetectedEntity = {
           id: parsed.id,
           entityType: parsed.entityType,
@@ -350,13 +345,6 @@ export function useBarcodeDetector(videoRef: Ref<HTMLVideoElement | undefined>) 
             tracked.data = data;
             tracked.loading = false;
             tracked.error = data === null;
-            console.debug(
-              "[AR] Data fetched for",
-              key,
-              data
-                ? `item: ${data.item?.name ?? "-"}, location: ${data.location?.name ?? "-"}, children: ${data.childItems?.length ?? 0}`
-                : "not found"
-            );
             updateDetections();
           }
         });
@@ -416,7 +404,7 @@ export function useBarcodeDetector(videoRef: Ref<HTMLVideoElement | undefined>) 
           return null;
         }
 
-        const [locRes, itemsRes] = await Promise.all([api.locations.get(id), api.items.getAll({ locations: [id] })]);
+        const [locRes, itemsRes] = await Promise.all([api.locations.get(id), api.items.getAll({ parentIds: [id] })]);
         if (locRes.data) {
           const result: EntityData = { location: locRes.data, childItems: itemsRes.data?.items ?? [] };
           entityCache.set(cacheKey, { data: result, fetchedAt: Date.now() });
@@ -459,7 +447,6 @@ export function useBarcodeDetector(videoRef: Ref<HTMLVideoElement | undefined>) 
     teardown();
 
     error.value = null;
-    console.debug("[AR] startCamera called, session:", mySession);
 
     if (!navigator?.mediaDevices?.getUserMedia) {
       error.value = "scanner.unsupported";
@@ -475,8 +462,6 @@ export function useBarcodeDetector(videoRef: Ref<HTMLVideoElement | undefined>) 
         },
       });
       if (sessionId !== mySession) return; // superseded
-
-      console.debug("[AR] Camera stream acquired");
 
       const devices = await navigator.mediaDevices.enumerateDevices();
       if (sessionId !== mySession) return;
@@ -494,7 +479,6 @@ export function useBarcodeDetector(videoRef: Ref<HTMLVideoElement | undefined>) 
         videoRef.value.setAttribute("playsinline", "true");
         await videoRef.value.play();
         if (sessionId !== mySession) return;
-        console.debug("[AR] Video playing:", videoRef.value.videoWidth, "x", videoRef.value.videoHeight);
       }
 
       await initWorker();
@@ -507,7 +491,6 @@ export function useBarcodeDetector(videoRef: Ref<HTMLVideoElement | undefined>) 
       }
     } catch (err: unknown) {
       if (sessionId !== mySession) return;
-      console.error("[AR] startCamera error:", err);
       if (err instanceof Error && err.name === "NotAllowedError") {
         error.value = "scanner.permission_denied";
       } else {
@@ -579,24 +562,11 @@ export function useBarcodeDetector(videoRef: Ref<HTMLVideoElement | undefined>) 
     renderLoop(sessionId);
   }
 
-  let frameCount = 0;
-  let lastLogTime = 0;
-
   function renderLoop(session: number) {
     if (!scanning || !videoRef.value || sessionId !== session) return;
 
     const video = videoRef.value;
     const now = Date.now();
-
-    // Log stats periodically
-    frameCount++;
-    if (now - lastLogTime > 3000) {
-      console.debug(
-        `[AR] Stats: ${frameCount} frames, ${trackedEntities.size} tracked, detect in-flight: ${detectInFlight}`
-      );
-      lastLogTime = now;
-      frameCount = 0;
-    }
 
     // Send frame to worker for detection at throttled rate
     if (!detectInFlight && worker && video.readyState >= 2 && now - lastDetectTime >= DETECT_INTERVAL) {

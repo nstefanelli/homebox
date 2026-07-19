@@ -32,7 +32,9 @@
                 </Button>
               </TooltipTrigger>
               <TooltipContent>
-                <p>{{ $t("components.entity.create_modal.product_tooltip_scan_barcode") }}</p>
+                <p>
+                  {{ $t("components.entity.create_modal.product_tooltip_scan_barcode") }}
+                </p>
               </TooltipContent>
             </Tooltip>
             <Tooltip>
@@ -48,7 +50,9 @@
                 </Button>
               </TooltipTrigger>
               <TooltipContent>
-                <p>{{ $t("components.entity.create_modal.product_tooltip_input_barcode") }}</p>
+                <p>
+                  {{ $t("components.entity.create_modal.product_tooltip_input_barcode") }}
+                </p>
               </TooltipContent>
             </Tooltip>
             <Tooltip v-if="aiPhotoEnabled">
@@ -64,7 +68,9 @@
                 </Button>
               </TooltipTrigger>
               <TooltipContent>
-                <p>{{ $t("components.entity.create_modal.product_tooltip_ai_photo") }}</p>
+                <p>
+                  {{ $t("components.entity.create_modal.product_tooltip_ai_photo") }}
+                </p>
               </TooltipContent>
             </Tooltip>
           </ButtonGroup>
@@ -106,7 +112,11 @@
             <MdiFileDocumentOutline class="mt-0.5 size-4 shrink-0 text-primary" />
             <div class="flex-1">
               <h4 class="text-sm font-medium text-foreground">
-                {{ $t("components.template.using_template", { name: templateData.name }) }}
+                {{
+                  $t("components.template.using_template", {
+                    name: templateData.name,
+                  })
+                }}
               </h4>
               <button
                 type="button"
@@ -134,13 +144,17 @@
         <!-- Collapsible details section -->
         <div v-if="showTemplateDetails" class="mt-3 border-t border-primary/20 pt-3">
           <div class="flex flex-col gap-2 text-xs text-muted-foreground">
-            <p v-if="templateData.description" class="text-foreground/80">{{ templateData.description }}</p>
+            <p v-if="templateData.description" class="text-foreground/80">
+              {{ templateData.description }}
+            </p>
             <div class="grid grid-cols-2 gap-x-4 gap-y-1">
               <div v-if="templateData.defaultName">
-                <span class="font-medium">{{ $t("global.name") }}:</span> {{ templateData.defaultName }}
+                <span class="font-medium">{{ $t("global.name") }}:</span>
+                {{ templateData.defaultName }}
               </div>
               <div>
-                <span class="font-medium">{{ $t("global.quantity") }}:</span> {{ templateData.defaultQuantity }}
+                <span class="font-medium">{{ $t("global.quantity") }}:</span>
+                {{ templateData.defaultQuantity }}
               </div>
               <div>
                 <span class="font-medium">{{ $t("global.insured") }}:</span>
@@ -230,7 +244,7 @@
         :autofocus="true"
         :label="
           $t('components.entity.create_modal.entity_name', {
-            type: selectedEntityType ? t(selectedEntityType.name) : '',
+            type: selectedEntityType?.name || '',
           })
         "
         :max-length="255"
@@ -241,11 +255,12 @@
         v-model.number="form.quantity"
         :label="
           $t('components.entity.create_modal.entity_quantity', {
-            type: t(selectedEntityType ? selectedEntityType.name : 'global.entity'),
+            type: selectedEntityType?.name || t('global.entity'),
           })
         "
         type="number"
         step="any"
+        :min="0"
       />
       <FormTextField
         v-if="selectedEntityType?.isContainer"
@@ -260,7 +275,7 @@
         v-model="form.description"
         :label="
           $t('components.entity.create_modal.entity_description', {
-            type: t(selectedEntityType ? selectedEntityType.name : 'global.entity'),
+            type: selectedEntityType?.name || t('global.entity'),
           })
         "
         :max-length="1000"
@@ -301,7 +316,7 @@
       <PhotoUploader
         :label="
           $t('components.entity.create_modal.entity_photo', {
-            type: t(selectedEntityType ? selectedEntityType.name : 'global.entity'),
+            type: selectedEntityType?.name || t('global.entity'),
           })
         "
         :button-label="$t('components.entity.create_modal.upload_photos')"
@@ -392,7 +407,7 @@
   import EntitySelector from "~/components/Entity/Selector.vue";
 
   const { t } = useI18n();
-  const { openDialog, closeDialog, registerOpenDialogCallback } = useDialog();
+  const { openDialog, closeDialog, registerOpenDialogCallback, activeDialog } = useDialog();
 
   useDialogHotkey(DialogID.CreateEntity, { code: "Digit1", shift: true }, () => ({
     baseType: "item",
@@ -406,7 +421,9 @@
   const api = useUserApi();
 
   const integrationsStore = useIntegrationsStore();
-  integrationsStore.ensureFetched();
+  void integrationsStore.ensureFetched().catch(() => {
+    // AI controls remain hidden when the background capability check fails.
+  });
   const aiPhotoEnabled = computed(() => integrationsStore.aiConfigured);
 
   const aiPhotoInput = ref<HTMLInputElement | null>(null);
@@ -415,6 +432,7 @@
   const aiPrefill = ref(false);
   const categoryHints = ref<string[]>([]);
   let aiAbort: AbortController | null = null;
+  let aiRequestSequence = 0;
 
   const locationsStore = useLocationStore();
   const locations = computed(() => locationsStore.allLocations);
@@ -425,7 +443,9 @@
   const route = useRoute();
 
   const parent = ref();
-  const { query, results, isLoading, triggerSearch } = useItemSearch(api, { immediate: false });
+  const { query, results, isLoading, triggerSearch } = useItemSearch(api, {
+    immediate: false,
+  });
   const subItemCreate = ref();
 
   // ItemSelector's #display slot types `item` as `string | ItemsObject` (its generic prop
@@ -461,8 +481,10 @@
   // Entity type selection
   const entityTypes = computed(() => entityTypeStore.allTypes);
   const selectedEntityType = ref<EntityTypeSummary | null>(null);
+  let templateLoadSequence = 0;
 
   async function onEntityTypeChanged(typeId: string) {
+    const loadSequence = ++templateLoadSequence;
     const et = entityTypes.value.find(t => t.id === typeId);
     selectedEntityType.value = et || null;
 
@@ -475,11 +497,22 @@
       return;
     }
 
-    // If the selected type has a default template and is not a location, auto-apply it
-    if (et?.isLocation || !et?.defaultTemplateId || !et.defaultTemplate) {
+    // Item types and container-location types both support defaults. Plain
+    // location types do not.
+    if ((et?.isLocation && !et.isContainer) || !et?.defaultTemplateId || !et.defaultTemplate) {
       clearTemplate();
     } else {
-      const { data, error } = await api.templates.get(et.defaultTemplateId);
+      let result;
+      try {
+        result = await api.templates.get(et.defaultTemplateId);
+      } catch {
+        toast.error(t("components.template.toast.load_failed"));
+        return;
+      }
+      const { data, error } = result;
+      if (loadSequence !== templateLoadSequence || selectedEntityType.value?.id !== typeId) {
+        return;
+      }
       if (!error && data) {
         selectedTemplate.value = {
           id: data.id,
@@ -528,6 +561,7 @@
   });
 
   async function handleTemplateSelected(template: EntityTemplateSummary | null) {
+    const loadSequence = ++templateLoadSequence;
     if (!template) {
       // Template was deselected, clear template data and remove from storage
       templateData.value = null;
@@ -540,7 +574,17 @@
     templateUserSelected.value = true;
 
     // Load full template details
-    const { data, error } = await api.templates.get(template.id);
+    let result;
+    try {
+      result = await api.templates.get(template.id);
+    } catch {
+      toast.error(t("components.template.toast.load_failed"));
+      return;
+    }
+    const { data, error } = result;
+    if (loadSequence !== templateLoadSequence || selectedTemplate.value?.id !== template.id) {
+      return;
+    }
     if (error || !data) {
       toast.error(t("components.template.toast.load_failed"));
       return;
@@ -576,11 +620,22 @@
   }
 
   async function restoreLastTemplate() {
+    const loadSequence = ++templateLoadSequence;
     const lastTemplateId = localStorage.getItem(LAST_TEMPLATE_KEY);
     if (!lastTemplateId) return;
 
     // Load the template details
-    const { data, error } = await api.templates.get(lastTemplateId);
+    let result;
+    try {
+      result = await api.templates.get(lastTemplateId);
+    } catch {
+      localStorage.removeItem(LAST_TEMPLATE_KEY);
+      return;
+    }
+    const { data, error } = result;
+    if (loadSequence !== templateLoadSequence) {
+      return;
+    }
     if (error || !data) {
       // Template might have been deleted, clear the stored ID
       localStorage.removeItem(LAST_TEMPLATE_KEY);
@@ -589,7 +644,11 @@
 
     // Set the template. A restored template reflects the user's last explicit
     // choice, so treat it as user-selected for override purposes.
-    selectedTemplate.value = { id: data.id, name: data.name, description: data.description } as EntityTemplateSummary;
+    selectedTemplate.value = {
+      id: data.id,
+      name: data.name,
+      description: data.description,
+    } as EntityTemplateSummary;
     templateData.value = data;
     templateUserSelected.value = true;
     form.quantity = data.defaultQuantity;
@@ -613,6 +672,7 @@
   }
 
   function clearTemplate() {
+    templateLoadSequence++;
     selectedTemplate.value = null;
     templateData.value = null;
     templateUserSelected.value = false;
@@ -652,9 +712,8 @@
 
     try {
       form.photos[index] = await rotatePhotoPreview(photo);
-    } catch (error) {
+    } catch {
       toast.error(t("components.entity.create_modal.toast.rotate_process_failed"));
-      console.error(error);
     }
   }
 
@@ -693,7 +752,11 @@
   }
 
   function cancelAiAnalyze() {
+    aiRequestSequence++;
     aiAbort?.abort();
+    aiAbort = null;
+    aiLoading.value = false;
+    aiLoadingSlow.value = false;
   }
 
   async function applyHint(hint: string) {
@@ -703,18 +766,30 @@
         form.tags = [...form.tags, existing.id];
       }
     } else {
-      const { error, data } = await api.tags.create({
-        name: hint.trim(),
-        color: "",
-        description: "",
-        icon: "",
-      });
+      let result;
+      try {
+        result = await api.tags.create({
+          name: hint.trim(),
+          color: "",
+          description: "",
+          icon: "",
+        });
+      } catch {
+        toast.error(t("components.entity.create_modal.toast.ai_hint_tag_failed"));
+        return;
+      }
+      const { error, data } = result;
       if (error) {
         toast.error(t("components.entity.create_modal.toast.ai_hint_tag_failed"));
         return;
       }
       form.tags = [...form.tags, data.id];
-      await tagStore.refresh();
+      try {
+        await tagStore.refresh();
+      } catch {
+        // The created tag is already attached by id. A later store refresh
+        // will make it available in selectors.
+      }
     }
     categoryHints.value = categoryHints.value.filter(h => h !== hint);
   }
@@ -731,16 +806,26 @@
     aiLoadingSlow.value = false;
     aiPrefill.value = false;
     categoryHints.value = [];
+    const requestSequence = ++aiRequestSequence;
+    const controller = new AbortController();
+    aiAbort = controller;
     const slowTimer = setTimeout(() => {
-      aiLoadingSlow.value = true;
+      if (requestSequence === aiRequestSequence) {
+        aiLoadingSlow.value = true;
+      }
     }, 10_000);
-    aiAbort = new AbortController();
 
     try {
       // Lane 1: barcode visible in the photo -> existing UPC pipeline, authoritative.
       const barcode = await detectProductBarcode(file);
+      if (controller.signal.aborted || requestSequence !== aiRequestSequence) {
+        return;
+      }
       if (barcode) {
-        const { data, error } = await api.products.searchFromBarcode(barcode, aiAbort.signal);
+        const { data, error } = await api.products.searchFromBarcode(barcode, controller.signal);
+        if (controller.signal.aborted || requestSequence !== aiRequestSequence) {
+          return;
+        }
         if (!error && data && data.length > 0) {
           applyProductPrefill(data[0]!);
           return;
@@ -749,7 +834,10 @@
       }
 
       // Lane 2: vision analysis.
-      const { data, error } = await api.actions.analyzePhoto(file, aiAbort.signal);
+      const { data, error } = await api.actions.analyzePhoto(file, controller.signal);
+      if (controller.signal.aborted || requestSequence !== aiRequestSequence) {
+        return;
+      }
       if (error || !data || data.products.length === 0) {
         toast.error(t("components.entity.create_modal.toast.ai_failed"));
         return;
@@ -763,15 +851,28 @@
       }
     } finally {
       clearTimeout(slowTimer);
-      aiLoading.value = false;
-      aiLoadingSlow.value = false;
-      aiAbort = null;
+      if (requestSequence === aiRequestSequence) {
+        aiLoading.value = false;
+        aiLoadingSlow.value = false;
+        if (aiAbort === controller) {
+          aiAbort = null;
+        }
+      }
     }
   }
 
+  // The create dialog is a singleton and remains mounted while hidden. Abort
+  // immediately on dismissal so a slow barcode decode / vision response
+  // cannot prefill a later dialog session.
+  watch(activeDialog, (current, previous) => {
+    if (previous === DialogID.CreateEntity && current !== DialogID.CreateEntity) {
+      cancelAiAnalyze();
+    }
+  });
+
   onMounted(() => {
     const cleanup = registerOpenDialogCallback(DialogID.CreateEntity, async params => {
-      aiAbort?.abort();
+      cancelAiAnalyze();
       subItemCreate.value = false;
       let parentItemLocationId = null;
       parent.value = {};
@@ -789,17 +890,22 @@
 
         if (subItemCreate.value && itemId.value) {
           const itemIdRead = typeof itemId.value === "string" ? (itemId.value as string) : itemId.value[0]!;
-          const { data, error } = await api.items.get(itemIdRead);
-          if (error || !data) {
+          let data: EntityOut | undefined;
+          try {
+            const result = await api.items.get(itemIdRead);
+            data = result.data;
+            if (result.error || !data) {
+              toast.error(t("components.entity.create_modal.toast.failed_load_parent"));
+            }
+          } catch {
             toast.error(t("components.entity.create_modal.toast.failed_load_parent"));
-            console.error("Parent item fetch error:", error);
           }
 
           if (data) {
             parent.value = data;
           }
 
-          if (data.parent) {
+          if (data?.parent) {
             const loc = data.parent;
             parentItemLocationId = loc.id;
           }
@@ -842,6 +948,11 @@
       return;
     }
 
+    if (!form.name.trim()) {
+      toast.error(t("components.entity.create_modal.toast.name_required"));
+      return;
+    }
+
     // Items must live somewhere, but a top-level location has no parent, so the
     // parent location selector is optional when creating a location.
     if (!selectedEntityType.value?.isLocation && !form.location?.id) {
@@ -852,7 +963,7 @@
     if (loading.value) {
       toast.error(
         t("components.entity.create_modal.toast.already_creating", {
-          type: t(selectedEntityType.value ? selectedEntityType.value.name : "global.entity"),
+          type: selectedEntityType.value?.name || t("global.entity"),
         })
       );
       return;
@@ -862,99 +973,235 @@
 
     if (shift?.value) close = false;
 
-    // Container + template: batch-create form.count containers from the
-    // template in a single request. count:1 is just a batch of one, so this
-    // also covers "template + quantity 1" -- no separate single-create path
-    // needed for containers once a template is selected.
-    if (selectedEntityType.value?.isContainer && templateData.value) {
-      const { data: created, error } = await api.templates.batchCreate(templateData.value.id, {
-        count: form.count ?? 1,
-        namePrefix: form.name,
-        startNumber: 0, // 0 = backend infers next number from existing "<prefix> NN" names
-        parentId: (form.location?.id || null) as string,
-        entityTypeId: selectedEntityType.value?.id || "",
-        tagIds: form.tags,
-      });
+    const rawContainerCount = Number(form.count);
+    const containerCount = Number.isFinite(rawContainerCount)
+      ? Math.min(100, Math.max(1, Math.floor(rawContainerCount)))
+      : 1;
 
-      if (error) {
+    try {
+      // Container + template: batch-create form.count containers from the
+      // template in a single request. count:1 is just a batch of one, so this
+      // also covers "template + quantity 1" -- no separate single-create path
+      // needed for containers once a template is selected.
+      if (selectedEntityType.value?.isContainer && templateData.value) {
+        const { data: created, error } = await api.templates.batchCreate(templateData.value.id, {
+          count: containerCount,
+          namePrefix: form.name,
+          startNumber: 0, // 0 = backend infers next number from existing "<prefix> NN" names
+          parentId: (form.location?.id || null) as string,
+          entityTypeId: selectedEntityType.value?.id || "",
+          tagIds: form.tags,
+        });
+
+        if (error) {
+          toast.error(t("components.entity.create_modal.batch_failed"));
+          return;
+        }
+
+        toastBatchCreated(created);
+        await uploadPhotosToBatch(created.map(e => e.id));
+
+        form.name = "";
+        form.quantity = 1;
+        form.count = 1;
+        form.description = "";
+        form.manufacturer = "";
+        form.modelNumber = "";
+        form.icon = "";
+        form.color = "";
+        form.photos = [];
+        form.tags = [];
+        selectedTemplate.value = null;
+        templateData.value = null;
+        templateUserSelected.value = false;
+        showTemplateDetails.value = false;
+        aiPrefill.value = false;
+        categoryHints.value = [];
+        focused.value = false;
         loading.value = false;
-        toast.error(t("components.entity.create_modal.batch_failed"));
+
+        if (close && created[0]) {
+          closeDialog(DialogID.CreateEntity);
+          navigateTo(`/location/${created[0].id}`);
+        } else if (!close) {
+          await restoreLastTemplate();
+        }
         return;
       }
 
-      toastBatchCreated(created);
-      await uploadPhotosToBatch(created.map(e => e.id));
+      // Container, no template, count > 1 (e.g. a UPC-scanned tote where the
+      // user just wants N more of the same bin): sequential numbered creates,
+      // mirroring ItemChangeDetails' sequential-PATCH pattern (avoids sqlite
+      // write contention from firing them all concurrently). Numbering
+      // restarts at 01 per prefix since this client-side path has no
+      // server-side inference -- the template batch path above remains the
+      // numbering-aware one.
+      if (selectedEntityType.value?.isContainer && !templateData.value && containerCount > 1) {
+        const prefix = form.name;
+        const created: EntityOut[] = [];
 
-      form.name = "";
-      form.quantity = 1;
-      form.count = 1;
-      form.description = "";
-      form.manufacturer = "";
-      form.modelNumber = "";
-      form.icon = "";
-      form.color = "";
-      form.photos = [];
-      form.tags = [];
-      selectedTemplate.value = null;
-      templateData.value = null;
-      templateUserSelected.value = false;
-      showTemplateDetails.value = false;
-      aiPrefill.value = false;
-      categoryHints.value = [];
-      focused.value = false;
-      loading.value = false;
+        for (let i = 1; i <= containerCount; i++) {
+          const { data: createdOne, error } = await api.items.createLocation({
+            name: `${prefix} ${String(i).padStart(2, "0")}`,
+            description: form.description,
+            quantity: 1,
+            parentId: form.location?.id || null,
+            entityTypeId: selectedEntityType.value?.id || "",
+            tagIds: form.tags,
+            manufacturer: "",
+            modelNumber: "",
+            icon: form.icon,
+          });
 
-      if (close && created[0]) {
-        closeDialog(DialogID.CreateEntity);
-        navigateTo(`/location/${created[0].id}`);
+          if (error) {
+            toast.error(t("components.entity.create_modal.batch_failed"));
+            break;
+          }
+          created.push(createdOne);
+        }
+
+        if (created.length > 0) {
+          toastBatchCreated(created);
+          await uploadPhotosToBatch(created.map(e => e.id));
+        }
+
+        form.name = "";
+        form.quantity = 1;
+        form.count = 1;
+        form.description = "";
+        form.manufacturer = "";
+        form.modelNumber = "";
+        form.icon = "";
+        form.color = "";
+        form.photos = [];
+        form.tags = [];
+        selectedTemplate.value = null;
+        templateData.value = null;
+        templateUserSelected.value = false;
+        showTemplateDetails.value = false;
+        aiPrefill.value = false;
+        categoryHints.value = [];
+        focused.value = false;
+        loading.value = false;
+
+        if (close && created[0]) {
+          closeDialog(DialogID.CreateEntity);
+          navigateTo(`/location/${created[0].id}`);
+        } else if (!close) {
+          await restoreLastTemplate();
+        }
+        return;
       }
-      return;
-    }
 
-    // Container, no template, count > 1 (e.g. a UPC-scanned tote where the
-    // user just wants N more of the same bin): sequential numbered creates,
-    // mirroring ItemChangeDetails' sequential-PATCH pattern (avoids sqlite
-    // write contention from firing them all concurrently). Numbering
-    // restarts at 01 per prefix since this client-side path has no
-    // server-side inference -- the template batch path above remains the
-    // numbering-aware one.
-    if (selectedEntityType.value?.isContainer && !templateData.value && (form.count ?? 1) > 1) {
-      const prefix = form.name;
-      const created: EntityOut[] = [];
+      let error, data;
 
-      // Clamp client-side, mirroring the 1-100 bound the template-based batch
-      // path already gets server-side.
-      const count = Math.min(100, Math.max(1, Math.floor(form.count ?? 1)));
-
-      for (let i = 1; i <= count; i++) {
-        const { data: createdOne, error } = await api.items.createLocation({
-          name: `${prefix} ${String(i).padStart(2, "0")}`,
+      // If the selected entity type is a location, use the location creation endpoint
+      if (selectedEntityType.value?.isLocation) {
+        const result = await api.items.createLocation({
+          name: form.name,
           description: form.description,
-          quantity: 1,
           parentId: form.location?.id || null,
           entityTypeId: selectedEntityType.value?.id || "",
+          quantity: 1,
           tagIds: form.tags,
           manufacturer: "",
           modelNumber: "",
           icon: form.icon,
         });
+        error = result.error;
+        data = result.data;
+      } else if (templateData.value) {
+        // If a template is selected, use the template creation endpoint
+        const templateRequest = {
+          name: form.name,
+          description: form.description,
+          parentId: form.location?.id as string,
+          tagIds: form.tags,
+          quantity: form.quantity,
+          entityTypeId: selectedEntityType.value?.id || "",
+        };
 
-        if (error) {
-          toast.error(t("components.entity.create_modal.batch_failed"));
-          console.error(error);
-          break;
-        }
-        created.push(createdOne);
+        const result = await api.templates.createItem(templateData.value.id, templateRequest);
+        error = result.error;
+        data = result.data;
+      } else {
+        // Normal item creation without template
+        const out: EntityCreate = {
+          parentId: form.parentId || (form.location?.id as string),
+          name: form.name,
+          quantity: form.quantity,
+          description: form.description,
+          manufacturer: form.manufacturer,
+          modelNumber: form.modelNumber,
+          tagIds: form.tags,
+          entityTypeId: selectedEntityType.value?.id || "",
+          icon: form.icon,
+        };
+
+        const result = await api.items.create(out);
+        error = result.error;
+        data = result.data;
       }
 
-      if (created.length > 0) {
-        toastBatchCreated(created);
-        await uploadPhotosToBatch(created.map(e => e.id));
+      if (error) {
+        toast.error(
+          t("components.entity.create_modal.toast.create_failed", {
+            type: selectedEntityType.value?.name || t("global.entity"),
+          })
+        );
+        return;
+      }
+
+      toast.success(
+        t("components.entity.create_modal.toast.create_success", {
+          type: selectedEntityType.value?.name || t("global.entity"),
+        })
+      );
+
+      if (form.photos.length > 0) {
+        toast.info(
+          t("components.entity.create_modal.toast.uploading_photos", {
+            count: form.photos.length,
+          })
+        );
+        let uploadError = false;
+        for (const photo of form.photos) {
+          try {
+            const { error: attachError } = await api.items.attachments.add(
+              data.id,
+              photo.file,
+              photo.photoName,
+              AttachmentTypes.Photo,
+              photo.primary
+            );
+            if (!attachError) continue;
+          } catch {
+            // Report network failures through the same per-photo feedback.
+          }
+          uploadError = true;
+          toast.error(
+            t("components.entity.create_modal.toast.upload_failed", {
+              photoName: photo.photoName,
+            })
+          );
+        }
+        if (uploadError) {
+          toast.warning(
+            t("components.entity.create_modal.toast.some_photos_failed", {
+              count: form.photos.length,
+            })
+          );
+        } else {
+          toast.success(
+            t("components.entity.create_modal.toast.upload_success", {
+              count: form.photos.length,
+            })
+          );
+        }
       }
 
       form.name = "";
       form.quantity = 1;
-      form.count = 1;
       form.description = "";
       form.manufacturer = "";
       form.modelNumber = "";
@@ -971,129 +1218,26 @@
       focused.value = false;
       loading.value = false;
 
-      if (close && created[0]) {
+      if (close) {
         closeDialog(DialogID.CreateEntity);
-        navigateTo(`/location/${created[0].id}`);
-      }
-      return;
-    }
-
-    let error, data;
-
-    // If the selected entity type is a location, use the location creation endpoint
-    if (selectedEntityType.value?.isLocation) {
-      const result = await api.items.createLocation({
-        name: form.name,
-        description: form.description,
-        parentId: form.location?.id || null,
-        entityTypeId: selectedEntityType.value?.id || "",
-        quantity: 1,
-        tagIds: form.tags,
-        manufacturer: "",
-        modelNumber: "",
-        icon: form.icon,
-      });
-      error = result.error;
-      data = result.data;
-    } else if (templateData.value) {
-      // If a template is selected, use the template creation endpoint
-      const templateRequest = {
-        name: form.name,
-        description: form.description,
-        parentId: form.location.id as string,
-        tagIds: form.tags,
-        quantity: form.quantity,
-        entityTypeId: selectedEntityType.value?.id || "",
-      };
-
-      const result = await api.templates.createItem(templateData.value.id, templateRequest);
-      error = result.error;
-      data = result.data;
-    } else {
-      // Normal item creation without template
-      const out: EntityCreate = {
-        parentId: form.parentId || (form.location.id as string),
-        name: form.name,
-        quantity: form.quantity,
-        description: form.description,
-        manufacturer: form.manufacturer,
-        modelNumber: form.modelNumber,
-        tagIds: form.tags,
-        entityTypeId: selectedEntityType.value?.id || "",
-        icon: form.icon,
-      };
-
-      const result = await api.items.create(out);
-      error = result.error;
-      data = result.data;
-    }
-
-    if (error) {
-      loading.value = false;
-      toast.error(
-        t("components.entity.create_modal.toast.create_failed", {
-          type: t(selectedEntityType.value ? selectedEntityType.value.name : "global.entity"),
-        })
-      );
-      return;
-    }
-
-    toast.success(
-      t("components.entity.create_modal.toast.create_success", {
-        type: t(selectedEntityType.value ? selectedEntityType.value.name : "global.entity"),
-      })
-    );
-
-    if (form.photos.length > 0) {
-      toast.info(t("components.entity.create_modal.toast.uploading_photos", { count: form.photos.length }));
-      let uploadError = false;
-      for (const photo of form.photos) {
-        const { error: attachError } = await api.items.attachments.add(
-          data.id,
-          photo.file,
-          photo.photoName,
-          AttachmentTypes.Photo,
-          photo.primary
-        );
-
-        if (attachError) {
-          uploadError = true;
-          toast.error(t("components.entity.create_modal.toast.upload_failed", { photoName: photo.photoName }));
-          console.error(attachError);
+        if (selectedEntityType.value?.isLocation) {
+          navigateTo(`/location/${data.id}`);
+        } else {
+          navigateTo(`/item/${data.id}`);
         }
+      } else if (!selectedEntityType.value?.isLocation) {
+        await restoreLastTemplate();
       }
-      if (uploadError) {
-        toast.warning(t("components.entity.create_modal.toast.some_photos_failed", { count: form.photos.length }));
-      } else {
-        toast.success(t("components.entity.create_modal.toast.upload_success", { count: form.photos.length }));
-      }
-    }
-
-    form.name = "";
-    form.quantity = 1;
-    form.description = "";
-    form.manufacturer = "";
-    form.modelNumber = "";
-    form.icon = "";
-    form.color = "";
-    form.photos = [];
-    form.tags = [];
-    selectedTemplate.value = null;
-    templateData.value = null;
-    templateUserSelected.value = false;
-    showTemplateDetails.value = false;
-    aiPrefill.value = false;
-    categoryHints.value = [];
-    focused.value = false;
-    loading.value = false;
-
-    if (close) {
-      closeDialog(DialogID.CreateEntity);
-      if (selectedEntityType.value?.isLocation) {
-        navigateTo(`/location/${data.id}`);
-      } else {
-        navigateTo(`/item/${data.id}`);
-      }
+    } catch {
+      toast.error(
+        selectedEntityType.value?.isContainer
+          ? t("components.entity.create_modal.batch_failed")
+          : t("components.entity.create_modal.toast.create_failed", {
+              type: selectedEntityType.value?.name || t("global.entity"),
+            })
+      );
+    } finally {
+      loading.value = false;
     }
   }
 
@@ -1106,23 +1250,28 @@
    */
   function toastBatchCreated(created: EntityOut[]) {
     const queue = useLabelPrintQueue();
-    toast.success(t("components.entity.create_modal.batch_created", { count: created.length }), {
-      action: {
-        label: t("components.entity.create_modal.print_labels"),
-        onClick: () => {
-          queue.set(
-            created.map(e => ({
-              id: e.id,
-              kind: "container" as const,
-              name: e.name,
-              parentPath: form.location?.name ?? "",
-              url: `${window.location.origin}/location/${e.id}`,
-            }))
-          );
-          navigateTo("/reports/label-generator");
+    toast.success(
+      t("components.entity.create_modal.batch_created", {
+        count: created.length,
+      }),
+      {
+        action: {
+          label: t("components.entity.create_modal.print_labels"),
+          onClick: () => {
+            queue.set(
+              created.map(e => ({
+                id: e.id,
+                kind: "container" as const,
+                name: e.name,
+                parentPath: form.location?.name ?? "",
+                url: `${window.location.origin}/location/${e.id}`,
+              }))
+            );
+            navigateTo("/reports/label-generator");
+          },
         },
-      },
-    });
+      }
+    );
   }
 
   /**
@@ -1138,31 +1287,48 @@
     if (form.photos.length === 0 || entityIds.length === 0) return;
 
     const totalUploads = form.photos.length * entityIds.length;
-    toast.info(t("components.entity.create_modal.toast.uploading_photos", { count: totalUploads }));
+    toast.info(
+      t("components.entity.create_modal.toast.uploading_photos", {
+        count: totalUploads,
+      })
+    );
 
     let uploadError = false;
     for (const entityId of entityIds) {
       for (const photo of form.photos) {
-        const { error: attachError } = await api.items.attachments.add(
-          entityId,
-          photo.file,
-          photo.photoName,
-          AttachmentTypes.Photo,
-          photo.primary
-        );
-
-        if (attachError) {
-          uploadError = true;
-          toast.error(t("components.entity.create_modal.toast.upload_failed", { photoName: photo.photoName }));
-          console.error(attachError);
+        try {
+          const { error: attachError } = await api.items.attachments.add(
+            entityId,
+            photo.file,
+            photo.photoName,
+            AttachmentTypes.Photo,
+            photo.primary
+          );
+          if (!attachError) continue;
+        } catch {
+          // Report network failures through the same aggregate feedback.
         }
+        uploadError = true;
+        toast.error(
+          t("components.entity.create_modal.toast.upload_failed", {
+            photoName: photo.photoName,
+          })
+        );
       }
     }
 
     if (uploadError) {
-      toast.warning(t("components.entity.create_modal.toast.some_photos_failed", { count: totalUploads }));
+      toast.warning(
+        t("components.entity.create_modal.toast.some_photos_failed", {
+          count: totalUploads,
+        })
+      );
     } else {
-      toast.success(t("components.entity.create_modal.toast.upload_success", { count: totalUploads }));
+      toast.success(
+        t("components.entity.create_modal.toast.upload_success", {
+          count: totalUploads,
+        })
+      );
     }
   }
 

@@ -136,10 +136,10 @@ func Test_parseHeaders(t *testing.T) {
 		},
 		{
 			name:       "field headers only",
-			rawHeaders: []string{"HB.location", "HB.name", "HB.field.1", headerHBField2, headerHBField3},
+			rawHeaders: []string{"HB.location", HeaderHBName, "HB.field.1", headerHBField2, headerHBField3},
 			wantHbHeaders: map[string]int{
 				"HB.location":  0,
-				"HB.name":      1,
+				HeaderHBName:   1,
 				"HB.field.1":   2,
 				headerHBField2: 3,
 				headerHBField3: 4,
@@ -149,9 +149,9 @@ func Test_parseHeaders(t *testing.T) {
 		},
 		{
 			name:       "mixed headers",
-			rawHeaders: []string{"Header 1", "HB.name", "Header 2", headerHBField2, "Header 3", headerHBField3, "HB.location"},
+			rawHeaders: []string{"Header 1", HeaderHBName, "Header 2", headerHBField2, "Header 3", headerHBField3, "HB.location"},
 			wantHbHeaders: map[string]int{
-				"HB.name":      1,
+				HeaderHBName:   1,
 				headerHBField2: 3,
 				headerHBField3: 5,
 				"HB.location":  6,

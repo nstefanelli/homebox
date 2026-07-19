@@ -54,13 +54,16 @@ func (ctrl *V1Controller) HandleEntityAttachmentCreate() errchain.HandlerFunc {
 		defer span.End()
 
 		_, parseSpan := startEntityCtrlSpan(spanCtx, "controller.V1.HandleEntityAttachmentCreate.parseForm")
-		err := r.ParseMultipartForm(ctrl.maxUploadSize << 20)
+		r.Body = http.MaxBytesReader(w, r.Body, multipartRequestLimit(ctrl.maxUploadSize))
+		// #nosec G120 -- the complete body is bounded by MaxBytesReader
+		// immediately above; maxMemory controls only RAM versus temp-file use.
+		err := r.ParseMultipartForm(megabytesToBytes(ctrl.maxUploadSize))
 		if err != nil {
 			recordCtrlSpanError(parseSpan, err)
 			parseSpan.End()
 			recordCtrlSpanError(span, err)
 			log.Err(err).Msg("failed to parse multipart form")
-			return validate.NewRequestError(errors.New("failed to parse multipart form"), http.StatusBadRequest)
+			return multipartParseRequestError(err)
 		}
 
 		errs := validate.NewFieldErrors()
@@ -76,7 +79,7 @@ func (ctrl *V1Controller) HandleEntityAttachmentCreate() errchain.HandlerFunc {
 				parseSpan.End()
 				recordCtrlSpanError(span, err)
 				log.Err(err).Msg("failed to get file from form")
-				return validate.NewRequestError(err, http.StatusInternalServerError)
+				return multipartFileRequestError(err, "file")
 			}
 		}
 
@@ -217,15 +220,19 @@ func (ctrl *V1Controller) handleEntityAttachmentsHandler(w http.ResponseWriter, 
 		getCtx, getSpan := startEntityCtrlSpan(spanCtx, "controller.V1.handleEntityAttachmentsHandler.get")
 		defer getSpan.End()
 
-		doc, err := ctrl.svc.Entities.AttachmentPath(getCtx, ctx.GID, attachmentID)
+		doc, err := ctrl.svc.Entities.AttachmentPath(getCtx, ctx.GID, ID, attachmentID)
 		if err != nil {
 			recordCtrlSpanError(getSpan, err)
 			recordCtrlSpanError(span, err)
 			log.Err(err).Msg("failed to get attachment path")
 			return validate.NewRequestError(err, http.StatusInternalServerError)
 		}
+		tracePath := doc.Path
+		if doc.MimeType == repo.MimeTypeLinkURL {
+			tracePath = redactExternalURLForTrace(doc.Path)
+		}
 		getSpan.SetAttributes(
-			attribute.String("attachment.path", doc.Path),
+			attribute.String("attachment.path", tracePath),
 			attribute.String("attachment.mime_type", doc.MimeType),
 			attribute.String("attachment.title", doc.Title),
 		)
@@ -239,6 +246,8 @@ func (ctrl *V1Controller) handleEntityAttachmentsHandler(w http.ResponseWriter, 
 				return validate.NewRequestError(err, http.StatusUnprocessableEntity)
 			}
 
+			// #nosec G710 -- external-link attachments intentionally redirect;
+			// parseExternalHTTPURL has just enforced an absolute http(s) URL.
 			http.Redirect(w, r, parsed.String(), http.StatusFound)
 			return nil
 		}
@@ -298,7 +307,7 @@ func (ctrl *V1Controller) handleEntityAttachmentsHandler(w http.ResponseWriter, 
 		return nil
 
 	case http.MethodDelete:
-		err = ctrl.svc.Entities.AttachmentDelete(spanCtx, ctx.GID, attachmentID)
+		err = ctrl.svc.Entities.AttachmentDelete(spanCtx, ctx.GID, ID, attachmentID)
 		if err != nil {
 			recordCtrlSpanError(span, err)
 			log.Err(err).Msg("failed to delete attachment")

@@ -90,3 +90,12 @@ export function formatValueAsCsvField(value: unknown): string {
   // Wrap in double quotes
   return `"${str}"`;
 }
+
+/**
+ * Count Unicode code points, matching go-playground/validator's string
+ * min/max behavior. JavaScript's String.length counts UTF-16 code units and
+ * would count characters outside the BMP twice.
+ */
+export function unicodeLength(str: string): number {
+  return Array.from(str).length;
+}

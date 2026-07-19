@@ -490,6 +490,28 @@ func (a *app) mwAuthRateLimit(next errchain.Handler) errchain.Handler {
 	})
 }
 
+// mwPasswordResetRateLimit counts every forgot-password request, including a
+// successful 204. The endpoint deliberately returns the same successful
+// response for existing and nonexistent accounts, so treating err == nil as
+// an authentication success would clear the shared auth limiter on every
+// request and allow unbounded reset-email work.
+func (a *app) mwPasswordResetRateLimit(next errchain.Handler) errchain.Handler {
+	if a.passwordResetLimiter == nil {
+		return next
+	}
+	return a.passwordResetLimiter.middleware(next)
+}
+
+// mwRegistrationRateLimit counts successful registrations as well as failed
+// attempts so an attacker cannot use valid, unique addresses to bypass the
+// authentication limiter's success reset.
+func (a *app) mwRegistrationRateLimit(next errchain.Handler) errchain.Handler {
+	if a.registrationLimiter == nil {
+		return next
+	}
+	return a.registrationLimiter.middleware(next)
+}
+
 // shouldAllow checks if the client should be allowed to authenticate based on the configured rate limit.
 func (l *authRateLimiter) shouldAllow(key string, now time.Time) (time.Duration, bool) {
 	l.mu.Lock()
@@ -555,20 +577,38 @@ func (l *authRateLimiter) record(key string, now time.Time, success bool) {
 
 // extractClientIP extracts the client IP from the request.
 // It only uses proxy headers (X-Real-IP, X-Forwarded-For) if trustProxy is enabled.
+func canonicalClientIP(value string) string {
+	value = strings.TrimSpace(value)
+	if ip := net.ParseIP(value); ip != nil {
+		return ip.String()
+	}
+	if host, _, err := net.SplitHostPort(value); err == nil {
+		if ip := net.ParseIP(host); ip != nil {
+			return ip.String()
+		}
+	}
+	return ""
+}
+
+func firstProxyHeaderValue(value string) string {
+	if first, _, found := strings.Cut(value, ","); found {
+		return first
+	}
+	return value
+}
+
 func extractClientIP(r *http.Request, trustProxy bool) string {
 	if trustProxy {
-		if ip := r.Header.Get("X-Real-IP"); ip != "" {
+		if ip := canonicalClientIP(firstProxyHeaderValue(r.Header.Get("X-Real-IP"))); ip != "" {
 			return ip
 		}
 
-		if ip := r.Header.Get("X-Forwarded-For"); ip != "" {
-			parts := strings.Split(ip, ",")
-			return strings.TrimSpace(parts[0])
+		if ip := canonicalClientIP(firstProxyHeaderValue(r.Header.Get("X-Forwarded-For"))); ip != "" {
+			return ip
 		}
 	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err == nil {
-		return host
+	if ip := canonicalClientIP(r.RemoteAddr); ip != "" {
+		return ip
 	}
 
 	return r.RemoteAddr

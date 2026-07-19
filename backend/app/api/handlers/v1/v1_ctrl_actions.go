@@ -3,6 +3,7 @@ package v1
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -104,6 +105,20 @@ type WipeInventoryOptions struct {
 	WipeMaintenance bool `json:"wipeMaintenance"`
 }
 
+func decodeWipeInventoryOptions(r *http.Request) (WipeInventoryOptions, error) {
+	var options WipeInventoryOptions
+	if err := server.Decode(r, &options); err != nil {
+		// The body is optional for compatibility; an absent body selects the
+		// conservative defaults. A present but malformed body must never be
+		// treated as permission to continue with a destructive wipe.
+		if errors.Is(err, io.EOF) {
+			return WipeInventoryOptions{}, nil
+		}
+		return WipeInventoryOptions{}, validate.NewRequestError(err, http.StatusBadRequest)
+	}
+	return options, nil
+}
+
 // HandleWipeInventory godoc
 //
 //	@Summary		Wipe Inventory
@@ -130,15 +145,9 @@ func (ctrl *V1Controller) HandleWipeInventory() errchain.HandlerFunc {
 			return validate.NewRequestError(errors.New("only group owners can wipe inventory"), http.StatusForbidden)
 		}
 
-		// Parse options from request body
-		var options WipeInventoryOptions
-		if err := server.Decode(r, &options); err != nil {
-			// If no body provided, use default (false for all)
-			options = WipeInventoryOptions{
-				WipeTags:        false,
-				WipeLocations:   false,
-				WipeMaintenance: false,
-			}
+		options, err := decodeWipeInventoryOptions(r)
+		if err != nil {
+			return err
 		}
 
 		totalCompleted, err := ctrl.repo.Entities.WipeInventory(ctx, ctx.GID, options.WipeTags, options.WipeLocations, options.WipeMaintenance)

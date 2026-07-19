@@ -54,10 +54,14 @@
                     if (btn.dialogId === DialogID.CreateEntity) {
                       if (btn.id == 0)
                         // create item
-                        openDialog(btn.dialogId, { params: { baseType: 'item' } });
+                        openDialog(btn.dialogId, {
+                          params: { baseType: 'item' },
+                        });
                       else if (btn.id == 1)
                         // create location
-                        openDialog(btn.dialogId, { params: { baseType: 'location' } });
+                        openDialog(btn.dialogId, {
+                          params: { baseType: 'location' },
+                        });
                     } else {
                       openDialog(btn.dialogId as NoParamDialogIDs);
                     }
@@ -117,7 +121,10 @@
                     </SidebarMenuItem>
                     <CollapsibleContent>
                       <SidebarMenuSub>
-                        <SidebarMenuSubItem v-for="c in n.collapsible" :key="c.id">
+                        <SidebarMenuSubItem
+                          v-for="c in n.collapsible.filter(child => !child.ownerOnly || integrationsStore.isOwner)"
+                          :key="c.id"
+                        >
                           <SidebarMenuLink
                             :href="c.to"
                             :class="{
@@ -241,6 +248,7 @@
   import { useTagStore } from "~/stores/tags";
   import { useLocationStore } from "~~/stores/locations";
   import { useEntityTypeStore } from "~~/stores/entityTypes";
+  import { useIntegrationsStore } from "~~/stores/integrations";
 
   import MdiHome from "~icons/mdi/home";
   import MdiFileTree from "~icons/mdi/file-tree";
@@ -309,6 +317,18 @@
   const { openDialog } = useDialog();
 
   const preferences = useViewPreferences();
+  const integrationsStore = useIntegrationsStore();
+
+  watch(
+    () => preferences.value.collectionId,
+    collectionId => {
+      if (!collectionId) return;
+      void integrationsStore.ensureFetched().catch(() => {
+        // Owner-only navigation stays hidden until permissions can be verified.
+      });
+    },
+    { immediate: true }
+  );
 
   // get sidebar state from cookies
   const sidebarState = useCookie("sidebar:state", {
@@ -344,8 +364,7 @@
         .then(() => {
           openDialog(DialogID.Scanner);
         })
-        .catch(err => {
-          console.error(err);
+        .catch(() => {
           toast.error(t("scanner.permission_denied"));
         });
     } else {
@@ -397,6 +416,7 @@
       active: ComputedRef<boolean>;
       id: number;
       name: ComputedRef<string>;
+      ownerOnly?: boolean;
       to: string;
     }[];
   }[] = [
@@ -466,6 +486,7 @@
           id: 62,
           active: computed(() => route.path === "/collection/invites"),
           name: computed(() => t("collection.tabs.invites")),
+          ownerOnly: true,
           to: "/collection/invites",
         },
         {
@@ -478,6 +499,7 @@
           id: 64,
           active: computed(() => route.path === "/collection/settings"),
           name: computed(() => t("collection.tabs.settings")),
+          ownerOnly: true,
           to: "/collection/settings",
         },
         {
@@ -518,7 +540,9 @@
   locationStore.ensureLocationsFetched();
 
   const entityTypeStore = useEntityTypeStore();
-  entityTypeStore.ensureFetched();
+  void entityTypeStore.ensureFetched().catch(() => {
+    // Entity-type-dependent controls stay unavailable until a later refresh.
+  });
 
   onMounted(() => {
     locationStore.refreshParents();

@@ -16,8 +16,9 @@ import (
 )
 
 type EntityTemplatesRepository struct {
-	db  *ent.Client
-	bus *eventbus.EventBus
+	db          *ent.Client
+	bus         *eventbus.EventBus
+	attachments *AttachmentRepo
 }
 
 type (
@@ -171,7 +172,7 @@ func mapEntityTemplateSummary(template *ent.EntityTemplate) EntityTemplateSummar
 	}
 }
 
-func (r *EntityTemplatesRepository) mapTemplateOut(ctx context.Context, template *ent.EntityTemplate) EntityTemplateOut {
+func (r *EntityTemplatesRepository) mapTemplateOut(ctx context.Context, gid uuid.UUID, template *ent.EntityTemplate) EntityTemplateOut {
 	fields := make([]TemplateField, 0)
 	if template.Edges.Fields != nil {
 		fields = mapTemplateFieldSlice(template.Edges.Fields)
@@ -190,7 +191,10 @@ func (r *EntityTemplatesRepository) mapTemplateOut(ctx context.Context, template
 	tags := make([]TemplateTagSummary, 0)
 	if len(template.DefaultTagIds) > 0 {
 		tagEntities, err := r.db.Tag.Query().
-			Where(tag.IDIn(template.DefaultTagIds...)).
+			Where(
+				tag.IDIn(template.DefaultTagIds...),
+				tag.HasGroupWith(group.ID(gid)),
+			).
 			All(ctx)
 		if err == nil {
 			tags = lo.Map(tagEntities, func(l *ent.Tag, _ int) TemplateTagSummary {
@@ -267,16 +271,34 @@ func (r *EntityTemplatesRepository) GetOne(ctx context.Context, gid uuid.UUID, i
 		return EntityTemplateOut{}, err
 	}
 
-	return r.mapTemplateOut(ctx, template), nil
+	return r.mapTemplateOut(ctx, gid, template), nil
 }
 
 // Create creates a new template
 func (r *EntityTemplatesRepository) Create(ctx context.Context, gid uuid.UUID, data EntityTemplateCreate) (EntityTemplateOut, error) {
-	if err := assertEntityInGroup(ctx, r.db.Entity, gid, data.DefaultLocationID); err != nil {
+	tx, err := r.db.Tx(ctx)
+	if err != nil {
 		return EntityTemplateOut{}, err
 	}
+	committed := false
+	defer func() {
+		if !committed {
+			if rollbackErr := tx.Rollback(); rollbackErr != nil {
+				log.Warn().Err(rollbackErr).Msg("failed to rollback transaction during template create")
+			}
+		}
+	}()
 
-	q := r.db.EntityTemplate.Create().
+	if err := assertEntityInGroup(ctx, tx.Entity, gid, data.DefaultLocationID); err != nil {
+		return EntityTemplateOut{}, err
+	}
+	if data.DefaultTagIDs != nil {
+		if err := assertTagsInGroup(ctx, tx.Tag, gid, *data.DefaultTagIDs); err != nil {
+			return EntityTemplateOut{}, err
+		}
+	}
+
+	q := tx.EntityTemplate.Create().
 		SetName(data.Name).
 		SetDescription(data.Description).
 		SetNotes(data.Notes).
@@ -307,12 +329,17 @@ func (r *EntityTemplatesRepository) Create(ctx context.Context, gid uuid.UUID, d
 
 	// Create template fields
 	for _, field := range data.Fields {
-		_, err = r.db.TemplateField.Create().
+		fieldBuilder := tx.TemplateField.Create().
 			SetEntityTemplateID(template.ID).
 			SetType(templatefield.Type(field.Type)).
 			SetName(field.Name).
 			SetTextValue(field.TextValue).
-			Save(ctx)
+			SetNumberValue(field.NumberValue).
+			SetBooleanValue(field.BooleanValue)
+		if !field.TimeValue.IsZero() {
+			fieldBuilder.SetTimeValue(field.TimeValue)
+		}
+		_, err = fieldBuilder.Save(ctx)
 
 		if err != nil {
 			log.Err(err).Msg("failed to create template field")
@@ -320,18 +347,41 @@ func (r *EntityTemplatesRepository) Create(ctx context.Context, gid uuid.UUID, d
 		}
 	}
 
+	if err := tx.Commit(); err != nil {
+		return EntityTemplateOut{}, err
+	}
+	committed = true
+
 	r.publishMutationEvent(gid)
 	return r.GetOne(ctx, gid, template.ID)
 }
 
 // Update updates an existing template
 func (r *EntityTemplatesRepository) Update(ctx context.Context, gid uuid.UUID, data EntityTemplateUpdate) (EntityTemplateOut, error) {
-	if err := assertEntityInGroup(ctx, r.db.Entity, gid, data.DefaultLocationID); err != nil {
+	tx, err := r.db.Tx(ctx)
+	if err != nil {
 		return EntityTemplateOut{}, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			if rollbackErr := tx.Rollback(); rollbackErr != nil {
+				log.Warn().Err(rollbackErr).Msg("failed to rollback transaction during template update")
+			}
+		}
+	}()
+
+	if err := assertEntityInGroup(ctx, tx.Entity, gid, data.DefaultLocationID); err != nil {
+		return EntityTemplateOut{}, err
+	}
+	if data.DefaultTagIDs != nil {
+		if err := assertTagsInGroup(ctx, tx.Tag, gid, *data.DefaultTagIDs); err != nil {
+			return EntityTemplateOut{}, err
+		}
 	}
 
 	// Verify template belongs to group
-	template, err := r.db.EntityTemplate.Query().
+	template, err := tx.EntityTemplate.Query().
 		Where(
 			entitytemplate.ID(data.ID),
 			entitytemplate.HasGroupWith(group.ID(gid)),
@@ -379,7 +429,7 @@ func (r *EntityTemplatesRepository) Update(ctx context.Context, gid uuid.UUID, d
 	}
 
 	// Get existing fields
-	existingFields, err := r.db.TemplateField.Query().
+	existingFields, err := tx.TemplateField.Query().
 		Where(templatefield.HasEntityTemplateWith(entitytemplate.ID(data.ID))).
 		All(ctx)
 
@@ -394,12 +444,17 @@ func (r *EntityTemplatesRepository) Update(ctx context.Context, gid uuid.UUID, d
 	for _, field := range data.Fields {
 		if field.ID == nil || *field.ID == uuid.Nil {
 			// Create new field
-			_, err = r.db.TemplateField.Create().
+			fieldBuilder := tx.TemplateField.Create().
 				SetEntityTemplateID(data.ID).
 				SetType(templatefield.Type(field.Type)).
 				SetName(field.Name).
 				SetTextValue(field.TextValue).
-				Save(ctx)
+				SetNumberValue(field.NumberValue).
+				SetBooleanValue(field.BooleanValue)
+			if !field.TimeValue.IsZero() {
+				fieldBuilder.SetTimeValue(field.TimeValue)
+			}
+			_, err = fieldBuilder.Save(ctx)
 
 			if err != nil {
 				log.Err(err).Msg("failed to create template field")
@@ -408,7 +463,8 @@ func (r *EntityTemplatesRepository) Update(ctx context.Context, gid uuid.UUID, d
 		} else {
 			// Update existing field
 			updatedFieldIDs[*field.ID] = true
-			_, err = r.db.TemplateField.Update().
+			var updated int
+			fieldUpdate := tx.TemplateField.Update().
 				Where(
 					templatefield.ID(*field.ID),
 					templatefield.HasEntityTemplateWith(entitytemplate.ID(data.ID)),
@@ -416,11 +472,19 @@ func (r *EntityTemplatesRepository) Update(ctx context.Context, gid uuid.UUID, d
 				SetType(templatefield.Type(field.Type)).
 				SetName(field.Name).
 				SetTextValue(field.TextValue).
-				Save(ctx)
+				SetNumberValue(field.NumberValue).
+				SetBooleanValue(field.BooleanValue)
+			if !field.TimeValue.IsZero() {
+				fieldUpdate.SetTimeValue(field.TimeValue)
+			}
+			updated, err = fieldUpdate.Save(ctx)
 
 			if err != nil {
 				log.Err(err).Msg("failed to update template field")
 				return EntityTemplateOut{}, err
+			}
+			if updated != 1 {
+				return EntityTemplateOut{}, &ent.NotFoundError{}
 			}
 		}
 	}
@@ -428,78 +492,163 @@ func (r *EntityTemplatesRepository) Update(ctx context.Context, gid uuid.UUID, d
 	// Delete fields that are no longer present
 	for _, field := range existingFields {
 		if !updatedFieldIDs[field.ID] {
-			err = r.db.TemplateField.DeleteOne(field).Exec(ctx)
+			err = tx.TemplateField.DeleteOne(field).Exec(ctx)
 			if err != nil {
 				log.Err(err).Msg("failed to delete template field")
+				return EntityTemplateOut{}, err
 			}
 		}
 	}
+
+	if err := tx.Commit(); err != nil {
+		return EntityTemplateOut{}, err
+	}
+	committed = true
 
 	r.publishMutationEvent(gid)
 	return r.GetOne(ctx, gid, template.ID)
 }
 
-// SetPhoto records the storage path of the template's photo.
+func (r *EntityTemplatesRepository) cleanupPhotoBlob(
+	ctx context.Context,
+	path string,
+	mimeType string,
+) {
+	if r.attachments == nil || path == "" {
+		return
+	}
+	r.attachments.cleanupUnreferencedBlobs(ctx, []attachmentBlobCandidate{{
+		Path:     path,
+		MimeType: mimeType,
+	}})
+}
+
+// SetPhoto records a new template photo reference transactionally. The newly
+// uploaded path is cleaned on any database failure, while a replaced path is
+// considered for deletion only after the new reference commits. Global
+// attachment/template checks preserve content-addressed blobs that are shared.
 func (r *EntityTemplatesRepository) SetPhoto(ctx context.Context, gid uuid.UUID, id uuid.UUID, path string, mimeType string) error {
-	n, err := r.db.EntityTemplate.Update().
-		Where(
-			entitytemplate.ID(id),
-			entitytemplate.HasGroupWith(group.ID(gid)),
-		).
-		SetPhotoPath(path).
-		SetPhotoMimeType(mimeType).
-		Save(ctx)
+	tx, err := r.db.Tx(ctx)
 	if err != nil {
+		r.cleanupPhotoBlob(ctx, path, mimeType)
 		return err
 	}
-	if n == 0 {
-		return &ent.NotFoundError{}
-	}
-	r.publishMutationEvent(gid)
-	return nil
-}
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		_ = tx.Rollback()
+		// Upload precedes this repository call. If the row update loses a
+		// delete race or fails, remove the unreferenced upload after rollback.
+		r.cleanupPhotoBlob(ctx, path, mimeType)
+	}()
 
-// ClearPhoto removes the photo reference from the template. The blob is left in
-// storage: paths are content-addressed and may be shared with entity attachments.
-func (r *EntityTemplatesRepository) ClearPhoto(ctx context.Context, gid uuid.UUID, id uuid.UUID) error {
-	n, err := r.db.EntityTemplate.Update().
-		Where(
-			entitytemplate.ID(id),
-			entitytemplate.HasGroupWith(group.ID(gid)),
-		).
-		ClearPhotoPath().
-		ClearPhotoMimeType().
-		Save(ctx)
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return &ent.NotFoundError{}
-	}
-	r.publishMutationEvent(gid)
-	return nil
-}
-
-// Delete deletes a template
-func (r *EntityTemplatesRepository) Delete(ctx context.Context, gid uuid.UUID, id uuid.UUID) error {
-	// Verify template belongs to group
-	_, err := r.db.EntityTemplate.Query().
+	template, err := tx.EntityTemplate.Query().
 		Where(
 			entitytemplate.ID(id),
 			entitytemplate.HasGroupWith(group.ID(gid)),
 		).
 		Only(ctx)
-
 	if err != nil {
 		return err
 	}
+	oldPath, oldMimeType := template.PhotoPath, template.PhotoMimeType
 
-	// Delete template (fields will be cascade deleted)
-	err = r.db.EntityTemplate.DeleteOneID(id).Exec(ctx)
+	if _, err := template.Update().
+		SetPhotoPath(path).
+		SetPhotoMimeType(mimeType).
+		Save(ctx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+
+	if oldPath != path {
+		r.cleanupPhotoBlob(ctx, oldPath, oldMimeType)
+	}
+	r.publishMutationEvent(gid)
+	return nil
+}
+
+// ClearPhoto commits removal of the database reference before attempting
+// best-effort blob deletion. A rollback therefore always leaves the referenced
+// blob intact.
+func (r *EntityTemplatesRepository) ClearPhoto(ctx context.Context, gid uuid.UUID, id uuid.UUID) error {
+	tx, err := r.db.Tx(ctx)
 	if err != nil {
 		return err
 	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
 
+	template, err := tx.EntityTemplate.Query().
+		Where(
+			entitytemplate.ID(id),
+			entitytemplate.HasGroupWith(group.ID(gid)),
+		).
+		Only(ctx)
+	if err != nil {
+		return err
+	}
+	oldPath, oldMimeType := template.PhotoPath, template.PhotoMimeType
+
+	if _, err := template.Update().
+		ClearPhotoPath().
+		ClearPhotoMimeType().
+		Save(ctx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+
+	r.cleanupPhotoBlob(ctx, oldPath, oldMimeType)
+	r.publishMutationEvent(gid)
+	return nil
+}
+
+// Delete removes a template and its fields in one transaction, then globally
+// reference-checks its former photo path before deleting the blob.
+func (r *EntityTemplatesRepository) Delete(ctx context.Context, gid uuid.UUID, id uuid.UUID) error {
+	tx, err := r.db.Tx(ctx)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	template, err := tx.EntityTemplate.Query().
+		Where(
+			entitytemplate.ID(id),
+			entitytemplate.HasGroupWith(group.ID(gid)),
+		).
+		Only(ctx)
+	if err != nil {
+		return err
+	}
+	oldPath, oldMimeType := template.PhotoPath, template.PhotoMimeType
+
+	if err := tx.EntityTemplate.DeleteOneID(id).Exec(ctx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+
+	r.cleanupPhotoBlob(ctx, oldPath, oldMimeType)
 	r.publishMutationEvent(gid)
 	return nil
 }

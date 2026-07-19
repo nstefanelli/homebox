@@ -30,6 +30,35 @@ func newExternalLinkEntity(t *testing.T) repo.EntityOut {
 	return entity
 }
 
+func TestRedactExternalURLForTrace(t *testing.T) {
+	assert.Equal(
+		t,
+		"https://example.com/doc/42",
+		redactExternalURLForTrace("https://user:secret@example.com/doc/42?token=top-secret#fragment"),
+	)
+	assert.Empty(t, redactExternalURLForTrace("not-a-url"))
+}
+
+func TestCanonicalExternalHTTPURL(t *testing.T) {
+	got, err := canonicalExternalHTTPURL(" HTTPS://Example.com/doc?id=42#page ")
+	require.NoError(t, err)
+	assert.Equal(t, "https://Example.com/doc?id=42#page", got)
+
+	for _, raw := range []string{
+		"javascript:alert(1)",
+		"//example.com/path",
+		"https://user:secret@example.com/path",
+		"https:///missing-host",
+		"http://:8080/path",
+		"not a url",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			_, err := canonicalExternalHTTPURL(raw)
+			require.ErrorIs(t, err, ErrInvalidExternalAttachmentURL)
+		})
+	}
+}
+
 func TestEntityService_AttachmentAddExternalLink_DefaultType(t *testing.T) {
 	svc := &EntityService{repo: tRepos}
 	entity := newExternalLinkEntity(t)
@@ -48,6 +77,26 @@ func TestEntityService_AttachmentAddExternalLink_DefaultType(t *testing.T) {
 		}
 	}
 	assert.True(t, found)
+}
+
+func TestEntityService_AttachmentAddExternalLinkRejectsUnsafeURL(t *testing.T) {
+	svc := &EntityService{repo: tRepos}
+	entity := newExternalLinkEntity(t)
+
+	before := len(entity.Attachments)
+	_, err := svc.AttachmentAddExternalLink(
+		tCtx,
+		entity.ID,
+		"link",
+		"javascript:alert(document.domain)",
+		"Unsafe",
+		attachment.TypeAttachment,
+	)
+	require.ErrorIs(t, err, ErrInvalidExternalAttachmentURL)
+
+	got, err := tRepos.Entities.GetOneByGroup(tCtx, tCtx.GID, entity.ID)
+	require.NoError(t, err)
+	assert.Len(t, got.Attachments, before)
 }
 
 func TestEntityService_AttachmentAddExternalLink_ManualType(t *testing.T) {
@@ -133,7 +182,7 @@ func TestEntityService_AttachmentDelete_ExternalLink(t *testing.T) {
 	}
 	require.NotEqual(t, uuid.Nil, createdID)
 
-	err = svc.AttachmentDelete(tCtx, tCtx.GID, createdID)
+	err = svc.AttachmentDelete(tCtx, tCtx.GID, entity.ID, createdID)
 	require.NoError(t, err)
 
 	_, err = tRepos.Attachments.Get(context.Background(), tCtx.GID, createdID)

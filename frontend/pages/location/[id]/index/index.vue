@@ -54,7 +54,9 @@
   const preferences = useViewPreferences();
 
   const integrationsStore = useIntegrationsStore();
-  integrationsStore.ensureFetched();
+  void integrationsStore.ensureFetched().catch(() => {
+    // AI controls remain hidden when the background capability check fails.
+  });
   const aiPhotoEnabled = computed(() => integrationsStore.aiConfigured);
 
   const locationId = computed<string>(() => route.params.id as string);
@@ -234,6 +236,7 @@
       ...(location.value.fields || []).map(field => {
         return {
           name: field.name,
+          translateName: false,
           text: field.textValue,
         } as AnyDetail;
       }),
@@ -337,48 +340,60 @@
 
   const printQueue = useLabelPrintQueue();
   const printIncludeItems = ref(false);
+  const loadingPrintQueue = ref(false);
 
   async function printContainerLabels() {
+    if (loadingPrintQueue.value) return;
+    loadingPrintQueue.value = true;
     const entries: PrintQueueEntry[] = [];
 
-    const { data: containers } = await api.items.getContainers({
-      parentIds: [locationId.value],
-      filterChildren: false,
-    });
-    entries.push(
-      ...containers.map(c => ({
-        id: c.id,
-        kind: "container" as const,
-        name: c.name,
-        parentPath: location.value?.name ?? "",
-        url: `${window.location.origin}/location/${c.id}`,
-      }))
-    );
-
-    if (printIncludeItems.value) {
+    try {
+      const { data: containers, error } = await api.items.getContainers({
+        parentIds: [locationId.value],
+        filterChildren: false,
+      });
+      if (error) {
+        toast.error(t("components.location.print_load_failed"));
+        return;
+      }
       entries.push(
-        ...(items.value ?? []).map(i => ({
-          id: i.id,
-          kind: "item" as const,
-          name: i.name,
+        ...containers.map(c => ({
+          id: c.id,
+          kind: "container" as const,
+          name: c.name,
           parentPath: location.value?.name ?? "",
-          assetId: i.assetId,
-          url: `${window.location.origin}/a/${i.assetId}`,
+          url: `${window.location.origin}/location/${c.id}`,
         }))
       );
-    }
 
-    // An empty queue makes queueMode fall through to the generator's default
-    // asset-range view (all entities in the collection) -- surprising when the
-    // user asked to print "this location's containers" and there are none.
-    // Warn and stay put instead of silently navigating to an unrelated screen.
-    if (entries.length === 0) {
-      toast.warning(t("components.location.print_nothing_to_print"));
-      return;
-    }
+      if (printIncludeItems.value) {
+        entries.push(
+          ...(items.value ?? []).map(i => ({
+            id: i.id,
+            kind: "item" as const,
+            name: i.name,
+            parentPath: location.value?.name ?? "",
+            assetId: i.assetId,
+            url: `${window.location.origin}/a/${i.assetId}`,
+          }))
+        );
+      }
 
-    printQueue.set(entries);
-    navigateTo("/reports/label-generator");
+      // An empty queue makes queueMode fall through to the generator's default
+      // asset-range view (all entities in the collection) -- surprising when
+      // the user asked to print this location's containers and there are none.
+      if (entries.length === 0) {
+        toast.warning(t("components.location.print_nothing_to_print"));
+        return;
+      }
+
+      printQueue.set(entries);
+      navigateTo("/reports/label-generator");
+    } catch {
+      toast.error(t("components.location.print_load_failed"));
+    } finally {
+      loadingPrintQueue.value = false;
+    }
   }
 </script>
 
@@ -450,7 +465,7 @@
             </div>
             <div class="ml-auto mt-2 flex flex-wrap items-center justify-between gap-2">
               <LabelMaker :id="location.id" type="location" />
-              <Button variant="outline" @click="printContainerLabels">
+              <Button variant="outline" :disabled="loadingPrintQueue" @click="printContainerLabels">
                 {{ $t("components.location.print_containers") }}
               </Button>
               <div class="flex items-center gap-1">

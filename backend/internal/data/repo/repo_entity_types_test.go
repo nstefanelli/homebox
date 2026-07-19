@@ -51,3 +51,44 @@ func TestEntityTypesRepository_Update_IsContainer(t *testing.T) {
 	err = tRepos.EntityTypes.Delete(context.Background(), tGroup.ID, created.ID)
 	require.NoError(t, err)
 }
+
+func TestEntityTypesRepository_RejectsContainerWithoutLocation(t *testing.T) {
+	ctx := context.Background()
+
+	_, err := tRepos.EntityTypes.Create(ctx, tGroup.ID, EntityTypeCreate{
+		Name:        "invalid-container-" + uuid.NewString(),
+		IsContainer: true,
+		IsLocation:  false,
+	})
+	require.ErrorIs(t, err, ErrContainerRequiresLocation)
+
+	created, err := tRepos.EntityTypes.Create(ctx, tGroup.ID, entityTypeFactory())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = tRepos.EntityTypes.Delete(context.Background(), tGroup.ID, created.ID)
+	})
+
+	_, err = tRepos.EntityTypes.Update(ctx, tGroup.ID, EntityTypeUpdate{
+		ID:          created.ID,
+		Name:        created.Name,
+		IsContainer: true,
+		IsLocation:  false,
+		Icon:        created.Icon,
+	})
+	require.ErrorIs(t, err, ErrContainerRequiresLocation)
+
+	persisted, err := tClient.EntityType.Get(ctx, created.ID)
+	require.NoError(t, err)
+	assert.True(t, persisted.IsLocation)
+	assert.False(t, persisted.IsContainer)
+}
+
+func TestEntityTypeSchemaRejectsContainerWithoutLocation(t *testing.T) {
+	_, err := tClient.EntityType.Create().
+		SetName("invalid-schema-container-" + uuid.NewString()).
+		SetIsContainer(true).
+		SetIsLocation(false).
+		SetGroupID(tGroup.ID).
+		Save(context.Background())
+	require.Error(t, err)
+}

@@ -22,7 +22,7 @@
               ? $t("components.entity.create_modal.ai_loading_slow")
               : $t("components.entity.create_modal.ai_loading")
           }}</span>
-          <Button type="button" variant="ghost" size="sm" @click="abort?.abort()">{{ $t("global.cancel") }}</Button>
+          <Button type="button" variant="ghost" size="sm" @click="cancelAnalysis">{{ $t("global.cancel") }}</Button>
         </div>
         <Badge v-if="candidates.length > 0" variant="secondary">{{
           $t("components.entity.create_modal.ai_badge")
@@ -64,26 +64,26 @@
                   v-model="c.name"
                   :label="$t('components.location.bulk_catalog.card_name')"
                   :max-length="255"
-                  :disabled="c.status === 'created'"
+                  :disabled="c.status === 'created' || committing"
                 />
                 <div class="flex gap-2">
                   <FormTextField
                     v-model="c.manufacturer"
                     :label="$t('components.entity.create_modal.entity_manufacturer')"
                     :max-length="255"
-                    :disabled="c.status === 'created'"
+                    :disabled="c.status === 'created' || committing"
                   />
                   <FormTextField
                     v-model="c.modelNumber"
                     :label="$t('components.entity.create_modal.entity_model_number')"
                     :max-length="255"
-                    :disabled="c.status === 'created'"
+                    :disabled="c.status === 'created' || committing"
                   />
                   <FormTextField
                     v-model.number="c.quantity"
                     type="number"
                     :label="$t('components.location.bulk_catalog.card_quantity')"
-                    :disabled="c.status === 'created'"
+                    :disabled="c.status === 'created' || committing"
                     class="w-24"
                   />
                 </div>
@@ -91,7 +91,7 @@
                   v-model="c.description"
                   :label="$t('components.location.bulk_catalog.card_description')"
                   :max-length="1000"
-                  :disabled="c.status === 'created'"
+                  :disabled="c.status === 'created' || committing"
                   class="md:col-span-2"
                 />
                 <div v-if="c.categoryHints.length > 0" class="flex flex-wrap items-center gap-1 md:col-span-2">
@@ -104,7 +104,7 @@
                     type="button"
                     variant="outline"
                     size="sm"
-                    :disabled="c.status === 'created'"
+                    :disabled="c.status === 'created' || committing"
                     @click="applyHint(c, hint)"
                     >{{ hint }}</Button
                   >
@@ -120,7 +120,7 @@
               }}</Badge>
               <template v-if="c.status === 'failed'">
                 <Badge variant="destructive">{{ $t("components.location.bulk_catalog.failed") }}</Badge>
-                <Button type="button" variant="outline" size="sm" :disabled="committing" @click="commitOne(c)">{{
+                <Button type="button" variant="outline" size="sm" :disabled="committing" @click="commit(c)">{{
                   $t("components.location.bulk_catalog.retry")
                 }}</Button>
               </template>
@@ -130,7 +130,7 @@
       </div>
 
       <DialogFooter>
-        <Button type="button" :disabled="committing || checkedPending.length === 0" @click="commit">
+        <Button type="button" :disabled="committing || checkedPending.length === 0" @click="commit()">
           {{ $t("components.location.bulk_catalog.create_n", { n: checkedPending.length }) }}
         </Button>
       </DialogFooter>
@@ -160,7 +160,7 @@
   import { appendCandidates, toEntityCreate, type ReviewCandidate } from "~~/lib/bulk-catalog/session";
 
   const { t } = useI18n();
-  const { registerOpenDialogCallback, closeDialog } = useDialog();
+  const { registerOpenDialogCallback, closeDialog, activeDialog } = useDialog();
   const confirm = useConfirm();
   const api = useUserApi();
   const tagStore = useTagStore();
@@ -174,6 +174,7 @@
   const analyzing = ref(false);
   const analyzingSlow = ref(false);
   const abort = ref<AbortController | null>(null);
+  let analysisSequence = 0;
   const committing = ref(false);
   const createdCount = ref(0);
 
@@ -188,6 +189,14 @@
   // template reads this directly (it's only consulted at commit time), so a
   // plain Map avoids taking on Vue's deep-reactivity overhead for no benefit.
   const tagIdsByCandidate = new Map<string, string[]>();
+
+  function cancelAnalysis() {
+    analysisSequence++;
+    abort.value?.abort();
+    abort.value = null;
+    analyzing.value = false;
+    analyzingSlow.value = false;
+  }
 
   function tagIdsFor(c: ReviewCandidate): string[] {
     return tagIdsByCandidate.get(c.key) ?? [];
@@ -204,7 +213,7 @@
       // Reset ALL state at callback entry -- this dialog is a singleton
       // reused across containers, so nothing from a previous open (or a
       // previous container) should leak into this one.
-      abort.value?.abort();
+      cancelAnalysis();
       containerId.value = params.containerId;
       containerName.value = params.containerName;
       if (photoInput.value) {
@@ -224,6 +233,12 @@
     onUnmounted(cleanup);
   });
 
+  watch(activeDialog, (current, previous) => {
+    if (previous === DialogID.BulkCatalog && current !== DialogID.BulkCatalog) {
+      cancelAnalysis();
+    }
+  });
+
   async function applyHint(c: ReviewCandidate, hint: string) {
     const existing = matchHintToTag(hint, tagStore.tags);
     if (existing) {
@@ -232,13 +247,25 @@
         tagIdsByCandidate.set(c.key, [...ids, existing.id]);
       }
     } else {
-      const { error, data } = await api.tags.create({ name: hint.trim(), color: "", description: "", icon: "" });
+      let result;
+      try {
+        result = await api.tags.create({ name: hint.trim(), color: "", description: "", icon: "" });
+      } catch {
+        toast.error(t("components.entity.create_modal.toast.ai_hint_tag_failed"));
+        return;
+      }
+      const { error, data } = result;
       if (error) {
         toast.error(t("components.entity.create_modal.toast.ai_hint_tag_failed"));
         return;
       }
       tagIdsByCandidate.set(c.key, [...tagIdsFor(c), data.id]);
-      await tagStore.refresh();
+      try {
+        await tagStore.refresh();
+      } catch {
+        // The created tag remains attached by id; a later store refresh will
+        // make it available elsewhere in the UI.
+      }
     }
     c.categoryHints = c.categoryHints.filter(h => h !== hint);
   }
@@ -253,13 +280,20 @@
 
     analyzing.value = true;
     analyzingSlow.value = false;
+    const requestSequence = ++analysisSequence;
+    const controller = new AbortController();
+    abort.value = controller;
     const slowTimer = setTimeout(() => {
-      analyzingSlow.value = true;
+      if (requestSequence === analysisSequence) {
+        analyzingSlow.value = true;
+      }
     }, 10_000);
-    abort.value = new AbortController();
 
     try {
-      const { data, error } = await api.actions.analyzePhotoBulk(file, abort.value.signal);
+      const { data, error } = await api.actions.analyzePhotoBulk(file, controller.signal);
+      if (controller.signal.aborted || requestSequence !== analysisSequence) {
+        return;
+      }
       if (error || !data) {
         toast.error(t("components.location.bulk_catalog.analyze_failed"));
         return;
@@ -272,76 +306,100 @@
       }
     } finally {
       clearTimeout(slowTimer);
-      analyzing.value = false;
-      analyzingSlow.value = false;
-      abort.value = null;
+      if (requestSequence === analysisSequence) {
+        analyzing.value = false;
+        analyzingSlow.value = false;
+        if (abort.value === controller) {
+          abort.value = null;
+        }
+      }
     }
   }
 
-  async function commitOne(c: ReviewCandidate) {
-    c.status = "creating";
-    const { data, error } = await api.items.create(
-      toEntityCreate(c, containerId.value, entityTypeStore.itemTypes[0]?.id ?? "", tagIdsFor(c))
-    );
-    if (error || !data) {
+  async function commitOne(c: ReviewCandidate, entityTypeId: string) {
+    const quantity = Number(c.quantity);
+    if (!c.name.trim() || !Number.isFinite(quantity) || quantity <= 0) {
       c.status = "failed";
+      toast.error(t("components.location.bulk_catalog.invalid_candidate"));
       return;
     }
-    c.status = "created";
-    createdCount.value++;
+
+    c.status = "creating";
+    try {
+      const { data, error } = await api.items.create(toEntityCreate(c, containerId.value, entityTypeId, tagIdsFor(c)));
+      if (error || !data) {
+        c.status = "failed";
+        return;
+      }
+      c.status = "created";
+      createdCount.value++;
+    } catch {
+      c.status = "failed";
+    }
   }
 
-  async function commit() {
-    if (committing.value || checkedPending.value.length === 0) {
+  async function commit(only?: ReviewCandidate) {
+    const targets = only ? [only] : [...checkedPending.value];
+    if (committing.value || targets.length === 0) {
       return;
     }
     committing.value = true;
 
-    // Strictly sequential -- mirrors CreateModal's batch-create paths, which
-    // avoid firing concurrent creates at sqlite.
-    for (const c of checkedPending.value) {
-      await commitOne(c);
-    }
-
-    // The photos document the container's contents at scan time, so each one
-    // attaches to the container itself (once), not to the individual items
-    // created from it. Items are already created at this point, so an upload
-    // failure here is non-fatal -- it's toasted but doesn't block the summary.
-    // commit() can be re-invoked after a partial failure (retryable failed
-    // candidates), so skip photos already uploaded by a prior call -- only
-    // the ones that actually failed get retried.
-    for (let i = 0; i < photos.value.length; i++) {
-      if (uploadedPhotoIdx.has(i)) {
-        continue;
+    try {
+      // Refresh here so an earlier preload failure cannot produce an empty
+      // entityTypeId request.
+      await entityTypeStore.refresh();
+      const entityTypeId = entityTypeStore.itemTypes[0]?.id;
+      if (!entityTypeId) {
+        toast.error(t("components.entity.create_modal.toast.please_select_entity_type"));
+        return;
       }
-      const photo = photos.value[i]!;
-      const photoName = `contents-snapshot-${i + 1}.jpg`;
-      const { error } = await api.items.attachments.add(
-        containerId.value,
-        photo,
-        photoName,
-        AttachmentTypes.Photo,
-        false
+
+      // Strictly sequential to avoid concurrent writes against sqlite.
+      for (const c of targets) {
+        await commitOne(c, entityTypeId);
+      }
+
+      // The photos document the container's contents at scan time. Failed
+      // uploads remain retryable on the next commit.
+      for (let i = 0; i < photos.value.length; i++) {
+        if (uploadedPhotoIdx.has(i)) {
+          continue;
+        }
+        const photo = photos.value[i]!;
+        const photoName = `contents-snapshot-${i + 1}.jpg`;
+        try {
+          const { error } = await api.items.attachments.add(
+            containerId.value,
+            photo,
+            photoName,
+            AttachmentTypes.Photo,
+            false
+          );
+          if (error) {
+            toast.error(t("components.entity.create_modal.toast.upload_failed", { photoName }));
+          } else {
+            uploadedPhotoIdx.add(i);
+          }
+        } catch {
+          toast.error(t("components.entity.create_modal.toast.upload_failed", { photoName }));
+        }
+      }
+
+      const failedCount = candidates.value.filter(c => c.status === "failed").length;
+      toast.success(
+        t("components.location.bulk_catalog.created_summary", { created: createdCount.value, failed: failedCount })
       );
-      if (error) {
-        toast.error(t("components.entity.create_modal.toast.upload_failed", { photoName }));
-      } else {
-        uploadedPhotoIdx.add(i);
+
+      // A per-row retry uses this same completion path, so the last successful
+      // retry closes with a result and refreshes the parent location.
+      if (checkedPending.value.length === 0) {
+        closeDialog(DialogID.BulkCatalog, { created: createdCount.value });
       }
-    }
-
-    const failedCount = candidates.value.filter(c => c.status === "failed").length;
-    toast.success(
-      t("components.location.bulk_catalog.created_summary", { created: createdCount.value, failed: failedCount })
-    );
-
-    committing.value = false;
-
-    // checkedPending only still contains candidates that were checked and
-    // didn't reach "created" -- i.e. the failed ones. Empty means every
-    // checked candidate succeeded.
-    if (checkedPending.value.length === 0) {
-      closeDialog(DialogID.BulkCatalog, { created: createdCount.value });
+    } catch {
+      toast.error(t("components.location.bulk_catalog.commit_failed"));
+    } finally {
+      committing.value = false;
     }
   }
 

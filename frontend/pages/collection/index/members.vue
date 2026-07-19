@@ -6,6 +6,7 @@
   import MdiDelete from "~icons/mdi/delete";
   import { toast } from "@/components/ui/sonner";
   import type { UserSummary } from "~~/lib/api/types/data-contracts";
+  import { useIntegrationsStore } from "~~/stores/integrations";
 
   definePageMeta({
     middleware: ["auth"],
@@ -18,6 +19,7 @@
   const api = useUserApi();
   const auth = useAuthContext();
   const confirm = useConfirm();
+  const integrationsStore = useIntegrationsStore();
 
   const loading = ref(true);
   const members = ref<UserSummary[]>([]);
@@ -25,8 +27,6 @@
   const removing = ref<Record<string, boolean>>({});
 
   const currentUserId = computed(() => auth.user?.id ?? "");
-
-  const isLastMember = computed(() => members.value.length <= 1);
 
   const loadMembers = async () => {
     loading.value = true;
@@ -53,12 +53,7 @@
   };
 
   const handleRemove = async (user: UserSummary) => {
-    if (!user?.id) return;
-
-    if (isLastMember.value && user.id === currentUserId.value) {
-      toast.error(t("collection.members.cannot_remove_last"));
-      return;
-    }
+    if (!integrationsStore.isOwner || !currentUserId.value || !user?.id || user.id === currentUserId.value) return;
 
     const result = await confirm.open(t("collection.members.remove_confirm"));
     if (result.isCanceled) {
@@ -84,8 +79,13 @@
     }
   };
 
-  onMounted(() => {
-    loadMembers();
+  onMounted(async () => {
+    void loadMembers();
+    try {
+      await integrationsStore.ensureFetched();
+    } catch {
+      toast.error(t("collection.permissions_load_failed"));
+    }
   });
 </script>
 
@@ -106,30 +106,32 @@
             <TableRow>
               <TableHead>{{ $t("collection.members.name") }}</TableHead>
               <TableHead>{{ $t("collection.members.email") }}</TableHead>
-              <TableHead class="w-32 text-right"></TableHead>
+              <TableHead v-if="integrationsStore.isOwner" class="w-32 text-right">
+                <span class="sr-only">{{ $t("collection.actions") }}</span>
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             <TableRow v-for="user in members" :key="user.id">
               <TableCell>{{ user.name }}</TableCell>
               <TableCell>{{ user.email }}</TableCell>
-              <TableCell>
+              <TableCell v-if="integrationsStore.isOwner">
                 <div class="ml-auto">
-                  <TooltipProvider :delay-duration="0">
+                  <TooltipProvider v-if="currentUserId && user.id !== currentUserId" :delay-duration="0">
                     <Tooltip>
                       <TooltipTrigger as-child>
                         <Button
                           variant="destructive"
                           size="icon"
-                          :aria-label="$t('global.delete')"
-                          :disabled="removing[user.id] || (isLastMember && user.id === currentUserId)"
+                          :aria-label="$t('collection.members.remove')"
+                          :disabled="removing[user.id]"
                           @click="handleRemove(user)"
                         >
                           <MdiDelete class="size-4" />
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent>
-                        {{ $t("global.delete") }}
+                        {{ $t("collection.members.remove") }}
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>

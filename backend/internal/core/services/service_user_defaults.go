@@ -22,6 +22,25 @@ func ensureDefaultEntityTypes(ctx context.Context, repos *repo.AllRepos, gid uui
 	return nil
 }
 
+func createDefaultLocations(ctx context.Context, repos *repo.AllRepos, gid uuid.UUID) (int, error) {
+	nextAssetID, err := repos.Entities.GetHighestAssetID(ctx, gid)
+	if err != nil {
+		return 0, err
+	}
+
+	created := 0
+	for _, location := range defaultLocations() {
+		nextAssetID++
+		location.AssetID = nextAssetID
+		if _, err := repos.Entities.CreateContainer(ctx, gid, location); err != nil {
+			return created, err
+		}
+		created++
+	}
+
+	return created, nil
+}
+
 func defaultLocations() []repo.EntityCreate {
 	return []repo.EntityCreate{
 		{

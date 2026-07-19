@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -129,10 +130,10 @@ func setupDatabaseURL(cfg *config.Config) (string, error) {
 	databaseURL := ""
 	switch strings.ToLower(cfg.Database.Driver) {
 	case config.DriverSqlite3:
-		databaseURL = cfg.Database.SqlitePath
+		databaseURL = sqliteDSNWithImmediateTransactions(cfg.Database.SqlitePath)
 		dbFilePath := strings.Split(cfg.Database.SqlitePath, "?")[0]
 		dbDir := filepath.Dir(dbFilePath)
-		if err := os.MkdirAll(dbDir, 0o755); err != nil {
+		if err := os.MkdirAll(dbDir, 0o750); err != nil {
 			log.Error().Err(err).Str("path", dbDir).Msg("failed to create SQLite database directory")
 			return "", fmt.Errorf("failed to create SQLite database directory: %w", err)
 		}
@@ -170,6 +171,38 @@ func setupDatabaseURL(cfg *config.Config) (string, error) {
 		return "", fmt.Errorf("unsupported database driver: %s", cfg.Database.Driver)
 	}
 	return databaseURL, nil
+}
+
+// sqliteDSNWithImmediateTransactions prevents a pair of read-then-write
+// transactions from both taking deferred snapshots and racing to upgrade to
+// SQLite's single writer lock. BEGIN IMMEDIATE reserves the writer up front,
+// where the configured busy_timeout can wait safely, while WAL still permits
+// ordinary readers on other connections. Respect an explicit operator choice.
+func sqliteDSNWithImmediateTransactions(dsn string) string {
+	base, fragment, hasFragment := strings.Cut(dsn, "#")
+	queryStart := strings.IndexByte(base, '?')
+	if queryStart >= 0 {
+		for _, parameter := range strings.Split(base[queryStart+1:], "&") {
+			key, _, _ := strings.Cut(parameter, "=")
+			decodedKey, err := url.QueryUnescape(key)
+			if err == nil && strings.EqualFold(decodedKey, "_txlock") {
+				return dsn
+			}
+		}
+	}
+
+	separator := "?"
+	if queryStart >= 0 {
+		separator = "&"
+		if strings.HasSuffix(base, "?") || strings.HasSuffix(base, "&") {
+			separator = ""
+		}
+	}
+	normalized := base + separator + "_txlock=immediate"
+	if hasFragment {
+		normalized += "#" + fragment
+	}
+	return normalized
 }
 
 // loadCurrencies loads currency data from config if provided.

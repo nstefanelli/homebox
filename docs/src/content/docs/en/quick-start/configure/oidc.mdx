@@ -13,8 +13,8 @@ HomeBox supports OpenID Connect (OIDC) authentication, allowing users to log in 
    - `HBOX_OIDC_ISSUER_URL`: Your OIDC provider's issuer URL, this must match exactly!
    - `HBOX_OIDC_CLIENT_ID`: Client ID provided by your OIDC provider
    - `HBOX_OIDC_CLIENT_SECRET`: Client secret provided by your OIDC provider
-   - If using a reverse proxy, you may need to set `HBOX_OPTIONS_TRUST_PROXY=true` to ensure `https` is correctly detected.
-   - If you have set `HBOX_OPTIONS_HOSTNAME` ensure it uses only the hostname, without the protocol (not `https://` or `http://`)
+   - If using a reverse proxy, you may need to set `HBOX_OPTIONS_TRUST_PROXY=true` so Homebox can use the first `X-Forwarded-Host` and `X-Forwarded-Proto` values supplied by that trusted proxy.
+   - Set `HBOX_OPTIONS_HOSTNAME` to either a bare public host (for example, `homebox.example.com`, `homebox.example.com:8443`, or `[2001:db8::1]:8443`) or an absolute `http://` or `https://` origin (for example, `https://homebox.example.com`). Do not include credentials, a path, a query string, or a fragment. An absolute origin is recommended when you want the public scheme to be explicit.
 3. **Configure Redirect URI**: Set the redirect URI in your OIDC provider to `https://yourhomebox.example.com/api/v1/users/login/oidc/callback`
 
 > [!TIP]

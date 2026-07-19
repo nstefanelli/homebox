@@ -2,6 +2,8 @@ export type StringLike = string | number | boolean;
 
 type BaseDetail = {
   name: string;
+  /** Set false when `name` is user-provided text rather than an i18n key. */
+  translateName?: boolean;
   slot?: string;
 };
 

@@ -2,32 +2,59 @@ package services
 
 import (
 	"errors"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/repo"
 	"github.com/sysadminsmedia/homebox/backend/pkgs/hasher"
 )
 
+var (
+	ErrGroupOwnerRequired    = errors.New("only group owners can perform this action")
+	ErrGroupOwnerCannotLeave = errors.New("group owners cannot leave their group; delete the group instead")
+	ErrGroupMemberNotFound   = errors.New("user is not a member of this group")
+	ErrInvalidGroupName      = errors.New("group name must be between 1 and 255 characters")
+	ErrInvalidGroupCurrency  = errors.New("group currency is required")
+	ErrInvalidInvitation     = errors.New("invitation uses and expiration are invalid")
+)
+
 type GroupService struct {
 	repos *repo.AllRepos
 }
 
+func (svc *GroupService) requireOwner(ctx Context) error {
+	isOwner, err := svc.repos.Groups.IsOwnerOf(ctx.Context, ctx.UID, ctx.GID)
+	if err != nil {
+		return err
+	}
+	if !isOwner {
+		return ErrGroupOwnerRequired
+	}
+	return nil
+}
+
 func (svc *GroupService) UpdateGroup(ctx Context, data repo.GroupUpdate) (repo.Group, error) {
-	if data.Name == "" {
-		return repo.Group{}, errors.New("group name cannot be empty")
+	if err := svc.requireOwner(ctx); err != nil {
+		return repo.Group{}, err
+	}
+	data.Name = strings.TrimSpace(data.Name)
+	if data.Name == "" || utf8.RuneCountInString(data.Name) > 255 {
+		return repo.Group{}, ErrInvalidGroupName
 	}
 
+	data.Currency = strings.TrimSpace(data.Currency)
 	if data.Currency == "" {
-		return repo.Group{}, errors.New("currency cannot be empty")
+		return repo.Group{}, ErrInvalidGroupCurrency
 	}
-
 	return svc.repos.Groups.GroupUpdate(ctx.Context, ctx.GID, data)
 }
 
 func (svc *GroupService) CreateGroup(ctx Context, name string) (repo.Group, error) {
-	if name == "" {
-		return repo.Group{}, errors.New("group name cannot be empty")
+	name = strings.TrimSpace(name)
+	if name == "" || utf8.RuneCountInString(name) > 255 {
+		return repo.Group{}, ErrInvalidGroupName
 	}
 
 	if ctx.UID == uuid.Nil {
@@ -50,10 +77,20 @@ func (svc *GroupService) CreateGroup(ctx Context, name string) (repo.Group, erro
 }
 
 func (svc *GroupService) DeleteGroup(ctx Context) error {
+	if err := svc.requireOwner(ctx); err != nil {
+		return err
+	}
 	return svc.repos.Groups.GroupDelete(ctx.Context, ctx.GID)
 }
 
 func (svc *GroupService) NewInvitation(ctx Context, uses int, expiresAt time.Time) (repo.GroupInvitation, string, error) {
+	if err := svc.requireOwner(ctx); err != nil {
+		return repo.GroupInvitation{}, "", err
+	}
+	if uses < 1 || uses > 100 || !expiresAt.After(time.Now()) {
+		return repo.GroupInvitation{}, "", ErrInvalidInvitation
+	}
+
 	token := hasher.GenerateToken()
 
 	invitation, err := svc.repos.Groups.InvitationCreate(ctx, ctx.GID, repo.GroupInvitationCreate{
@@ -68,41 +105,48 @@ func (svc *GroupService) NewInvitation(ctx Context, uses int, expiresAt time.Tim
 	return invitation, token.Raw, nil
 }
 
+func (svc *GroupService) GetInvitations(ctx Context) ([]repo.GroupInvitation, error) {
+	if err := svc.requireOwner(ctx); err != nil {
+		return nil, err
+	}
+	return svc.repos.Groups.InvitationGetAll(ctx.Context, ctx.GID)
+}
+
 func (svc *GroupService) RemoveMember(ctx Context, userID uuid.UUID) error {
 	if userID == uuid.Nil {
 		return errors.New("user ID cannot be empty")
 	}
-
-	err := svc.repos.Groups.RemoveMember(ctx.Context, ctx.GID, userID)
-	if err != nil {
-		return err
-	}
-
-	// If the removed group was the user's default group, reassign to another group
-	removedUser, err := svc.repos.Users.GetOneID(ctx.Context, userID)
-	if err != nil {
-		return err
-	}
-
-	if removedUser.DefaultGroupID == ctx.GID {
-		// Find another group the user is still a member of
-		var newDefaultGroupID uuid.UUID
-		for _, gid := range removedUser.GroupIDs {
-			if gid != ctx.GID {
-				newDefaultGroupID = gid
-				break
-			}
-		}
-		// Update to another group, or uuid.Nil if the user has no remaining groups
-		if err := svc.repos.Users.UpdateDefaultGroup(ctx.Context, userID, newDefaultGroupID); err != nil {
+	if userID != ctx.UID {
+		if err := svc.requireOwner(ctx); err != nil {
 			return err
 		}
 	}
 
-	return nil
+	isMember, err := svc.repos.Groups.IsMember(ctx.Context, ctx.GID, userID)
+	if err != nil {
+		return err
+	}
+	if !isMember {
+		return ErrGroupMemberNotFound
+	}
+
+	if userID == ctx.UID {
+		isOwner, err := svc.repos.Groups.IsOwnerOf(ctx.Context, ctx.UID, ctx.GID)
+		if err != nil {
+			return err
+		}
+		if isOwner {
+			return ErrGroupOwnerCannotLeave
+		}
+	}
+
+	return svc.repos.Groups.RemoveMemberAndReassignDefault(ctx.Context, userID, ctx.GID)
 }
 
 func (svc *GroupService) DeleteInvitation(ctx Context, id uuid.UUID) error {
+	if err := svc.requireOwner(ctx); err != nil {
+		return err
+	}
 	return svc.repos.Groups.InvitationDelete(ctx.Context, ctx.GID, id)
 }
 

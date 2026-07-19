@@ -355,7 +355,7 @@ func (s *IOSheet) CSV() ([][]string, error) {
 
 			switch field.Type {
 			case reflect.TypeOf(""):
-				v = val.String()
+				v = SafeCSVText(val.String())
 			case reflect.TypeOf(int(0)):
 				v = strconv.Itoa(int(val.Int()))
 			case reflect.TypeOf(bool(false)):
@@ -369,9 +369,9 @@ func (s *IOSheet) CSV() ([][]string, error) {
 			case reflect.TypeOf(repo.AssetID(0)):
 				v = val.Interface().(repo.AssetID).String()
 			case reflect.TypeOf(LocationString{}):
-				v = val.Interface().(LocationString).String()
+				v = SafeCSVText(val.Interface().(LocationString).String())
 			case reflect.TypeOf(TagString{}):
-				v = val.Interface().(TagString).String()
+				v = SafeCSVText(val.Interface().(TagString).String())
 			default:
 				log.Debug().Str("type", field.Type.String()).Msg("unknown type")
 			}
@@ -385,7 +385,7 @@ func (s *IOSheet) CSV() ([][]string, error) {
 				continue
 			}
 
-			memcsv[i+1][col] = f.Value
+			memcsv[i+1][col] = SafeCSVText(f.Value)
 		}
 	}
 

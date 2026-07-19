@@ -18,9 +18,10 @@ import (
 )
 
 const (
-	cookieNameToken    = "hb.auth.token"
-	cookieNameRemember = "hb.auth.remember"
-	cookieNameSession  = "hb.auth.session"
+	cookieNameToken      = "hb.auth.token" // #nosec G101 -- a public cookie name, not a credential value.
+	cookieNameRemember   = "hb.auth.remember"
+	cookieNameSession    = "hb.auth.session"
+	cookieNameAttachment = "hb.auth.attachment_token"
 )
 
 type (
@@ -134,7 +135,7 @@ func (ctrl *V1Controller) HandleAuthLogin(ps ...AuthProvider) errchain.HandlerFu
 			attribute.String("auth.session.expires_at", newToken.ExpiresAt.Format(time.RFC3339)),
 		)
 
-		ctrl.setCookies(w, noPort(r.Host), newToken.Raw, newToken.ExpiresAt, true, newToken.AttachmentToken)
+		ctrl.setCookies(w, newToken.Raw, newToken.ExpiresAt, true, newToken.AttachmentToken)
 		return server.JSON(w, http.StatusOK, TokenResponse{
 			Token:           "Bearer " + newToken.Raw,
 			ExpiresAt:       newToken.ExpiresAt,
@@ -348,7 +349,7 @@ func (ctrl *V1Controller) HandleAuthLogout() errchain.HandlerFunc {
 		}
 
 		span.SetAttributes(attribute.String("logout.outcome", "success"))
-		ctrl.unsetCookies(w, noPort(r.Host))
+		ctrl.unsetCookies(w)
 		return server.JSON(w, http.StatusNoContent, nil)
 	}
 }
@@ -395,109 +396,45 @@ func (ctrl *V1Controller) HandleAuthRefresh() errchain.HandlerFunc {
 			attribute.String("refresh.outcome", "success"),
 			attribute.String("refresh.expires_at", newToken.ExpiresAt.Format(time.RFC3339)),
 		)
-		ctrl.setCookies(w, noPort(r.Host), newToken.Raw, newToken.ExpiresAt, false, newToken.AttachmentToken)
+		ctrl.setCookies(w, newToken.Raw, newToken.ExpiresAt, false, newToken.AttachmentToken)
 		return server.JSON(w, http.StatusOK, newToken)
 	}
 }
 
-func noPort(host string) string {
-	return strings.Split(host, ":")[0]
-}
-
-func (ctrl *V1Controller) setCookies(w http.ResponseWriter, domain, token string, expires time.Time, remember bool, attachmentToken string) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     cookieNameRemember,
-		Value:    strconv.FormatBool(remember),
-		Expires:  expires,
-		Domain:   domain,
-		Secure:   ctrl.cookieSecure,
-		HttpOnly: true,
-		Path:     "/",
-		SameSite: http.SameSiteLaxMode,
-	})
-
-	// Set HTTP only cookie
-	http.SetCookie(w, &http.Cookie{
-		Name:     cookieNameToken,
-		Value:    token,
-		Expires:  expires,
-		Domain:   domain,
-		Secure:   ctrl.cookieSecure,
-		HttpOnly: true,
-		Path:     "/",
-		SameSite: http.SameSiteLaxMode,
-	})
-
-	// Set Fake Session cookie
-	http.SetCookie(w, &http.Cookie{
-		Name:     cookieNameSession,
-		Value:    "true",
-		Expires:  expires,
-		Domain:   domain,
-		Secure:   ctrl.cookieSecure,
-		HttpOnly: false,
-		Path:     "/",
-		SameSite: http.SameSiteLaxMode,
-	})
+func (ctrl *V1Controller) setCookies(w http.ResponseWriter, token string, expires time.Time, remember bool, attachmentToken string) {
+	ctrl.setAuthCookie(w, cookieNameRemember, strconv.FormatBool(remember), expires, true)
+	ctrl.setAuthCookie(w, cookieNameToken, token, expires, true)
+	ctrl.setAuthCookie(w, cookieNameSession, "true", expires, false)
 
 	// Set attachment token cookie (accessible to frontend, not HttpOnly)
 	if attachmentToken != "" {
-		http.SetCookie(w, &http.Cookie{
-			Name:     "hb.auth.attachment_token",
-			Value:    attachmentToken,
-			Expires:  expires,
-			Domain:   domain,
-			Secure:   ctrl.cookieSecure,
-			HttpOnly: false,
-			Path:     "/",
-			SameSite: http.SameSiteLaxMode,
-		})
+		ctrl.setAuthCookie(w, cookieNameAttachment, attachmentToken, expires, false)
 	}
 }
 
-func (ctrl *V1Controller) unsetCookies(w http.ResponseWriter, domain string) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     cookieNameToken,
-		Value:    "",
-		Expires:  time.Unix(0, 0),
-		Domain:   domain,
-		Secure:   ctrl.cookieSecure,
-		HttpOnly: true,
-		Path:     "/",
-		SameSite: http.SameSiteLaxMode,
-	})
+func (ctrl *V1Controller) unsetCookies(w http.ResponseWriter) {
+	expired := time.Unix(0, 0)
+	ctrl.setAuthCookie(w, cookieNameToken, "", expired, true)
+	ctrl.setAuthCookie(w, cookieNameRemember, "false", expired, true)
+	ctrl.setAuthCookie(w, cookieNameSession, "false", expired, false)
+	ctrl.setAuthCookie(w, cookieNameAttachment, "", expired, false)
+}
 
+func (ctrl *V1Controller) setAuthCookie(
+	w http.ResponseWriter,
+	name, value string,
+	expires time.Time,
+	httpOnly bool,
+) {
+	// #nosec G124 -- auth/remember cookies are HttpOnly; the session marker and
+	// attachment token are intentionally frontend-readable. Secure follows the
+	// explicit deployment setting to preserve supported HTTP-only self-hosting.
 	http.SetCookie(w, &http.Cookie{
-		Name:     cookieNameRemember,
-		Value:    "false",
-		Expires:  time.Unix(0, 0),
-		Domain:   domain,
+		Name:     name,
+		Value:    value,
+		Expires:  expires,
 		Secure:   ctrl.cookieSecure,
-		HttpOnly: true,
-		Path:     "/",
-		SameSite: http.SameSiteLaxMode,
-	})
-
-	// Set Fake Session cookie
-	http.SetCookie(w, &http.Cookie{
-		Name:     cookieNameSession,
-		Value:    "false",
-		Expires:  time.Unix(0, 0),
-		Domain:   domain,
-		Secure:   ctrl.cookieSecure,
-		HttpOnly: false,
-		Path:     "/",
-		SameSite: http.SameSiteLaxMode,
-	})
-
-	// Unset attachment token cookie
-	http.SetCookie(w, &http.Cookie{
-		Name:     "hb.auth.attachment_token",
-		Value:    "",
-		Expires:  time.Unix(0, 0),
-		Domain:   domain,
-		Secure:   ctrl.cookieSecure,
-		HttpOnly: false,
+		HttpOnly: httpOnly,
 		Path:     "/",
 		SameSite: http.SameSiteLaxMode,
 	})
@@ -577,7 +514,7 @@ func (ctrl *V1Controller) HandleOIDCCallback() errchain.HandlerFunc {
 			attribute.String("oidc.outcome", "success"),
 			attribute.String("session.expires_at", newToken.ExpiresAt.Format(time.RFC3339)),
 		)
-		ctrl.setCookies(w, noPort(r.Host), newToken.Raw, newToken.ExpiresAt, true, newToken.AttachmentToken)
+		ctrl.setCookies(w, newToken.Raw, newToken.ExpiresAt, true, newToken.AttachmentToken)
 		http.Redirect(w, r, "/home", http.StatusFound)
 		return nil
 	}

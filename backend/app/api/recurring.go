@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -16,6 +17,23 @@ import (
 	"gocloud.dev/pubsub"
 )
 
+const pubSubShutdownTimeout = 5 * time.Second
+
+func pubSubShutdownContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), pubSubShutdownTimeout)
+}
+
+func pubSubAlreadyShutdown(err error) bool {
+	if err == nil || gcerrors.Code(err) != gcerrors.FailedPrecondition {
+		return false
+	}
+
+	message := err.Error()
+	return strings.Contains(message, "pubsub: Topic has been Shutdown") ||
+		strings.Contains(message, "pubsub: Subscription has been Shutdown")
+}
+
+//nolint:gocyclo // Registration is intentionally a flat catalog of independent background tasks.
 func registerRecurringTasks(app *app, cfg *config.Config, runner *graceful.Runner) {
 	runner.AddFunc("eventbus", app.bus.Run)
 
@@ -31,36 +49,32 @@ func registerRecurringTasks(app *app, cfg *config.Config, runner *graceful.Runne
 		return nil
 	})
 
-	runner.AddPlugin(NewTask("purge-tokens", 24*time.Hour, func(ctx context.Context) {
+	// SQLite permits one writer at a time. Keep the startup sweep and its daily
+	// repeats in one task so independent cleanup deletes cannot race each other.
+	runner.AddPlugin(NewTask("daily-cleanup", 24*time.Hour, func(ctx context.Context) {
 		_, err := app.repos.AuthTokens.PurgeExpiredTokens(ctx)
 		if err != nil {
 			log.Error().Err(err).Msg("failed to purge expired tokens")
 		}
-	}))
 
-	runner.AddPlugin(NewTask("purge-password-reset-tokens", 24*time.Hour, func(ctx context.Context) {
-		_, err := app.repos.PasswordResetTokens.PurgeExpired(ctx)
+		_, err = app.repos.PasswordResetTokens.PurgeExpired(ctx)
 		if err != nil {
 			log.Error().Err(err).Msg("failed to purge expired password reset tokens")
 		}
-	}))
 
-	runner.AddPlugin(NewTask("purge-invitations", 24*time.Hour, func(ctx context.Context) {
-		_, err := app.repos.Groups.InvitationPurge(ctx)
+		_, err = app.repos.Groups.InvitationPurge(ctx)
 		if err != nil {
 			log.Error().Err(err).Msg("failed to purge expired invitations")
 		}
-	}))
 
-	runner.AddPlugin(NewTask("purge-stale-exports", 24*time.Hour, func(ctx context.Context) {
 		purgeStaleExports(ctx, app)
 	}))
 
 	runner.AddPlugin(NewTask("send-notifications", time.Hour, func(ctx context.Context) {
 		now := time.Now()
 		if now.Hour() == 8 {
-			fmt.Println("run notifiers")
-			err := app.services.BackgroundService.SendNotifiersToday(context.Background())
+			log.Debug().Msg("running scheduled notifiers")
+			err := app.services.BackgroundService.SendNotifiersToday(ctx)
 			if err != nil {
 				log.Error().Err(err).Msg("failed to send notifiers")
 			}
@@ -115,33 +129,40 @@ func registerRecurringTasks(app *app, cfg *config.Config, runner *graceful.Runne
 			if err != nil {
 				return err
 			}
-			defer func(topic *pubsub.Topic, ctx context.Context) {
-				err := topic.Shutdown(ctx)
-				if err != nil {
+			defer func(topic *pubsub.Topic) {
+				shutdownCtx, cancel := pubSubShutdownContext(ctx)
+				defer cancel()
+				err := utils.ShutdownPubSubTopic(shutdownCtx, pubsubString, topic)
+				if err != nil && !pubSubAlreadyShutdown(err) {
 					log.Err(err).Msg("fail to shutdown pubsub topic")
 				}
-			}(topic, ctx)
+			}(topic)
 
 			subscription, err := pubsub.OpenSubscription(ctx, pubsubString)
 			if err != nil {
 				log.Err(err).Msg("failed to open pubsub topic")
 				return err
 			}
-			defer func(topic *pubsub.Subscription, ctx context.Context) {
-				err := topic.Shutdown(ctx)
-				if err != nil {
+			defer func(topic *pubsub.Subscription) {
+				shutdownCtx, cancel := pubSubShutdownContext(ctx)
+				defer cancel()
+				err := topic.Shutdown(shutdownCtx)
+				if err != nil && !pubSubAlreadyShutdown(err) {
 					log.Err(err).Msg("fail to shutdown pubsub topic")
 				}
-			}(subscription, ctx)
+			}(subscription)
 
 			for {
 				select {
 				case <-ctx.Done():
-					return ctx.Err()
+					return nil
 				default:
 					msg, err := subscription.Receive(ctx)
 					log.Debug().Msg("received thumbnail generation request from pubsub topic")
 					if err != nil {
+						if ctx.Err() != nil {
+							return nil
+						}
 						log.Err(err).Msg("failed to receive message from pubsub topic")
 						continue
 					}
@@ -157,7 +178,7 @@ func registerRecurringTasks(app *app, cfg *config.Config, runner *graceful.Runne
 					if err != nil {
 						log.Error().Err(err).Str("attachment_id", msg.Metadata["attachment_id"]).Msg("failed to parse attachment ID from message metadata")
 					}
-					err = app.repos.Attachments.CreateThumbnail(ctx, groupId, attachmentId, msg.Metadata["title"], msg.Metadata["path"])
+					err = app.repos.Attachments.CreateThumbnail(ctx, groupId, attachmentId, msg.Metadata["title"])
 					if err != nil {
 						log.Err(err).Msg("failed to create thumbnail")
 					}
@@ -170,7 +191,7 @@ func registerRecurringTasks(app *app, cfg *config.Config, runner *graceful.Runne
 	if cfg.Options.GithubReleaseCheck {
 		runner.AddPlugin(NewTask("get-latest-github-release", time.Hour, func(ctx context.Context) {
 			log.Debug().Msg("running get latest github release")
-			err := app.services.BackgroundService.GetLatestGithubRelease(context.Background())
+			err := app.services.BackgroundService.GetLatestGithubRelease(ctx)
 			if err != nil {
 				log.Error().Err(err).Msg("failed to get latest github release")
 			}
@@ -195,7 +216,9 @@ func registerRecurringTasks(app *app, cfg *config.Config, runner *graceful.Runne
 
 			go func() {
 				<-ctx.Done()
-				_ = debugserver.Shutdown(context.Background())
+				if err := shutdownHTTPServer(&debugserver, httpServerShutdownTimeout); err != nil {
+					log.Warn().Err(err).Msg("debug server exceeded graceful shutdown deadline; active connections were closed")
+				}
 			}()
 
 			log.Info().Msgf("Debug server is running on %s (loopback only)", addr)
@@ -221,7 +244,9 @@ func runJobSubscription(ctx context.Context, cfg *config.Config, topicName strin
 		return err
 	}
 	defer func() {
-		if err := topic.Shutdown(ctx); err != nil {
+		shutdownCtx, cancel := pubSubShutdownContext(ctx)
+		defer cancel()
+		if err := utils.ShutdownPubSubTopic(shutdownCtx, conn, topic); err != nil && !pubSubAlreadyShutdown(err) {
 			log.Err(err).Str("topic", topicName).Msg("failed to shutdown pubsub topic")
 		}
 	}()
@@ -232,7 +257,9 @@ func runJobSubscription(ctx context.Context, cfg *config.Config, topicName strin
 		return err
 	}
 	defer func() {
-		if err := sub.Shutdown(ctx); err != nil {
+		shutdownCtx, cancel := pubSubShutdownContext(ctx)
+		defer cancel()
+		if err := sub.Shutdown(shutdownCtx); err != nil && !pubSubAlreadyShutdown(err) {
 			log.Err(err).Str("topic", topicName).Msg("failed to shutdown pubsub subscription")
 		}
 	}()
@@ -240,10 +267,13 @@ func runJobSubscription(ctx context.Context, cfg *config.Config, topicName strin
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil
 		default:
 			msg, err := sub.Receive(ctx)
 			if err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
 				log.Err(err).Str("topic", topicName).Msg("failed to receive message from pubsub topic")
 				continue
 			}

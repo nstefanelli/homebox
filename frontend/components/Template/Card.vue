@@ -6,7 +6,8 @@
   import MdiContentCopy from "~icons/mdi/content-copy";
   import { Card, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
   import { Button } from "@/components/ui/button";
-  import type { EntityTemplateSummary, EntityTemplateCreate } from "~/lib/api/types/data-contracts";
+  import type { EntityTemplateSummary } from "~/lib/api/types/data-contracts";
+  import type { EntityTemplateCreateInput } from "~/lib/api/types/non-generated";
 
   const props = defineProps<{
     template: EntityTemplateSummary;
@@ -46,7 +47,7 @@
     const NIL_UUID = "00000000-0000-0000-0000-000000000000";
 
     // Create a duplicate with "(Copy)" suffix
-    const duplicateData: EntityTemplateCreate = {
+    const duplicateData: EntityTemplateCreateInput = {
       name: `${fullTemplate.name} (Copy)`,
       description: fullTemplate.description,
       notes: fullTemplate.notes,

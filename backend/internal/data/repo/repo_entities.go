@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"math"
 	"regexp"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	entsql "entgo.io/ent/dialect/sql"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"github.com/samber/lo"
@@ -72,6 +74,11 @@ type (
 		FilterChildren   bool         `json:"filterChildren"` // when true, only return root entities (no parent)
 		Fields           []FieldQuery `json:"fields"`
 		OrderBy          string       `json:"orderBy"`
+
+		// IncludeInventoryValue asks QueryByGroup to calculate the value of all
+		// matching inventory independently of pagination. It is an internal
+		// response concern, not a client-controlled filter.
+		IncludeInventoryValue bool `json:"-"`
 	}
 
 	DuplicateOptions struct {
@@ -88,6 +95,7 @@ type (
 		TextValue    string    `json:"textValue"`
 		NumberValue  int       `json:"numberValue"`
 		BooleanValue bool      `json:"booleanValue"`
+		TimeValue    time.Time `json:"timeValue"`
 	}
 
 	EntityCreate struct {
@@ -191,6 +199,9 @@ type (
 
 	EntityOut struct {
 		Parent *EntitySummary `json:"parent,omitempty" extensions:"x-nullable,x-omitempty"`
+		// Location is the nearest ancestor whose entity type is a location.
+		// It can differ from Parent when an item is nested in other entities.
+		Location *EntitySummary `json:"location,omitempty" extensions:"x-nullable,x-omitempty"`
 		EntitySummary
 		AssetID AssetID `json:"assetId,string"`
 
@@ -305,6 +316,7 @@ func mapEntityFields(fields []*ent.EntityField) []EntityFieldData {
 			TextValue:    f.TextValue,
 			NumberValue:  f.NumberValue,
 			BooleanValue: f.BooleanValue,
+			TimeValue:    f.TimeValue,
 		}
 	})
 }
@@ -423,7 +435,12 @@ func (r *EntityRepository) publishMutationEvent(gid uuid.UUID) {
 	}
 }
 
-func (r *EntityRepository) getOneTx(ctx context.Context, tx *ent.Tx, where ...predicate.Entity) (EntityOut, error) {
+func (r *EntityRepository) getOneTx(
+	ctx context.Context,
+	tx *ent.Tx,
+	gid uuid.UUID,
+	where ...predicate.Entity,
+) (EntityOut, error) {
 	ctx, span := entityTracer().Start(ctx, "repo.EntityRepository.getOneTx",
 		trace.WithAttributes(
 			attribute.Bool("tx", tx != nil),
@@ -438,23 +455,84 @@ func (r *EntityRepository) getOneTx(ctx context.Context, tx *ent.Tx, where ...pr
 		q = r.db.Entity.Query().Where(where...)
 	}
 
-	out, err := mapEntityOutErr(q.
+	q = q.
 		WithFields().
-		WithTag().
-		WithParent(func(eq *ent.EntityQuery) {
-			eq.WithEntityType()
-		}).
-		WithEntityType().
 		WithGroup().
-		WithChildren(func(eq *ent.EntityQuery) {
-			eq.WithEntityType()
-		}).
-		WithAttachments().
-		Only(ctx),
-	)
+		WithAttachments(func(aq *ent.AttachmentQuery) {
+			aq.WithThumbnail()
+		})
+
+	if gid == uuid.Nil {
+		q = q.
+			WithTag().
+			WithParent(func(eq *ent.EntityQuery) {
+				eq.WithEntityType()
+			}).
+			WithEntityType().
+			WithChildren(func(eq *ent.EntityQuery) {
+				eq.WithEntityType()
+			})
+	} else {
+		q = q.
+			WithTag(func(tq *ent.TagQuery) {
+				tq.Where(tag.HasGroupWith(group.ID(gid)))
+			}).
+			WithParent(func(eq *ent.EntityQuery) {
+				eq.Where(entity.HasGroupWith(group.ID(gid))).
+					WithEntityType(func(etq *ent.EntityTypeQuery) {
+						etq.Where(entitytype.HasGroupWith(group.ID(gid)))
+					})
+			}).
+			WithEntityType(func(etq *ent.EntityTypeQuery) {
+				etq.Where(entitytype.HasGroupWith(group.ID(gid)))
+			}).
+			WithChildren(func(eq *ent.EntityQuery) {
+				eq.Where(entity.HasGroupWith(group.ID(gid))).
+					WithEntityType(func(etq *ent.EntityTypeQuery) {
+						etq.Where(entitytype.HasGroupWith(group.ID(gid)))
+					})
+			})
+	}
+
+	e, err := q.Only(ctx)
 	if err != nil {
 		recordSpanError(span, err)
-		return out, err
+		return EntityOut{}, err
+	}
+
+	out := mapEntityOut(e)
+	effectiveGID := gid
+	if effectiveGID == uuid.Nil && e.Edges.Group != nil {
+		effectiveGID = e.Edges.Group.ID
+	}
+	if effectiveGID != uuid.Nil {
+		var client *ent.EntityClient
+		if tx != nil {
+			client = tx.Entity
+		} else {
+			client = r.db.Entity
+		}
+		location, err := nearestLocationAncestor(ctx, client, effectiveGID, e.Edges.Parent)
+		if err != nil {
+			recordSpanError(span, err)
+			return EntityOut{}, err
+		}
+		out.Location = location
+
+		if e.Edges.EntityType != nil && e.Edges.EntityType.IsLocation {
+			var entClient *ent.Client
+			if tx != nil {
+				entClient = tx.Client()
+			} else {
+				entClient = r.db
+			}
+			totalPrice, err := descendantInventoryValue(ctx, entClient, effectiveGID, e.ID)
+			if err != nil {
+				recordSpanError(span, err)
+				return EntityOut{}, err
+			}
+			out.TotalPrice = totalPrice
+		}
 	}
 	span.SetAttributes(
 		attribute.String("entity.id", out.ID.String()),
@@ -466,8 +544,136 @@ func (r *EntityRepository) getOneTx(ctx context.Context, tx *ent.Tx, where ...pr
 	return out, nil
 }
 
-func (r *EntityRepository) getOne(ctx context.Context, where ...predicate.Entity) (EntityOut, error) {
-	return r.getOneTx(ctx, nil, where...)
+// descendantInventoryValue returns the purchase value of the unsold,
+// non-archived item descendants of a location. The recursive walk is scoped
+// at every hop so legacy cross-group edges cannot affect another tenant's
+// totals. DISTINCT prevents cycles from counting an entity repeatedly, while
+// the depth guard keeps corrupt hierarchies from recursing without bound.
+func descendantInventoryValue(
+	ctx context.Context,
+	client *ent.Client,
+	gid, rootID uuid.UUID,
+) (float64, error) {
+	const query = `
+		WITH RECURSIVE descendants(id, depth) AS (
+			SELECT e.id, 1
+			FROM entities e
+			WHERE e.entity_children = $1
+			  AND e.group_entities = $2
+
+			UNION ALL
+
+			SELECT e.id, d.depth + 1
+			FROM entities e
+			JOIN descendants d ON e.entity_children = d.id
+			WHERE e.group_entities = $2
+			  AND d.depth < $3
+		),
+		unique_descendants AS (
+			SELECT DISTINCT id
+			FROM descendants
+		)
+		SELECT COALESCE(SUM(e.purchase_price * e.quantity), 0)
+		FROM unique_descendants d
+		JOIN entities e ON e.id = d.id
+		JOIN entity_types et ON et.id = e.entity_type_entities
+		WHERE e.group_entities = $2
+		  AND et.group_entity_types = $2
+		  AND et.is_location = false
+		  AND e.archived = false
+		  AND e.sold_date IS NULL`
+
+	rows, err := client.RawQueryContext(ctx, query, rootID, gid, maxHierarchyDepth)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return 0, err
+		}
+		return 0, nil
+	}
+
+	var total float64
+	if err := rows.Scan(&total); err != nil {
+		return 0, err
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+// nearestLocationAncestor walks the parent chain and returns the first
+// location-type entity. Each hop is tenant-scoped to prevent legacy corrupt
+// cross-group edges from disclosing another group's hierarchy.
+func nearestLocationAncestor(
+	ctx context.Context,
+	entities *ent.EntityClient,
+	gid uuid.UUID,
+	start *ent.Entity,
+) (*EntitySummary, error) {
+	if start == nil {
+		return nil, nil
+	}
+
+	currentID := start.ID
+	seen := make(map[uuid.UUID]struct{}, maxHierarchyDepth)
+	for depth := 0; depth < maxHierarchyDepth; depth++ {
+		if _, ok := seen[currentID]; ok {
+			return nil, fmt.Errorf("entity hierarchy cycle detected while resolving location")
+		}
+		seen[currentID] = struct{}{}
+
+		current, err := entities.Query().
+			Where(
+				entity.ID(currentID),
+				entity.HasGroupWith(group.ID(gid)),
+			).
+			WithEntityType(func(etq *ent.EntityTypeQuery) {
+				etq.Where(entitytype.HasGroupWith(group.ID(gid)))
+			}).
+			Only(ctx)
+		if ent.IsNotFound(err) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if current.Edges.EntityType != nil && current.Edges.EntityType.IsLocation {
+			summary := mapEntitySummary(current)
+			return &summary, nil
+		}
+
+		parent, err := entities.Query().
+			Where(
+				entity.ID(currentID),
+				entity.HasGroupWith(group.ID(gid)),
+			).
+			QueryParent().
+			Where(entity.HasGroupWith(group.ID(gid))).
+			Select(entity.FieldID).
+			Only(ctx)
+		if ent.IsNotFound(err) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		currentID = parent.ID
+	}
+
+	return nil, fmt.Errorf("entity hierarchy exceeds maximum depth of %d", maxHierarchyDepth)
+}
+
+func (r *EntityRepository) getOne(
+	ctx context.Context,
+	gid uuid.UUID,
+	where ...predicate.Entity,
+) (EntityOut, error) {
+	return r.getOneTx(ctx, nil, gid, where...)
 }
 
 // GetOne returns a single entity by ID. If the entity does not exist, an error is returned.
@@ -476,7 +682,7 @@ func (r *EntityRepository) GetOne(ctx context.Context, id uuid.UUID) (EntityOut,
 		trace.WithAttributes(attribute.String("entity.id", id.String())))
 	defer span.End()
 
-	out, err := r.getOne(ctx, entity.ID(id))
+	out, err := r.getOne(ctx, uuid.Nil, entity.ID(id))
 	recordSpanError(span, err)
 	return out, err
 }
@@ -507,7 +713,7 @@ func (r *EntityRepository) GetByRef(ctx context.Context, gid uuid.UUID, ref stri
 		))
 	defer span.End()
 
-	out, err := r.getOne(ctx, entity.ImportRef(ref), entity.HasGroupWith(group.ID(gid)))
+	out, err := r.getOne(ctx, gid, entity.ImportRef(ref), entity.HasGroupWith(group.ID(gid)))
 	recordSpanError(span, err)
 	return out, err
 }
@@ -521,7 +727,7 @@ func (r *EntityRepository) GetOneByGroup(ctx context.Context, gid, id uuid.UUID)
 		))
 	defer span.End()
 
-	out, err := r.getOne(ctx, entity.ID(id), entity.HasGroupWith(group.ID(gid)))
+	out, err := r.getOne(ctx, gid, entity.ID(id), entity.HasGroupWith(group.ID(gid)))
 	recordSpanError(span, err)
 	return out, err
 }
@@ -557,7 +763,120 @@ func entityQuerySpanAttrs(gid uuid.UUID, q EntityQuery) []attribute.KeyValue {
 		attribute.Bool("query.is_container.set", isContSet),
 		attribute.Bool("query.is_container.value", isContValue),
 		attribute.Bool("query.asset_id.set", !q.AssetID.Nil()),
+		attribute.Bool("query.include_inventory_value", q.IncludeInventoryValue),
 	}
+}
+
+// inventoryValuePredicates define Homebox's current-inventory value semantic:
+// unsold, non-archived, non-location entities, valued as purchase price times
+// quantity, with both the entity and its type scoped to the tenant.
+func inventoryValuePredicates(gid uuid.UUID) []predicate.Entity {
+	return []predicate.Entity{
+		entity.HasGroupWith(group.ID(gid)),
+		entity.Archived(false),
+		entity.SoldDateIsNil(),
+		entity.HasEntityTypeWith(
+			entitytype.IsLocation(false),
+			entitytype.HasGroupWith(group.ID(gid)),
+		),
+	}
+}
+
+func inventoryValueFromQuery(ctx context.Context, gid uuid.UUID, qb *ent.EntityQuery) (float64, error) {
+	qb = qb.Where(inventoryValuePredicates(gid)...)
+
+	var result []struct {
+		Total *float64 `json:"total"`
+	}
+	err := qb.Aggregate(func(selector *entsql.Selector) string {
+		expression := fmt.Sprintf(
+			"SUM(%s * %s)",
+			selector.C(entity.FieldPurchasePrice),
+			selector.C(entity.FieldQuantity),
+		)
+		return entsql.As(expression, "total")
+	}).Scan(ctx, &result)
+	if err != nil {
+		return 0, err
+	}
+	if len(result) == 0 {
+		return 0, nil
+	}
+	return orDefault(result[0].Total, 0), nil
+}
+
+func applyEntityTypeQueryFilters(qb *ent.EntityQuery, gid uuid.UUID, q EntityQuery) *ent.EntityQuery {
+	// Default (nil) remains items-only for backward compatibility.
+	if q.IsLocation != nil && *q.IsLocation {
+		qb = qb.Where(entity.HasEntityTypeWith(
+			entitytype.IsLocation(true),
+			entitytype.HasGroupWith(group.ID(gid)),
+		))
+	} else {
+		qb = qb.Where(
+			entity.Or(
+				entity.Not(entity.HasEntityType()),
+				entity.HasEntityTypeWith(
+					entitytype.IsLocation(false),
+					entitytype.HasGroupWith(group.ID(gid)),
+				),
+			),
+		)
+	}
+
+	if q.IsContainer == nil {
+		return qb
+	}
+	if *q.IsContainer {
+		return qb.Where(entity.HasEntityTypeWith(
+			entitytype.IsContainer(true),
+			entitytype.HasGroupWith(group.ID(gid)),
+		))
+	}
+	return qb.Where(
+		entity.Or(
+			entity.Not(entity.HasEntityType()),
+			entity.HasEntityTypeWith(
+				entitytype.IsContainer(false),
+				entitytype.HasGroupWith(group.ID(gid)),
+			),
+		),
+	)
+}
+
+func prepareEntityFetchQuery(qb *ent.EntityQuery, gid uuid.UUID, q EntityQuery, paginate bool) *ent.EntityQuery {
+	switch q.OrderBy {
+	case "createdAt":
+		qb = qb.Order(ent.Desc(entity.FieldCreatedAt))
+	case "updatedAt":
+		qb = qb.Order(ent.Desc(entity.FieldUpdatedAt))
+	case "assetId":
+		qb = qb.Order(ent.Asc(entity.FieldAssetID))
+	default: // "name"
+		qb = qb.Order(ent.Asc(entity.FieldName))
+	}
+
+	qb = qb.
+		WithTag(func(tagQuery *ent.TagQuery) {
+			tagQuery.Where(tag.HasGroupWith(group.ID(gid)))
+		}).
+		WithParent(func(parentQuery *ent.EntityQuery) {
+			parentQuery.Where(entity.HasGroupWith(group.ID(gid)))
+		}).
+		WithEntityType(func(typeQuery *ent.EntityTypeQuery) {
+			typeQuery.Where(entitytype.HasGroupWith(group.ID(gid)))
+		}).
+		WithAttachments(func(aq *ent.AttachmentQuery) {
+			aq.Where(attachment.Primary(true))
+			aq.WithThumbnail()
+		})
+
+	if paginate {
+		qb = qb.
+			Offset(calculateOffset(q.Page, q.PageSize)).
+			Limit(q.PageSize)
+	}
+	return qb
 }
 
 // QueryByGroup returns a list of entities that belong to a specific group based on the provided query.
@@ -566,39 +885,17 @@ func (r *EntityRepository) QueryByGroup(ctx context.Context, gid uuid.UUID, q En
 		trace.WithAttributes(entityQuerySpanAttrs(gid, q)...))
 	defer span.End()
 
+	paginate, err := validatePagination(q.Page, q.PageSize)
+	if err != nil {
+		recordSpanError(span, err)
+		return PaginationResult[EntitySummary]{}, err
+	}
+
 	qb := r.db.Entity.Query().Where(
 		entity.HasGroupWith(group.ID(gid)),
 	)
 
-	// Filter by entity type (location vs item) when specified.
-	// Default (nil) = items only (excludes locations for backward compat)
-	switch {
-	case q.IsLocation != nil && *q.IsLocation:
-		qb = qb.Where(entity.HasEntityTypeWith(entitytype.IsLocation(true)))
-	default:
-		// nil or false: exclude locations
-		qb = qb.Where(
-			entity.Or(
-				entity.Not(entity.HasEntityType()),
-				entity.HasEntityTypeWith(entitytype.IsLocation(false)),
-			),
-		)
-	}
-
-	// Filter by container flag when specified (composes with IsLocation above).
-	if q.IsContainer != nil {
-		if *q.IsContainer {
-			qb = qb.Where(entity.HasEntityTypeWith(entitytype.IsContainer(true)))
-		} else {
-			// Entities with no entity type are trivially not containers.
-			qb = qb.Where(
-				entity.Or(
-					entity.Not(entity.HasEntityType()),
-					entity.HasEntityTypeWith(entitytype.IsContainer(false)),
-				),
-			)
-		}
-	}
+	qb = applyEntityTypeQueryFilters(qb, gid, q)
 
 	if q.FilterChildren {
 		qb = qb.Where(entity.Not(entity.HasParent()))
@@ -638,13 +935,12 @@ func (r *EntityRepository) QueryByGroup(ctx context.Context, gid uuid.UUID, q En
 			tagRepo := &TagRepository{r.db, r.bus}
 			ctxDescendants, descSpan := entityTracer().Start(ctx, "repo.EntityRepository.QueryByGroup.tagDescendants",
 				trace.WithAttributes(attribute.Int("query.tag_ids.count", len(q.TagIDs))))
-			descendants, err := tagRepo.GetDescendantTagIDs(ctxDescendants, q.TagIDs)
-			if err != nil {
-				recordSpanError(descSpan, err)
-				log.Warn().Err(err).Msg("failed to get descendant tags, using only direct tags")
-				descendants = q.TagIDs
-			} else if len(descendants) == 0 {
-				descendants = q.TagIDs
+			descendants, descendantsErr := tagRepo.GetDescendantTagIDs(ctxDescendants, gid, q.TagIDs)
+			if descendantsErr != nil {
+				recordSpanError(descSpan, descendantsErr)
+				descSpan.End()
+				recordSpanError(span, descendantsErr)
+				return PaginationResult[EntitySummary]{}, descendantsErr
 			}
 			descSpan.SetAttributes(attribute.Int("query.tag_descendants.count", len(descendants)))
 			descSpan.End()
@@ -714,6 +1010,20 @@ func (r *EntityRepository) QueryByGroup(ctx context.Context, gid uuid.UUID, q En
 
 	span.SetAttributes(attribute.Int("query.predicates.and.count", len(andPredicates)))
 
+	filteredInventoryValue := float64(0)
+	if q.IncludeInventoryValue {
+		valueCtx, valueSpan := entityTracer().Start(ctx, "repo.EntityRepository.QueryByGroup.inventoryValue")
+		filteredInventoryValue, err = inventoryValueFromQuery(valueCtx, gid, qb.Clone())
+		if err != nil {
+			recordSpanError(valueSpan, err)
+			valueSpan.End()
+			recordSpanError(span, err)
+			return PaginationResult[EntitySummary]{}, err
+		}
+		valueSpan.SetAttributes(attribute.Float64("inventory.value", filteredInventoryValue))
+		valueSpan.End()
+	}
+
 	countCtx, countSpan := entityTracer().Start(ctx, "repo.EntityRepository.QueryByGroup.count")
 	count, err := qb.Count(countCtx)
 	if err != nil {
@@ -725,34 +1035,7 @@ func (r *EntityRepository) QueryByGroup(ctx context.Context, gid uuid.UUID, q En
 	countSpan.SetAttributes(attribute.Int("query.total.count", count))
 	countSpan.End()
 
-	// Order
-	switch q.OrderBy {
-	case "createdAt":
-		qb = qb.Order(ent.Desc(entity.FieldCreatedAt))
-	case "updatedAt":
-		qb = qb.Order(ent.Desc(entity.FieldUpdatedAt))
-	case "assetId":
-		qb = qb.Order(ent.Asc(entity.FieldAssetID))
-	default: // "name"
-		qb = qb.Order(ent.Asc(entity.FieldName))
-	}
-
-	qb = qb.
-		WithTag().
-		WithParent().
-		WithEntityType().
-		WithAttachments(func(aq *ent.AttachmentQuery) {
-			aq.Where(
-				attachment.Primary(true),
-			)
-			aq.WithThumbnail()
-		})
-
-	if q.Page != -1 || q.PageSize != -1 {
-		qb = qb.
-			Offset(calculateOffset(q.Page, q.PageSize)).
-			Limit(q.PageSize)
-	}
+	qb = prepareEntityFetchQuery(qb, gid, q, paginate)
 
 	fetchCtx, fetchSpan := entityTracer().Start(ctx, "repo.EntityRepository.QueryByGroup.fetch")
 	entities, err := mapEntitiesSummaryErr(qb.All(fetchCtx))
@@ -789,10 +1072,11 @@ func (r *EntityRepository) QueryByGroup(ctx context.Context, gid uuid.UUID, q En
 	)
 
 	return PaginationResult[EntitySummary]{
-		Page:     q.Page,
-		PageSize: q.PageSize,
-		Total:    count,
-		Items:    entities,
+		Page:                   q.Page,
+		PageSize:               q.PageSize,
+		Total:                  count,
+		Items:                  entities,
+		FilteredInventoryValue: filteredInventoryValue,
 	}, nil
 }
 
@@ -865,17 +1149,26 @@ func (r *EntityRepository) QueryByAssetID(ctx context.Context, gid uuid.UUID, as
 		))
 	defer span.End()
 
+	paginate, err := validatePagination(page, pageSize)
+	if err != nil {
+		recordSpanError(span, err)
+		return PaginationResult[EntitySummary]{}, err
+	}
+
 	qb := r.db.Entity.Query().Where(
 		entity.HasGroupWith(group.ID(gid)),
 		entity.AssetID(int64(assetID)),
 	)
 
-	if page != -1 || pageSize != -1 {
+	count, err := qb.Count(ctx)
+	if err != nil {
+		recordSpanError(span, err)
+		return PaginationResult[EntitySummary]{}, err
+	}
+
+	if paginate {
 		qb.Offset(calculateOffset(page, pageSize)).
 			Limit(pageSize)
-	} else {
-		page = -1
-		pageSize = -1
 	}
 
 	entities, err := mapEntitiesSummaryErr(
@@ -894,7 +1187,7 @@ func (r *EntityRepository) QueryByAssetID(ctx context.Context, gid uuid.UUID, as
 	return PaginationResult[EntitySummary]{
 		Page:     page,
 		PageSize: pageSize,
-		Total:    len(entities),
+		Total:    count,
 		Items:    entities,
 	}, nil
 }
@@ -907,9 +1200,15 @@ func (r *EntityRepository) GetAll(ctx context.Context, gid uuid.UUID) ([]EntityO
 
 	out, err := mapEntitiesOutErr(r.db.Entity.Query().
 		Where(entity.HasGroupWith(group.ID(gid))).
-		WithTag().
-		WithParent().
-		WithEntityType().
+		WithTag(func(tagQuery *ent.TagQuery) {
+			tagQuery.Where(tag.HasGroupWith(group.ID(gid)))
+		}).
+		WithParent(func(parentQuery *ent.EntityQuery) {
+			parentQuery.Where(entity.HasGroupWith(group.ID(gid)))
+		}).
+		WithEntityType(func(typeQuery *ent.EntityTypeQuery) {
+			typeQuery.Where(entitytype.HasGroupWith(group.ID(gid)))
+		}).
 		WithFields().
 		All(ctx))
 	if err != nil {
@@ -1003,6 +1302,9 @@ func (r *EntityRepository) SetAssetID(ctx context.Context, gid uuid.UUID, id uui
 func validateQuantity(op string, quantity float64) error {
 	if math.IsNaN(quantity) || math.IsInf(quantity, 0) {
 		return fmt.Errorf("%s: invalid quantity: must be a finite number", op)
+	}
+	if quantity < 0 {
+		return fmt.Errorf("%s: invalid quantity: must not be negative", op)
 	}
 
 	return nil
@@ -1256,12 +1558,17 @@ func (r *EntityRepository) createFromTemplateTx(ctx context.Context, tx *ent.Tx,
 		fieldsCtx, fieldsSpan := entityTracer().Start(ctx, "repo.EntityRepository.createFromTemplateTx.fields",
 			trace.WithAttributes(attribute.Int("fields.count", len(data.Fields))))
 		for _, field := range data.Fields {
-			_, err = tx.EntityField.Create().
+			fieldBuilder := tx.EntityField.Create().
 				SetEntityID(newEntityID).
 				SetType(entityfield.Type(field.Type)).
 				SetName(field.Name).
 				SetTextValue(field.TextValue).
-				Save(fieldsCtx)
+				SetNumberValue(field.NumberValue).
+				SetBooleanValue(field.BooleanValue)
+			if !field.TimeValue.IsZero() {
+				fieldBuilder.SetTimeValue(field.TimeValue)
+			}
+			_, err = fieldBuilder.Save(fieldsCtx)
 			if err != nil {
 				wrapped := fmt.Errorf("failed to create field %s: %w", field.Name, err)
 				recordSpanError(fieldsSpan, wrapped)
@@ -1444,55 +1751,9 @@ func (r *EntityRepository) Delete(ctx context.Context, id uuid.UUID) error {
 		trace.WithAttributes(attribute.String("entity.id", id.String())))
 	defer span.End()
 
-	loadCtx, loadSpan := entityTracer().Start(ctx, "repo.EntityRepository.Delete.load")
-	e, err := r.db.Entity.Query().
-		Where(entity.ID(id)).
-		WithGroup().
-		WithAttachments().
-		Only(loadCtx)
-	if err != nil {
-		recordSpanError(loadSpan, err)
-		loadSpan.End()
-		recordSpanError(span, err)
-		return err
-	}
-	loadSpan.End()
-
-	// Get the group ID for attachment deletion
-	var gid uuid.UUID
-	if e.Edges.Group != nil {
-		gid = e.Edges.Group.ID
-	}
-	span.SetAttributes(
-		attribute.String("group.id", gid.String()),
-		attribute.Int("entity.attachments.count", len(e.Edges.Attachments)),
-	)
-
-	if len(e.Edges.Attachments) > 0 {
-		attCtx, attSpan := entityTracer().Start(ctx, "repo.EntityRepository.Delete.attachments",
-			trace.WithAttributes(attribute.Int("attachments.count", len(e.Edges.Attachments))))
-		for _, att := range e.Edges.Attachments {
-			err := r.attachments.Delete(attCtx, gid, att.ID)
-			if err != nil {
-				recordSpanError(attSpan, err)
-				log.Err(err).Str("attachment_id", att.ID.String()).Msg("failed to delete attachment during entity deletion")
-			}
-		}
-		attSpan.End()
-	}
-
-	_, deleteSpan := entityTracer().Start(ctx, "repo.EntityRepository.Delete.entity")
-	err = r.db.Entity.DeleteOneID(id).Exec(ctx)
-	if err != nil {
-		recordSpanError(deleteSpan, err)
-		deleteSpan.End()
-		recordSpanError(span, err)
-		return err
-	}
-	deleteSpan.End()
-
-	r.publishMutationEvent(id)
-	return nil
+	err := r.deleteEntity(ctx, uuid.Nil, id)
+	recordSpanError(span, err)
+	return err
 }
 
 func (r *EntityRepository) DeleteByGroup(ctx context.Context, gid, id uuid.UUID) error {
@@ -1503,52 +1764,55 @@ func (r *EntityRepository) DeleteByGroup(ctx context.Context, gid, id uuid.UUID)
 		))
 	defer span.End()
 
-	loadCtx, loadSpan := entityTracer().Start(ctx, "repo.EntityRepository.DeleteByGroup.load")
-	e, err := r.db.Entity.Query().
-		Where(
-			entity.ID(id),
-			entity.HasGroupWith(group.ID(gid)),
-		).
-		WithAttachments().
-		Only(loadCtx)
+	err := r.deleteEntity(ctx, gid, id)
+	recordSpanError(span, err)
+	return err
+}
+
+func (r *EntityRepository) deleteEntity(ctx context.Context, gid, id uuid.UUID) error {
+	tx, err := r.db.Tx(ctx)
 	if err != nil {
-		recordSpanError(loadSpan, err)
-		loadSpan.End()
-		recordSpanError(span, err)
 		return err
 	}
-	loadSpan.End()
-
-	span.SetAttributes(attribute.Int("entity.attachments.count", len(e.Edges.Attachments)))
-
-	if len(e.Edges.Attachments) > 0 {
-		attCtx, attSpan := entityTracer().Start(ctx, "repo.EntityRepository.DeleteByGroup.attachments",
-			trace.WithAttributes(attribute.Int("attachments.count", len(e.Edges.Attachments))))
-		for _, att := range e.Edges.Attachments {
-			err := r.attachments.Delete(attCtx, gid, att.ID)
-			if err != nil {
-				recordSpanError(attSpan, err)
-				log.Err(err).Str("attachment_id", att.ID.String()).Msg("failed to delete attachment during entity deletion")
-			}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
 		}
-		attSpan.End()
-	}
+	}()
 
-	_, deleteSpan := entityTracer().Start(ctx, "repo.EntityRepository.DeleteByGroup.entity")
-	_, err = r.db.Entity.
-		Delete().
-		Where(
-			entity.ID(id),
-			entity.HasGroupWith(group.ID(gid)),
-		).Exec(ctx)
+	predicates := []predicate.Entity{entity.ID(id)}
+	if gid != uuid.Nil {
+		predicates = append(predicates, entity.HasGroupWith(group.ID(gid)))
+	}
+	e, err := tx.Entity.Query().
+		Where(predicates...).
+		WithGroup().
+		WithAttachments(func(aq *ent.AttachmentQuery) {
+			aq.WithThumbnail()
+		}).
+		Only(ctx)
 	if err != nil {
-		recordSpanError(deleteSpan, err)
-		deleteSpan.End()
-		recordSpanError(span, err)
 		return err
 	}
-	deleteSpan.End()
+	if e.Edges.Group == nil {
+		return &ent.NotFoundError{}
+	}
+	gid = e.Edges.Group.ID
 
+	candidates, err := deleteAttachmentThumbnailsTx(ctx, tx, e.Edges.Attachments)
+	if err != nil {
+		return err
+	}
+	if err := tx.Entity.DeleteOneID(id).Exec(ctx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+
+	r.attachments.cleanupUnreferencedBlobs(ctx, candidates)
 	r.publishMutationEvent(gid)
 	return nil
 }
@@ -1563,113 +1827,160 @@ func (r *EntityRepository) WipeInventory(ctx context.Context, gid uuid.UUID, wip
 		))
 	defer span.End()
 
-	deleted := 0
-
-	// Wipe maintenance records if requested
-	// IMPORTANT: Must delete maintenance records BEFORE entities since they are linked to entities
-	if wipeMaintenance {
-		maintCtx, maintSpan := entityTracer().Start(ctx, "repo.EntityRepository.WipeInventory.maintenance")
-		maintenanceCount, err := r.db.MaintenanceEntry.Delete().
-			Where(maintenanceentry.HasEntityWith(entity.HasGroupWith(group.ID(gid)))).
-			Exec(maintCtx)
-		if err != nil {
-			recordSpanError(maintSpan, err)
-			log.Err(err).Msg("failed to delete maintenance entries during wipe inventory")
-		} else {
-			maintSpan.SetAttributes(attribute.Int("deleted.count", maintenanceCount))
-			log.Info().Int("count", maintenanceCount).Msg("deleted maintenance entries during wipe inventory")
-			deleted += maintenanceCount
-		}
-		maintSpan.End()
-	}
-
-	loadCtx, loadSpan := entityTracer().Start(ctx, "repo.EntityRepository.WipeInventory.loadEntities")
-	entities, err := r.db.Entity.Query().
-		Where(entity.HasGroupWith(group.ID(gid))).
-		WithAttachments().
-		All(loadCtx)
+	tx, err := r.db.Tx(ctx)
 	if err != nil {
-		recordSpanError(loadSpan, err)
-		loadSpan.End()
 		recordSpanError(span, err)
 		return 0, err
 	}
-	loadSpan.SetAttributes(attribute.Int("entities.count", len(entities)))
-	loadSpan.End()
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
 
-	entCtx, entSpan := entityTracer().Start(ctx, "repo.EntityRepository.WipeInventory.deleteEntities",
-		trace.WithAttributes(attribute.Int("entities.count", len(entities))))
-	entityDeleted := 0
-	attachmentsDeleted := 0
+	entityPredicates := []predicate.Entity{entity.HasGroupWith(group.ID(gid))}
+	if !wipeContainers {
+		entityPredicates = append(
+			entityPredicates,
+			entity.HasEntityTypeWith(entitytype.IsLocation(false)),
+		)
+	}
+
+	entities, err := tx.Entity.Query().
+		Where(entityPredicates...).
+		WithAttachments(func(aq *ent.AttachmentQuery) {
+			aq.WithThumbnail()
+		}).
+		All(ctx)
+	if err != nil {
+		recordSpanError(span, err)
+		return 0, err
+	}
+
+	attachments := make([]*ent.Attachment, 0)
 	for _, e := range entities {
-		for _, att := range e.Edges.Attachments {
-			err := r.attachments.Delete(entCtx, gid, att.ID)
-			if err != nil {
-				recordSpanError(entSpan, err)
-				log.Err(err).Str("attachment_id", att.ID.String()).Msg("failed to delete attachment during wipe inventory")
-				continue
-			}
-			attachmentsDeleted++
-		}
-
-		_, err = r.db.Entity.
-			Delete().
-			Where(
-				entity.ID(e.ID),
-				entity.HasGroupWith(group.ID(gid)),
-			).Exec(entCtx)
-		if err != nil {
-			recordSpanError(entSpan, err)
-			log.Err(err).Str("entity_id", e.ID.String()).Msg("failed to delete entity during wipe inventory")
-			continue
-		}
-
-		entityDeleted++
+		attachments = append(attachments, e.Edges.Attachments...)
 	}
-	entSpan.SetAttributes(
-		attribute.Int("entities.deleted.count", entityDeleted),
-		attribute.Int("attachments.deleted.count", attachmentsDeleted),
-	)
-	entSpan.End()
-	deleted += entityDeleted
+	candidates, err := deleteAttachmentThumbnailsTx(ctx, tx, attachments)
+	if err != nil {
+		recordSpanError(span, err)
+		return 0, err
+	}
 
-	// Wipe tags if requested
+	deleted := 0
+	if wipeMaintenance {
+		count, err := tx.MaintenanceEntry.Delete().
+			Where(maintenanceentry.HasEntityWith(entity.HasGroupWith(group.ID(gid)))).
+			Exec(ctx)
+		if err != nil {
+			recordSpanError(span, err)
+			return 0, err
+		}
+		deleted += count
+	}
+
+	entityCount, err := tx.Entity.Delete().
+		Where(entityPredicates...).
+		Exec(ctx)
+	if err != nil {
+		recordSpanError(span, err)
+		return 0, err
+	}
+	deleted += entityCount
+
 	if wipeTags {
-		tagCtx, tagSpan := entityTracer().Start(ctx, "repo.EntityRepository.WipeInventory.tags")
-		tagCount, err := r.db.Tag.Delete().Where(tag.HasGroupWith(group.ID(gid))).Exec(tagCtx)
+		tagCount, err := tx.Tag.Delete().
+			Where(tag.HasGroupWith(group.ID(gid))).
+			Exec(ctx)
 		if err != nil {
-			recordSpanError(tagSpan, err)
-			log.Err(err).Msg("failed to delete tags during wipe inventory")
-		} else {
-			tagSpan.SetAttributes(attribute.Int("deleted.count", tagCount))
-			log.Info().Int("count", tagCount).Msg("deleted tags during wipe inventory")
-			deleted += tagCount
+			recordSpanError(span, err)
+			return 0, err
 		}
-		tagSpan.End()
+		deleted += tagCount
 	}
 
-	// Wipe containers (location-type entities) if requested
-	if wipeContainers {
-		containerCtx, containerSpan := entityTracer().Start(ctx, "repo.EntityRepository.WipeInventory.containers")
-		containerCount, err := r.db.Entity.Delete().
-			Where(
-				entity.HasGroupWith(group.ID(gid)),
-				entity.HasEntityTypeWith(entitytype.IsLocation(true)),
-			).Exec(containerCtx)
-		if err != nil {
-			recordSpanError(containerSpan, err)
-			log.Err(err).Msg("failed to delete containers during wipe inventory")
-		} else {
-			containerSpan.SetAttributes(attribute.Int("deleted.count", containerCount))
-			log.Info().Int("count", containerCount).Msg("deleted containers during wipe inventory")
-			deleted += containerCount
-		}
-		containerSpan.End()
+	if err := tx.Commit(); err != nil {
+		recordSpanError(span, err)
+		return 0, err
 	}
+	committed = true
 
-	span.SetAttributes(attribute.Int("deleted.count.total", deleted))
+	r.attachments.cleanupUnreferencedBlobs(ctx, candidates)
+	span.SetAttributes(
+		attribute.Int("deleted.count.total", deleted),
+		attribute.Int("entities.deleted.count", entityCount),
+	)
 	r.publishMutationEvent(gid)
 	return deleted, nil
+}
+
+// maxHierarchyDepth bounds hierarchy validation when repairing legacy data
+// that may already contain a cycle.
+const maxHierarchyDepth = 256
+
+// assertValidEntityParent rejects self-parenting and moving an entity beneath
+// one of its descendants. Every hop is scoped to gid so even a legacy,
+// corrupted cross-group edge cannot be used as an existence oracle.
+func assertValidEntityParent(
+	ctx context.Context,
+	entities *ent.EntityClient,
+	gid, id, parentID uuid.UUID,
+) error {
+	if parentID == uuid.Nil {
+		return nil
+	}
+
+	currentID := parentID
+	seen := make(map[uuid.UUID]struct{}, maxHierarchyDepth)
+	for depth := 0; depth < maxHierarchyDepth; depth++ {
+		if currentID == id {
+			return fmt.Errorf("entity hierarchy cycle: %s cannot be parented beneath %s", id, parentID)
+		}
+		if _, ok := seen[currentID]; ok {
+			return fmt.Errorf("entity hierarchy cycle detected while validating parent %s", parentID)
+		}
+		seen[currentID] = struct{}{}
+
+		parent, err := entities.Query().
+			Where(
+				entity.ID(currentID),
+				entity.HasGroupWith(group.ID(gid)),
+			).
+			QueryParent().
+			Where(entity.HasGroupWith(group.ID(gid))).
+			Select(entity.FieldID).
+			Only(ctx)
+		if ent.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		currentID = parent.ID
+	}
+
+	return fmt.Errorf("entity hierarchy exceeds maximum depth of %d", maxHierarchyDepth)
+}
+
+func applyEntityUpdateDates(q *ent.EntityUpdate, data EntityUpdate) {
+	// Date fields are nullable. Writing types.Date{}.Time() would persist the
+	// 0001-01-01 sentinel instead of the intended NULL.
+	if value := data.PurchaseDate.Time(); value.IsZero() {
+		q.ClearPurchaseDate()
+	} else {
+		q.SetPurchaseDate(value)
+	}
+	if value := data.SoldDate.Time(); value.IsZero() {
+		q.ClearSoldDate()
+	} else {
+		q.SetSoldDate(value)
+	}
+	if value := data.WarrantyExpires.Time(); value.IsZero() {
+		q.ClearWarrantyExpires()
+	} else {
+		q.SetWarrantyExpires(value)
+	}
 }
 
 func (r *EntityRepository) UpdateByGroup(ctx context.Context, gid uuid.UUID, data EntityUpdate) (EntityOut, error) {
@@ -1693,23 +2004,50 @@ func (r *EntityRepository) UpdateByGroup(ctx context.Context, gid uuid.UUID, dat
 		return EntityOut{}, err
 	}
 
-	// See EntityRepository.Create for the rationale on these cross-group
-	// reference checks. Applied before the update so a rejected request never
-	// mutates the row.
-	if err := assertEntityInGroup(ctx, r.db.Entity, gid, data.ParentID); err != nil {
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
 		recordSpanError(span, err)
 		return EntityOut{}, err
 	}
-	if err := assertEntityTypeInGroup(ctx, r.db.EntityType, gid, data.EntityTypeID); err != nil {
-		recordSpanError(span, err)
-		return EntityOut{}, err
-	}
-	if err := assertTagsInGroup(ctx, r.db.Tag, gid, data.TagIDs); err != nil {
+	committed := false
+	defer func() {
+		if !committed {
+			if rollbackErr := tx.Rollback(); rollbackErr != nil {
+				log.Warn().Err(rollbackErr).Msg("failed to rollback transaction during entity update")
+			}
+		}
+	}()
+
+	// Assert ownership of the row being updated before any related reads or
+	// writes. A scoped bulk update can legitimately affect zero rows without
+	// returning an error; without this guard the unscoped tag/field work below
+	// could still mutate an entity in another group.
+	if err := assertEntityInGroup(ctx, tx.Entity, gid, data.ID); err != nil {
 		recordSpanError(span, err)
 		return EntityOut{}, err
 	}
 
-	q := r.db.Entity.Update().Where(entity.ID(data.ID), entity.HasGroupWith(group.ID(gid))).
+	// See EntityRepository.Create for the rationale on these cross-group
+	// reference checks. Applied before the update so a rejected request never
+	// mutates the row.
+	if err := assertEntityInGroup(ctx, tx.Entity, gid, data.ParentID); err != nil {
+		recordSpanError(span, err)
+		return EntityOut{}, err
+	}
+	if err := assertEntityTypeInGroup(ctx, tx.EntityType, gid, data.EntityTypeID); err != nil {
+		recordSpanError(span, err)
+		return EntityOut{}, err
+	}
+	if err := assertTagsInGroup(ctx, tx.Tag, gid, data.TagIDs); err != nil {
+		recordSpanError(span, err)
+		return EntityOut{}, err
+	}
+	if err := assertValidEntityParent(ctx, tx.Entity, gid, data.ID, data.ParentID); err != nil {
+		recordSpanError(span, err)
+		return EntityOut{}, err
+	}
+
+	q := tx.Entity.Update().Where(entity.ID(data.ID), entity.HasGroupWith(group.ID(gid))).
 		SetName(data.Name).
 		SetDescription(data.Description).
 		SetSerialNumber(data.SerialNumber).
@@ -1730,31 +2068,17 @@ func (r *EntityRepository) UpdateByGroup(ctx context.Context, gid uuid.UUID, dat
 		SetAssetID(int64(data.AssetID)).
 		SetSyncChildEntityLocations(data.SyncChildEntityLocations)
 
-	// Date fields are nullable. Writing types.Date{}.Time() would persist
-	// the 0001-01-01 sentinel that ZeroOutTimeFields then has to chase —
-	// clear the column instead so absent dates round-trip as NULL/"".
-	if t := data.PurchaseDate.Time(); t.IsZero() {
-		q.ClearPurchaseDate()
-	} else {
-		q.SetPurchaseDate(t)
-	}
-	if t := data.SoldDate.Time(); t.IsZero() {
-		q.ClearSoldDate()
-	} else {
-		q.SetSoldDate(t)
-	}
-	if t := data.WarrantyExpires.Time(); t.IsZero() {
-		q.ClearWarrantyExpires()
-	} else {
-		q.SetWarrantyExpires(t)
-	}
+	applyEntityUpdateDates(q, data)
 
 	if data.EntityTypeID != uuid.Nil {
 		q.SetEntityTypeID(data.EntityTypeID)
 	}
 
 	tagsCtx, tagsSpan := entityTracer().Start(ctx, "repo.EntityRepository.UpdateByGroup.tags")
-	currentTags, err := r.db.Entity.Query().Where(entity.ID(data.ID)).QueryTag().All(tagsCtx)
+	currentTags, err := tx.Entity.Query().
+		Where(entity.ID(data.ID), entity.HasGroupWith(group.ID(gid))).
+		QueryTag().
+		All(tagsCtx)
 	if err != nil {
 		recordSpanError(tagsSpan, err)
 		tagsSpan.End()
@@ -1790,37 +2114,6 @@ func (r *EntityRepository) UpdateByGroup(ctx context.Context, gid uuid.UUID, dat
 		q.ClearParent()
 	}
 
-	if data.SyncChildEntityLocations {
-		syncCtx, syncSpan := entityTracer().Start(ctx, "repo.EntityRepository.UpdateByGroup.syncChildLocations")
-		children, err := r.db.Entity.Query().Where(entity.ID(data.ID)).QueryChildren().All(syncCtx)
-		if err != nil {
-			recordSpanError(syncSpan, err)
-			syncSpan.End()
-			recordSpanError(span, err)
-			return EntityOut{}, err
-		}
-
-		syncSpan.SetAttributes(attribute.Int("children.count", len(children)))
-		updatedCount := 0
-		for _, child := range children {
-			if data.ParentID != uuid.Nil {
-				childParent, err := child.QueryParent().First(syncCtx)
-				if err != nil || childParent.ID != data.ParentID {
-					err = child.Update().SetParentID(data.ParentID).Exec(syncCtx)
-					if err != nil {
-						recordSpanError(syncSpan, err)
-						syncSpan.End()
-						recordSpanError(span, err)
-						return EntityOut{}, err
-					}
-					updatedCount++
-				}
-			}
-		}
-		syncSpan.SetAttributes(attribute.Int("children.updated.count", updatedCount))
-		syncSpan.End()
-	}
-
 	_, execSpan := entityTracer().Start(ctx, "repo.EntityRepository.UpdateByGroup.exec")
 	err = q.Exec(ctx)
 	if err != nil {
@@ -1831,9 +2124,26 @@ func (r *EntityRepository) UpdateByGroup(ctx context.Context, gid uuid.UUID, dat
 	}
 	execSpan.End()
 
+	if err := syncChildEntityLocationsTx(
+		ctx,
+		tx,
+		gid,
+		data.ID,
+		data.ParentID,
+		data.SyncChildEntityLocations,
+	); err != nil {
+		recordSpanError(span, err)
+		return EntityOut{}, err
+	}
+
 	fieldsCtx, fieldsSpan := entityTracer().Start(ctx, "repo.EntityRepository.UpdateByGroup.fields",
 		trace.WithAttributes(attribute.Int("fields.input.count", len(data.Fields))))
-	fields, err := r.db.EntityField.Query().Where(entityfield.HasEntityWith(entity.ID(data.ID))).All(fieldsCtx)
+	fields, err := tx.EntityField.Query().
+		Where(entityfield.HasEntityWith(
+			entity.ID(data.ID),
+			entity.HasGroupWith(group.ID(gid)),
+		)).
+		All(fieldsCtx)
 	if err != nil {
 		recordSpanError(fieldsSpan, err)
 		fieldsSpan.End()
@@ -1849,14 +2159,17 @@ func (r *EntityRepository) UpdateByGroup(ctx context.Context, gid uuid.UUID, dat
 	// Update Existing Fields
 	for _, f := range data.Fields {
 		if f.ID == uuid.Nil {
-			_, err = r.db.EntityField.Create().
+			fieldBuilder := tx.EntityField.Create().
 				SetEntityID(data.ID).
 				SetType(entityfield.Type(f.Type)).
 				SetName(f.Name).
 				SetTextValue(f.TextValue).
 				SetNumberValue(f.NumberValue).
-				SetBooleanValue(f.BooleanValue).
-				Save(fieldsCtx)
+				SetBooleanValue(f.BooleanValue)
+			if !f.TimeValue.IsZero() {
+				fieldBuilder.SetTimeValue(f.TimeValue)
+			}
+			_, err = fieldBuilder.Save(fieldsCtx)
 			if err != nil {
 				recordSpanError(fieldsSpan, err)
 				fieldsSpan.End()
@@ -1864,21 +2177,36 @@ func (r *EntityRepository) UpdateByGroup(ctx context.Context, gid uuid.UUID, dat
 				return EntityOut{}, err
 			}
 			createdFields++
+			continue
 		}
 
-		opt := r.db.EntityField.Update().
+		opt := tx.EntityField.Update().
 			Where(
 				entityfield.ID(f.ID),
-				entityfield.HasEntityWith(entity.ID(data.ID)),
+				entityfield.HasEntityWith(
+					entity.ID(data.ID),
+					entity.HasGroupWith(group.ID(gid)),
+				),
 			).
 			SetType(entityfield.Type(f.Type)).
 			SetName(f.Name).
 			SetTextValue(f.TextValue).
 			SetNumberValue(f.NumberValue).
 			SetBooleanValue(f.BooleanValue)
+		if !f.TimeValue.IsZero() {
+			opt.SetTimeValue(f.TimeValue)
+		}
 
-		_, err = opt.Save(fieldsCtx)
+		var updated int
+		updated, err = opt.Save(fieldsCtx)
 		if err != nil {
+			recordSpanError(fieldsSpan, err)
+			fieldsSpan.End()
+			recordSpanError(span, err)
+			return EntityOut{}, err
+		}
+		if updated != 1 {
+			err = &ent.NotFoundError{}
 			recordSpanError(fieldsSpan, err)
 			fieldsSpan.End()
 			recordSpanError(span, err)
@@ -1892,10 +2220,13 @@ func (r *EntityRepository) UpdateByGroup(ctx context.Context, gid uuid.UUID, dat
 
 	deletedFields := 0
 	if fieldIds.Len() > 0 {
-		deletedFields, err = r.db.EntityField.Delete().
+		deletedFields, err = tx.EntityField.Delete().
 			Where(
 				entityfield.IDIn(fieldIds.Slice()...),
-				entityfield.HasEntityWith(entity.ID(data.ID)),
+				entityfield.HasEntityWith(
+					entity.ID(data.ID),
+					entity.HasGroupWith(group.ID(gid)),
+				),
 			).Exec(fieldsCtx)
 		if err != nil {
 			recordSpanError(fieldsSpan, err)
@@ -1911,10 +2242,26 @@ func (r *EntityRepository) UpdateByGroup(ctx context.Context, gid uuid.UUID, dat
 	)
 	fieldsSpan.End()
 
+	out, err := r.getOneTx(
+		ctx,
+		tx,
+		gid,
+		entity.ID(data.ID),
+		entity.HasGroupWith(group.ID(gid)),
+	)
+	if err != nil {
+		recordSpanError(span, err)
+		return EntityOut{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		recordSpanError(span, err)
+		return EntityOut{}, err
+	}
+	committed = true
+
 	r.publishMutationEvent(gid)
-	out, err := r.GetOne(ctx, data.ID)
-	recordSpanError(span, err)
-	return out, err
+	return out, nil
 }
 
 func (r *EntityRepository) GetAllZeroImportRef(ctx context.Context, gid uuid.UUID) ([]uuid.UUID, error) {
@@ -1993,54 +2340,40 @@ func patchSyncTags(ctx context.Context, tx *ent.Tx, gid, id uuid.UUID, want []uu
 	return nil
 }
 
-// patchSyncChildLocations propagates a parent move down to children when the
-// entity has SyncChildEntityLocations enabled. No-op when the flag is off.
-func patchSyncChildLocations(ctx context.Context, tx *ent.Tx, gid, id, parentID uuid.UUID) error {
-	syncCtx, syncSpan := entityTracer().Start(ctx, "repo.EntityRepository.Patch.syncChildLocations")
-	defer syncSpan.End()
-
-	entityEnt, err := tx.Entity.Query().Where(entity.ID(id), entity.HasGroupWith(group.ID(gid))).Only(syncCtx)
-	if err != nil {
-		recordSpanError(syncSpan, err)
-		return err
-	}
-	syncSpan.SetAttributes(attribute.Bool("entity.sync_child_locations", entityEnt.SyncChildEntityLocations))
-	if !entityEnt.SyncChildEntityLocations {
+// syncChildEntityLocationsTx implements the legacy sync-child contract: when
+// explicitly enabled on an entity, its direct children move to the entity's
+// own parent. This intentionally flattens one hierarchy level; callers that
+// want nested contents to follow a moving container leave the flag disabled.
+// The scoped bulk update runs in the caller's transaction so the entity,
+// children, tags, and fields cannot be committed partially.
+func syncChildEntityLocationsTx(
+	ctx context.Context,
+	tx *ent.Tx,
+	gid, id, parentID uuid.UUID,
+	enabled bool,
+) error {
+	if !enabled || parentID == uuid.Nil {
 		return nil
 	}
 
-	children, err := tx.Entity.Query().Where(entity.ID(id), entity.HasGroupWith(group.ID(gid))).QueryChildren().All(syncCtx)
+	syncCtx, syncSpan := entityTracer().Start(ctx, "repo.EntityRepository.syncChildLocations")
+	defer syncSpan.End()
+
+	updated, err := tx.Entity.Update().
+		Where(
+			entity.HasGroupWith(group.ID(gid)),
+			entity.HasParentWith(
+				entity.ID(id),
+				entity.HasGroupWith(group.ID(gid)),
+			),
+		).
+		SetParentID(parentID).
+		Save(syncCtx)
 	if err != nil {
 		recordSpanError(syncSpan, err)
 		return err
 	}
-	updatedCount := 0
-	for _, child := range children {
-		childParent, err := child.QueryParent().First(syncCtx)
-		switch {
-		case err == nil:
-			if childParent.ID == parentID {
-				continue
-			}
-		case ent.IsNotFound(err):
-			// Child has no parent yet — treat as "needs the new parent."
-		default:
-			// Any other error (transient DB failure, context cancel, etc.)
-			// must NOT be interpreted as "missing parent → reparent" — that
-			// would silently move rows on a network blip.
-			recordSpanError(syncSpan, err)
-			return err
-		}
-		if err := child.Update().SetParentID(parentID).Exec(syncCtx); err != nil {
-			recordSpanError(syncSpan, err)
-			return err
-		}
-		updatedCount++
-	}
-	syncSpan.SetAttributes(
-		attribute.Int("children.count", len(children)),
-		attribute.Int("children.updated.count", updatedCount),
-	)
+	syncSpan.SetAttributes(attribute.Int("children.updated.count", updated))
 	return nil
 }
 
@@ -2057,26 +2390,7 @@ func (r *EntityRepository) Patch(ctx context.Context, gid, id uuid.UUID, data En
 		))
 	defer span.End()
 
-	// See EntityRepository.Create for the rationale on these cross-group
-	// reference checks. data.TagIDs == nil means "leave tags alone"; a non-nil
-	// (possibly empty) slice means "set tags to this exact list", and only the
-	// latter needs validation.
-	if err := assertEntityInGroup(ctx, r.db.Entity, gid, data.ParentID); err != nil {
-		recordSpanError(span, err)
-		return err
-	}
-	if err := assertEntityTypeInGroup(ctx, r.db.EntityType, gid, data.EntityTypeID); err != nil {
-		recordSpanError(span, err)
-		return err
-	}
-	if data.TagIDs != nil {
-		if err := assertTagsInGroup(ctx, r.db.Tag, gid, data.TagIDs); err != nil {
-			recordSpanError(span, err)
-			return err
-		}
-	}
-
-	tx, err := r.db.Tx(ctx)
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		recordSpanError(span, err)
 		return err
@@ -2084,12 +2398,42 @@ func (r *EntityRepository) Patch(ctx context.Context, gid, id uuid.UUID, data En
 	committed := false
 	defer func() {
 		if !committed {
-			if err := tx.Rollback(); err != nil {
-				log.Warn().Err(err).Msg("failed to rollback transaction during entity patch")
+			if rollbackErr := tx.Rollback(); rollbackErr != nil {
+				log.Warn().Err(rollbackErr).Msg("failed to rollback transaction during entity patch")
 			}
 		}
 	}()
 
+	// A scoped bulk update reports success even when no row matches. Reject a
+	// foreign/missing target explicitly so callers do not receive a false
+	// success response and no follow-on work can observe another tenant's row.
+	if err := assertEntityInGroup(ctx, tx.Entity, gid, id); err != nil {
+		recordSpanError(span, err)
+		return err
+	}
+
+	// See EntityRepository.Create for the rationale on these cross-group
+	// reference checks. data.TagIDs == nil means "leave tags alone"; a non-nil
+	// (possibly empty) slice means "set tags to this exact list", and only the
+	// latter needs validation.
+	if err := assertEntityInGroup(ctx, tx.Entity, gid, data.ParentID); err != nil {
+		recordSpanError(span, err)
+		return err
+	}
+	if err := assertEntityTypeInGroup(ctx, tx.EntityType, gid, data.EntityTypeID); err != nil {
+		recordSpanError(span, err)
+		return err
+	}
+	if data.TagIDs != nil {
+		if err := assertTagsInGroup(ctx, tx.Tag, gid, data.TagIDs); err != nil {
+			recordSpanError(span, err)
+			return err
+		}
+	}
+	if err := assertValidEntityParent(ctx, tx.Entity, gid, id, data.ParentID); err != nil {
+		recordSpanError(span, err)
+		return err
+	}
 	q := tx.Entity.Update().
 		Where(
 			entity.ID(id),
@@ -2135,7 +2479,22 @@ func (r *EntityRepository) Patch(ctx context.Context, gid, id uuid.UUID, data En
 	}
 
 	if data.ParentID != uuid.Nil {
-		if err := patchSyncChildLocations(ctx, tx, gid, id, data.ParentID); err != nil {
+		target, err := tx.Entity.Query().
+			Where(entity.ID(id), entity.HasGroupWith(group.ID(gid))).
+			Select(entity.FieldSyncChildEntityLocations).
+			Only(ctx)
+		if err != nil {
+			recordSpanError(span, err)
+			return err
+		}
+		if err := syncChildEntityLocationsTx(
+			ctx,
+			tx,
+			gid,
+			id,
+			data.ParentID,
+			target.SyncChildEntityLocations,
+		); err != nil {
 			recordSpanError(span, err)
 			return err
 		}
@@ -2414,7 +2773,7 @@ func (r *EntityRepository) Duplicate(ctx context.Context, gid, id uuid.UUID, opt
 	}()
 
 	// Get the original entity with all its data
-	originalEntity, err := r.getOneTx(ctx, tx, entity.ID(id), entity.HasGroupWith(group.ID(gid)))
+	originalEntity, err := r.getOneTx(ctx, tx, gid, entity.ID(id), entity.HasGroupWith(group.ID(gid)))
 	if err != nil {
 		recordSpanError(span, err)
 		return EntityOut{}, err
@@ -2503,18 +2862,22 @@ func (r *EntityRepository) Duplicate(ctx context.Context, gid, id uuid.UUID, opt
 			trace.WithAttributes(attribute.Int("fields.count", len(originalEntity.Fields))))
 		copied := 0
 		for _, field := range originalEntity.Fields {
-			_, err = tx.EntityField.Create().
+			fieldBuilder := tx.EntityField.Create().
 				SetEntityID(newEntityID).
 				SetType(entityfield.Type(field.Type)).
 				SetName(field.Name).
 				SetTextValue(field.TextValue).
 				SetNumberValue(field.NumberValue).
-				SetBooleanValue(field.BooleanValue).
-				Save(fieldsCtx)
+				SetBooleanValue(field.BooleanValue)
+			if !field.TimeValue.IsZero() {
+				fieldBuilder.SetTimeValue(field.TimeValue)
+			}
+			_, err = fieldBuilder.Save(fieldsCtx)
 			if err != nil {
 				recordSpanError(fieldsSpan, err)
-				log.Warn().Err(err).Str("field_name", field.Name).Msg("failed to copy custom field during duplication")
-				continue
+				fieldsSpan.End()
+				recordSpanError(span, err)
+				return EntityOut{}, fmt.Errorf("copy custom field %q: %w", field.Name, err)
 			}
 			copied++
 		}
@@ -2533,8 +2896,9 @@ func (r *EntityRepository) Duplicate(ctx context.Context, gid, id uuid.UUID, opt
 				Only(attCtx)
 			if err != nil {
 				recordSpanError(attSpan, err)
-				log.Warn().Err(err).Str("attachment_id", att.ID.String()).Msg("failed to find attachment during duplication")
-				continue
+				attSpan.End()
+				recordSpanError(span, err)
+				return EntityOut{}, fmt.Errorf("load attachment %s for duplication: %w", att.ID, err)
 			}
 
 			_, err = tx.Attachment.Create().
@@ -2547,8 +2911,9 @@ func (r *EntityRepository) Duplicate(ctx context.Context, gid, id uuid.UUID, opt
 				Save(attCtx)
 			if err != nil {
 				recordSpanError(attSpan, err)
-				log.Warn().Err(err).Str("original_attachment_id", att.ID.String()).Msg("failed to copy attachment during duplication")
-				continue
+				attSpan.End()
+				recordSpanError(span, err)
+				return EntityOut{}, fmt.Errorf("copy attachment %s: %w", att.ID, err)
 			}
 			copied++
 		}
@@ -2564,27 +2929,30 @@ func (r *EntityRepository) Duplicate(ctx context.Context, gid, id uuid.UUID, opt
 			All(maintCtx)
 		if err != nil {
 			recordSpanError(maintSpan, err)
-		} else {
-			maintSpan.SetAttributes(attribute.Int("maintenance.count", len(maintenanceEntries)))
-			copied := 0
-			for _, entry := range maintenanceEntries {
-				_, err = tx.MaintenanceEntry.Create().
-					SetEntityID(newEntityID).
-					SetDate(entry.Date).
-					SetScheduledDate(entry.ScheduledDate).
-					SetName(entry.Name).
-					SetDescription(entry.Description).
-					SetCost(entry.Cost).
-					Save(maintCtx)
-				if err != nil {
-					recordSpanError(maintSpan, err)
-					log.Warn().Err(err).Str("maintenance_entry_id", entry.ID.String()).Msg("failed to copy maintenance entry during duplication")
-					continue
-				}
-				copied++
-			}
-			maintSpan.SetAttributes(attribute.Int("maintenance.copied.count", copied))
+			maintSpan.End()
+			recordSpanError(span, err)
+			return EntityOut{}, fmt.Errorf("load maintenance entries for duplication: %w", err)
 		}
+		maintSpan.SetAttributes(attribute.Int("maintenance.count", len(maintenanceEntries)))
+		copied := 0
+		for _, entry := range maintenanceEntries {
+			_, err = tx.MaintenanceEntry.Create().
+				SetEntityID(newEntityID).
+				SetDate(entry.Date).
+				SetScheduledDate(entry.ScheduledDate).
+				SetName(entry.Name).
+				SetDescription(entry.Description).
+				SetCost(entry.Cost).
+				Save(maintCtx)
+			if err != nil {
+				recordSpanError(maintSpan, err)
+				maintSpan.End()
+				recordSpanError(span, err)
+				return EntityOut{}, fmt.Errorf("copy maintenance entry %s: %w", entry.ID, err)
+			}
+			copied++
+		}
+		maintSpan.SetAttributes(attribute.Int("maintenance.copied.count", copied))
 		maintSpan.End()
 	}
 
@@ -2637,8 +3005,10 @@ func (r *EntityRepository) GetAllContainers(ctx context.Context, gid uuid.UUID, 
 					entity_types ct ON ct.id = child.entity_type_entities
 				WHERE
 					child.entity_children = e.id
+					AND child.group_entities = e.group_entities
 					AND child.archived = false
 					AND ct.is_location = false
+					AND ct.group_entity_types = e.group_entities
 			) as item_count
 		FROM
 			entities e
@@ -2647,6 +3017,7 @@ func (r *EntityRepository) GetAllContainers(ctx context.Context, gid uuid.UUID, 
 		WHERE
 			e.group_entities = $1
 			AND et.is_location = true
+			AND et.group_entity_types = $1
 			{{ FILTER_CHILDREN }}
 		ORDER BY
 			e.name ASC
@@ -2729,6 +3100,7 @@ func (r *EntityRepository) CreateContainer(ctx context.Context, gid uuid.UUID, d
 			attribute.String("entity.name", data.Name),
 			attribute.Bool("entity.parent_id.set", data.ParentID != uuid.Nil),
 			attribute.Bool("entity.entity_type_id.set", data.EntityTypeID != uuid.Nil),
+			attribute.Int64("entity.asset_id", int64(data.AssetID)),
 		))
 	defer span.End()
 
@@ -2766,7 +3138,8 @@ func (r *EntityRepository) CreateContainer(ctx context.Context, gid uuid.UUID, d
 	q := r.db.Entity.Create().
 		SetName(data.Name).
 		SetDescription(data.Description).
-		SetGroupID(gid)
+		SetGroupID(gid).
+		SetAssetID(int64(data.AssetID))
 
 	if data.ParentID != uuid.Nil {
 		q.SetParentID(data.ParentID)
@@ -2807,10 +3180,29 @@ func (r *EntityRepository) UpdateContainer(ctx context.Context, gid, id uuid.UUI
 		))
 	defer span.End()
 
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		recordSpanError(span, err)
+		return EntityOut{}, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			if rollbackErr := tx.Rollback(); rollbackErr != nil {
+				log.Warn().Err(rollbackErr).Msg("failed to rollback transaction during container update")
+			}
+		}
+	}()
+
+	if err := assertEntityInGroup(ctx, tx.Entity, gid, id); err != nil {
+		recordSpanError(span, err)
+		return EntityOut{}, err
+	}
+
 	if data.ParentID != uuid.Nil {
 		validateCtx, validateSpan := entityTracer().Start(ctx, "repo.EntityRepository.UpdateContainer.validateParent")
 		// Same tenant-scope reasoning as CreateContainer above.
-		parentEntity, err := r.db.Entity.Query().
+		parentEntity, err := tx.Entity.Query().
 			Where(entity.ID(data.ParentID), entity.HasGroupWith(group.ID(gid))).
 			WithEntityType().
 			Only(validateCtx)
@@ -2831,7 +3223,12 @@ func (r *EntityRepository) UpdateContainer(ctx context.Context, gid, id uuid.UUI
 		validateSpan.End()
 	}
 
-	q := r.db.Entity.Update().
+	if err := assertValidEntityParent(ctx, tx.Entity, gid, id, data.ParentID); err != nil {
+		recordSpanError(span, err)
+		return EntityOut{}, err
+	}
+
+	q := tx.Entity.Update().
 		Where(
 			entity.ID(id),
 			entity.HasGroupWith(group.ID(gid)),
@@ -2845,16 +3242,32 @@ func (r *EntityRepository) UpdateContainer(ctx context.Context, gid, id uuid.UUI
 		q.ClearParent()
 	}
 
-	_, err := q.Save(ctx)
+	_, err = q.Save(ctx)
 	if err != nil {
 		recordSpanError(span, err)
 		return EntityOut{}, err
 	}
 
+	out, err := r.getOneTx(
+		ctx,
+		tx,
+		gid,
+		entity.ID(id),
+		entity.HasGroupWith(group.ID(gid)),
+	)
+	if err != nil {
+		recordSpanError(span, err)
+		return EntityOut{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		recordSpanError(span, err)
+		return EntityOut{}, err
+	}
+	committed = true
+
 	r.publishMutationEvent(gid)
-	out, err := r.GetOne(ctx, id)
-	recordSpanError(span, err)
-	return out, err
+	return out, nil
 }
 
 // DeleteContainerByGroup deletes a container entity by group.
@@ -2932,28 +3345,34 @@ func (r *EntityRepository) PathForEntity(ctx context.Context, gid, entityID uuid
 		SELECT e.id, e.name, e.entity_children,
 			COALESCE(e.icon, '') AS icon,
 			COALESCE(et.icon, '') AS type_icon,
-			COALESCE(et.is_container, false) AS is_container
+			COALESCE(et.is_container, false) AS is_container,
+			0 AS depth
 		FROM entities e
 		JOIN entity_types et ON et.id = e.entity_type_entities
 		WHERE e.id = $1
 		AND e.group_entities = $2
+		AND et.group_entity_types = $2
 
 		UNION ALL
 
 		SELECT e.id, e.name, e.entity_children,
 			COALESCE(e.icon, '') AS icon,
 			COALESCE(et.icon, '') AS type_icon,
-			COALESCE(et.is_container, false) AS is_container
+			COALESCE(et.is_container, false) AS is_container,
+			ep.depth + 1
 		FROM entities e
 		JOIN entity_types et ON et.id = e.entity_type_entities
 		JOIN entity_path ep ON e.id = ep.entity_children
+		WHERE e.group_entities = $2
+		AND et.group_entity_types = $2
+		AND ep.depth < $3
 	  )
 
 	  SELECT id, name, icon, type_icon, is_container
 	  FROM entity_path`
 
 	queryCtx, querySpan := entityTracer().Start(ctx, "repo.EntityRepository.PathForEntity.query")
-	rows, err := r.db.Sql().QueryContext(queryCtx, query, entityID, gid)
+	rows, err := r.db.Sql().QueryContext(queryCtx, query, entityID, gid, maxHierarchyDepth-1)
 	if err != nil {
 		recordSpanError(querySpan, err)
 		querySpan.End()
@@ -3016,6 +3435,7 @@ func (r *EntityRepository) Tree(ctx context.Context, gid uuid.UUID, tq TreeQuery
 			WHERE   e.entity_children IS NULL
 			AND     e.group_entities = $1
 			AND     et.is_location = true
+			AND     et.group_entity_types = $1
 
 			UNION ALL
 			SELECT  c.id,
@@ -3030,8 +3450,10 @@ func (r *EntityRepository) Tree(ctx context.Context, gid uuid.UUID, tq TreeQuery
 			JOIN   entity_types ct ON ct.id = c.entity_type_entities
 			JOIN   entity_tree p
 			ON     c.entity_children = p.id
-			WHERE  level < 10 -- prevent infinite loop & excessive recursion
+			WHERE  level < $2 -- prevent infinite loop & excessive recursion
+			AND    c.group_entities = $1
 			AND    ct.is_location = true
+			AND    ct.group_entity_types = $1
 		){{ WITH_ITEMS }}
 
 		SELECT   id,
@@ -3067,6 +3489,8 @@ func (r *EntityRepository) Tree(ctx context.Context, gid uuid.UUID, tq TreeQuery
 			FROM    entities e
 			JOIN    entity_types et ON et.id = e.entity_type_entities
 			WHERE   et.is_location = false
+			AND     e.group_entities = $1
+			AND     et.group_entity_types = $1
 			AND     e.entity_children IN (SELECT id FROM entity_tree)
 
 			UNION ALL
@@ -3084,7 +3508,9 @@ func (r *EntityRepository) Tree(ctx context.Context, gid uuid.UUID, tq TreeQuery
 			JOIN    item_tree p
 			ON      c.entity_children = p.id
 			WHERE   ct.is_location = false
-			AND     level < 10 -- prevent infinite loop & excessive recursion
+			AND     c.group_entities = $1
+			AND     ct.group_entity_types = $1
+			AND     level < $2 -- prevent infinite loop & excessive recursion
 		)`
 
 		itemsFrom := `
@@ -3100,7 +3526,7 @@ func (r *EntityRepository) Tree(ctx context.Context, gid uuid.UUID, tq TreeQuery
 	}
 
 	queryCtx, querySpan := entityTracer().Start(ctx, "repo.EntityRepository.Tree.query")
-	rows, err := r.db.Sql().QueryContext(queryCtx, query, gid)
+	rows, err := r.db.Sql().QueryContext(queryCtx, query, gid, maxHierarchyDepth-1)
 	if err != nil {
 		recordSpanError(querySpan, err)
 		querySpan.End()

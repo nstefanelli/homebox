@@ -1,8 +1,51 @@
 package hasher
 
 import (
+	"encoding/base64"
+	"fmt"
+	"strings"
 	"testing"
 )
+
+func TestDecodeHashRejectsResourceExhaustionParameters(t *testing.T) {
+	validSalt := base64.RawStdEncoding.EncodeToString([]byte("0123456789abcdef"))
+	validKey := base64.RawStdEncoding.EncodeToString(make([]byte, 32))
+
+	tests := []struct {
+		name string
+		hash string
+	}{
+		{
+			name: "excessive memory",
+			hash: fmt.Sprintf("$argon2id$v=19$m=%d,t=3,p=2$%s$%s", maxArgonMemoryKiB+1, validSalt, validKey),
+		},
+		{
+			name: "zero iterations",
+			hash: fmt.Sprintf("$argon2id$v=19$m=65536,t=0,p=2$%s$%s", validSalt, validKey),
+		},
+		{
+			name: "oversized salt",
+			hash: fmt.Sprintf("$argon2id$v=19$m=65536,t=3,p=2$%s$%s",
+				base64.RawStdEncoding.EncodeToString([]byte(strings.Repeat("s", maxArgonComponentLength+1))),
+				validKey),
+		},
+		{
+			name: "oversized key",
+			hash: fmt.Sprintf("$argon2id$v=19$m=65536,t=3,p=2$%s$%s",
+				validSalt,
+				base64.RawStdEncoding.EncodeToString([]byte(strings.Repeat("k", maxArgonComponentLength+1)))),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, _, err := decodeHash(tt.hash)
+			if err == nil {
+				t.Fatal("decodeHash accepted resource-exhausting parameters")
+			}
+		})
+	}
+}
 
 func TestHashPassword(t *testing.T) {
 	t.Parallel()

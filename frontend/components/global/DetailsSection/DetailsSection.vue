@@ -3,7 +3,7 @@
     <dl class="sm:divide-y">
       <div v-for="detail in details" :key="detail.name" class="group py-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
         <dt class="text-sm font-medium">
-          {{ $t(detail.name) }}
+          {{ detail.translateName === false ? detail.name : $t(detail.name) }}
         </dt>
         <dd class="text-start text-sm sm:col-span-2">
           <slot :name="detail.slot || detail.name" v-bind="{ detail }">

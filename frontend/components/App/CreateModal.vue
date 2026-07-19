@@ -10,6 +10,9 @@
           </DialogTitle>
           <slot name="header-actions" />
         </div>
+        <DialogDescription class="sr-only">
+          {{ description || title || $t("global.create") }}
+        </DialogDescription>
       </DialogHeader>
 
       <slot />
@@ -17,6 +20,7 @@
       <DialogFooter v-if="!hideFooter">
         <i18n-t
           keypath="components.app.create_modal.createAndAddAnother"
+          scope="global"
           tag="span"
           class="flex items-center gap-1 text-sm"
         >
@@ -39,6 +43,9 @@
             {{ title }}
           </slot>
         </DrawerTitle>
+        <DrawerDescription class="sr-only">
+          {{ description || title || $t("global.create") }}
+        </DrawerDescription>
       </DrawerHeader>
       <div class="flex justify-center">
         <slot name="header-actions" />
@@ -54,8 +61,15 @@
 <script setup lang="ts">
   import { useMediaQuery } from "@vueuse/core";
   import type { DialogID } from "@/components/ui/dialog-provider/utils";
-  import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
-  import { Dialog, DialogFooter, DialogHeader, DialogScrollContent, DialogTitle } from "@/components/ui/dialog";
+  import { Drawer, DrawerContent, DrawerDescription, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
+  import {
+    Dialog,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogScrollContent,
+    DialogTitle,
+  } from "@/components/ui/dialog";
   import { Shortcut } from "@/components/ui/shortcut";
 
   const isDesktop = useMediaQuery("(min-width: 768px)");
@@ -63,6 +77,7 @@
   defineProps<{
     dialogId: DialogID;
     title?: string;
+    description?: string;
     hideFooter?: boolean;
   }>();
 </script>

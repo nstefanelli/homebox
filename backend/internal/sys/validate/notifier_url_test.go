@@ -34,7 +34,7 @@ func TestValidateNotifierURL(t *testing.T) {
 		},
 		{
 			name: "generic notifier with public IP passes",
-			url:  "generic://https://example.com/webhook",
+			url:  "generic://https://8.8.8.8/webhook",
 			config: config.NotifierConf{
 				BlockLocalhost:     true,
 				BlockLocalNets:     true,
@@ -45,7 +45,7 @@ func TestValidateNotifierURL(t *testing.T) {
 		},
 		{
 			name: "generic notifier shorthand host/path passes",
-			url:  "generic://example.com/webhook",
+			url:  "generic://8.8.4.4/webhook",
 			config: config.NotifierConf{
 				BlockLocalhost:     true,
 				BlockLocalNets:     true,

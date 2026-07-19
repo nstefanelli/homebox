@@ -61,12 +61,12 @@
       currentLocation.value = params.currentLocation;
 
       if (params.changeLocation && params.items.length > 0) {
-        // if all locations are the same then set the current location to said location
-        if (
-          params.items[0]!.location &&
-          params.items.every(item => item.location?.id === params.items[0]!.location?.id)
-        ) {
-          newLocation.value = params.items[0]!.location;
+        // List summaries expose the direct parent. Preselect it only when it is
+        // itself a location type; an item parent is not a valid value for the
+        // location selector.
+        const firstParent = params.items[0]!.parent;
+        if (firstParent?.entityType?.isLocation && params.items.every(item => item.parent?.id === firstParent.id)) {
+          newLocation.value = firstParent;
         }
       }
 
@@ -93,52 +93,61 @@
     }
 
     saving.value = true;
+    let failed = false;
 
-    // Process items sequentially to avoid database locking issues with concurrent write transactions
-    for (const item of items.value) {
-      const patch: EntityPatch = {
-        id: item.id,
-      };
+    try {
+      // Process items sequentially to avoid database locking issues with concurrent write transactions
+      for (const item of items.value) {
+        const patch: EntityPatch = {
+          id: item.id,
+        };
 
-      if (enabled.changeLocation) {
-        patch.parentId = location!.id;
-      }
+        if (enabled.changeLocation) {
+          patch.parentId = location!.id;
+        }
 
-      let currentTags = item.tags.map(l => l.id);
+        let currentTags = item.tags.map(l => l.id);
 
-      if (enabled.addTags) {
-        currentTags = currentTags.concat(tagsToAdd);
-      }
+        if (enabled.addTags) {
+          currentTags = currentTags.concat(tagsToAdd);
+        }
 
-      if (enabled.removeTags) {
-        currentTags = currentTags.filter(l => !tagsToRemove.includes(l));
-      }
+        if (enabled.removeTags) {
+          currentTags = currentTags.filter(l => !tagsToRemove.includes(l));
+        }
 
-      if (enabled.addTags || enabled.removeTags) {
-        patch.tagIds = Array.from(new Set(currentTags));
-      }
+        if (enabled.addTags || enabled.removeTags) {
+          patch.tagIds = Array.from(new Set(currentTags));
+        }
 
-      const { error, data } = await api.items.patch(item.id, patch);
-
-      if (error) {
-        console.error("failed to update item", item.id, data);
+        try {
+          const { error } = await api.items.patch(item.id, patch);
+          if (!error) continue;
+        } catch {
+          // Surface transport failures through the same user-facing feedback.
+        }
+        failed = true;
         toast.error(t("components.item.view.change_details.failed_to_update_item"));
-        continue;
       }
-    }
 
-    closeDialog(DialogID.ItemChangeDetails, true);
-    enabled.changeLocation = false;
-    enabled.addTags = false;
-    enabled.removeTags = false;
-    items.value = [];
-    newLocation.value = null;
-    currentLocation.value = undefined;
-    addTags.value = [];
-    removeTags.value = [];
-    availableToAddTags.value = [];
-    availableToRemoveTags.value = [];
-    saving.value = false;
+      // Keep the dialog and selection intact after a partial failure so the
+      // operation can be retried. Reapplying location/tag changes is idempotent.
+      if (failed) return;
+
+      closeDialog(DialogID.ItemChangeDetails, true);
+      enabled.changeLocation = false;
+      enabled.addTags = false;
+      enabled.removeTags = false;
+      items.value = [];
+      newLocation.value = null;
+      currentLocation.value = undefined;
+      addTags.value = [];
+      removeTags.value = [];
+      availableToAddTags.value = [];
+      availableToRemoveTags.value = [];
+    } finally {
+      saving.value = false;
+    }
   };
 </script>
 

@@ -44,6 +44,7 @@
     isContainer: false,
   });
   const createTemplate = ref<EntityTemplateSummary | null>(null);
+  const creating = ref(false);
 
   function resetCreateForm() {
     createForm.name = "";
@@ -62,8 +63,15 @@
       }
     }
   );
+  watch(
+    () => createForm.isContainer,
+    isContainer => {
+      if (createForm.isLocation && !isContainer) createTemplate.value = null;
+    }
+  );
 
   async function create() {
+    if (creating.value) return;
     if (!createForm.name.trim()) {
       toast.error(t("components.entityTypes.toasts.name_required"));
       return;
@@ -77,16 +85,27 @@
       ...(createTemplate.value?.id ? { defaultTemplateId: createTemplate.value.id } : {}),
     } as EntityTypeCreate;
 
-    const { error } = await api.entityTypes.create(payload);
-    if (error) {
-      toast.error(t("components.entityTypes.toasts.create_failed"));
-      return;
-    }
+    creating.value = true;
+    try {
+      const { error } = await api.entityTypes.create(payload);
+      if (error) {
+        toast.error(t("components.entityTypes.toasts.create_failed"));
+        return;
+      }
 
-    toast.success(t("components.entityTypes.toasts.create_success"));
-    resetCreateForm();
-    closeDialog(DialogID.CreateEntityType);
-    entityTypeStore.refresh();
+      toast.success(t("components.entityTypes.toasts.create_success"));
+      resetCreateForm();
+      closeDialog(DialogID.CreateEntityType);
+      try {
+        await entityTypeStore.refresh();
+      } catch {
+        // The mutation succeeded; a later page/store refresh will reconcile.
+      }
+    } catch {
+      toast.error(t("components.entityTypes.toasts.create_failed"));
+    } finally {
+      creating.value = false;
+    }
   }
 
   // Update form
@@ -99,6 +118,7 @@
     originalIsItem: false,
   });
   const updateTemplate = ref<EntityTemplateSummary | null>(null);
+  const updating = ref(false);
 
   watch(
     () => updateForm.isLocation,
@@ -107,6 +127,12 @@
         updateForm.isContainer = false;
         updateForm.icon = "";
       }
+    }
+  );
+  watch(
+    () => updateForm.isContainer,
+    isContainer => {
+      if (updateForm.isLocation && !isContainer) updateTemplate.value = null;
     }
   );
 
@@ -128,6 +154,7 @@
   }
 
   async function update() {
+    if (updating.value) return;
     if (!updateForm.name.trim()) {
       toast.error(t("components.entityTypes.toasts.name_required"));
       return;
@@ -147,15 +174,26 @@
       if (isCanceled) return;
     }
 
-    const { error } = await api.entityTypes.update(updateForm.id, payload);
-    if (error) {
-      toast.error(t("components.entityTypes.toasts.update_failed"));
-      return;
-    }
+    updating.value = true;
+    try {
+      const { error } = await api.entityTypes.update(updateForm.id, payload);
+      if (error) {
+        toast.error(t("components.entityTypes.toasts.update_failed"));
+        return;
+      }
 
-    toast.success(t("components.entityTypes.toasts.update_success"));
-    closeDialog(DialogID.UpdateEntityType);
-    entityTypeStore.refresh();
+      toast.success(t("components.entityTypes.toasts.update_success"));
+      closeDialog(DialogID.UpdateEntityType);
+      try {
+        await entityTypeStore.refresh();
+      } catch {
+        // The mutation succeeded; a later page/store refresh will reconcile.
+      }
+    } catch {
+      toast.error(t("components.entityTypes.toasts.update_failed"));
+    } finally {
+      updating.value = false;
+    }
   }
 
   async function deleteEntityType(et: EntityTypeSummary) {
@@ -164,14 +202,22 @@
     );
     if (isCanceled) return;
 
-    const { error } = await api.entityTypes.delete(et.id);
-    if (error) {
+    let result;
+    try {
+      result = await api.entityTypes.delete(et.id);
+    } catch {
+      toast.error(t("components.entityTypes.toasts.delete_confirm_failed"));
+      return;
+    }
+    if (result.error) {
       toast.error(t("components.entityTypes.toasts.delete_confirm_failed"));
       return;
     }
 
     toast.success(t("components.entityTypes.toasts.delete_success"));
-    entityTypeStore.refresh();
+    void entityTypeStore.refresh().catch(() => {
+      // The mutation succeeded; a later page/store refresh will reconcile.
+    });
   }
 </script>
 
@@ -205,10 +251,10 @@
             v-model="createForm.icon"
             :label="t('components.entityTypes.create_dialog.icon_label')"
           />
-          <TemplateSelector v-if="!createForm.isLocation" v-model="createTemplate" />
+          <TemplateSelector v-if="!createForm.isLocation || createForm.isContainer" v-model="createTemplate" />
 
           <DialogFooter>
-            <Button type="submit">{{ t("components.entityTypes.create_dialog.button") }}</Button>
+            <Button type="submit" :disabled="creating">{{ t("components.entityTypes.create_dialog.button") }}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -242,10 +288,10 @@
             v-model="updateForm.icon"
             :label="t('components.entityTypes.update_dialog.icon_label')"
           />
-          <TemplateSelector v-if="!updateForm.isLocation" v-model="updateTemplate" />
+          <TemplateSelector v-if="!updateForm.isLocation || updateForm.isContainer" v-model="updateTemplate" />
 
           <DialogFooter>
-            <Button type="submit">{{ t("components.entityTypes.update_dialog.button") }}</Button>
+            <Button type="submit" :disabled="updating">{{ t("components.entityTypes.update_dialog.button") }}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -272,7 +318,7 @@
 
           <div class="mr-auto min-w-0">
             <div class="flex items-center gap-2">
-              <span class="font-medium">{{ t(et.name) }}</span>
+              <span class="font-medium">{{ et.name }}</span>
               <Badge v-if="et.isLocation" variant="secondary" class="text-xs">
                 {{ t("components.entityTypes.card.badge_container") }}
               </Badge>
@@ -280,7 +326,7 @@
                 {{ t("components.entityTypes.card.badge_is_container") }}
               </Badge>
             </div>
-            <p v-if="et.defaultTemplate && !et.isLocation" class="text-xs text-muted-foreground">
+            <p v-if="et.defaultTemplate && (!et.isLocation || et.isContainer)" class="text-xs text-muted-foreground">
               {{ t("components.entityTypes.card.default_template", { name: et.defaultTemplate.name }) }}
             </p>
           </div>

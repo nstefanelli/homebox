@@ -18,14 +18,15 @@ The upgrade test workflow is designed to ensure data integrity and functionality
 ## Trigger Conditions
 
 The workflow runs:
-- **Daily**: Automatically at 2 AM UTC (via cron schedule)
-- **Manual**: Can be triggered manually via GitHub Actions UI
-- **On Push**: When changes are made to the workflow files or test scripts
+- **Manual**: It can be triggered from the GitHub Actions UI.
+- **On pull requests and pushes to `main`**: It runs when database schemas,
+  migrations, the regular Dockerfile, the upgrade workflow/scripts, or the
+  upgrade verification tests change.
 
 ## Test Scenarios
 
 ### 1. Environment Setup
-- Pulls the latest stable HomeBox Docker image from GHCR
+- Pulls the upstream `v0.26.2` HomeBox Docker image this fork is based on
 - Starts the application with test configuration
 - Ensures the service is healthy and ready
 
@@ -134,19 +135,23 @@ sudo apt-get install -y jq curl docker.io
 
 # Install pnpm and Playwright
 cd frontend
-pnpm install
+pnpm install --frozen-lockfile
 pnpm exec playwright install --with-deps chromium
 ```
 
 ### Run the test
 ```bash
+# Use the same stable test-only pepper before and after the upgrade.
+export HBOX_AUTH_API_KEY_PEPPER=homebox-upgrade-test-only-pepper-00000001
+
 # Start stable version
 docker run -d \
   --name homebox-test \
   -p 7745:7745 \
   -e HBOX_OPTIONS_ALLOW_REGISTRATION=true \
+  -e HBOX_AUTH_API_KEY_PEPPER \
   -v /tmp/homebox-data:/data \
-  ghcr.io/sysadminsmedia/homebox:latest
+  ghcr.io/sysadminsmedia/homebox:0.26.2
 
 # Wait for startup
 sleep 10
@@ -167,6 +172,7 @@ docker run -d \
   --name homebox-test \
   -p 7745:7745 \
   -e HBOX_OPTIONS_ALLOW_REGISTRATION=true \
+  -e HBOX_AUTH_API_KEY_PEPPER \
   -v /tmp/homebox-data:/data \
   homebox:test
 

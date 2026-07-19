@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,6 +20,11 @@ import (
 type TokenRepository struct {
 	db *ent.Client
 }
+
+var (
+	ErrSessionTokenNotFound     = errors.New("session token not found")
+	ErrSessionTokenUserMismatch = errors.New("session token belongs to another user")
+)
 
 type (
 	UserAuthTokenCreate struct {
@@ -103,8 +109,20 @@ func (r *TokenRepository) CreateToken(ctx context.Context, createToken UserAuthT
 		))
 	defer span.End()
 
+	tx, err := r.db.Tx(ctx)
+	if err != nil {
+		recordSpanError(span, err)
+		return UserAuthToken{}, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
 	tokenCtx, tokenSpan := entityTracer().Start(ctx, "repo.TokenRepository.CreateToken.token")
-	dbToken, err := r.db.AuthTokens.Create().
+	dbToken, err := tx.AuthTokens.Create().
 		SetToken(createToken.TokenHash).
 		SetUserID(createToken.UserID).
 		SetExpiresAt(createToken.ExpiresAt).
@@ -121,7 +139,7 @@ func (r *TokenRepository) CreateToken(ctx context.Context, createToken UserAuthT
 		rolesCtx, rolesSpan := entityTracer().Start(ctx, "repo.TokenRepository.CreateToken.roles",
 			trace.WithAttributes(attribute.Int("roles.count", len(roles))))
 		for _, role := range roles {
-			_, err := r.db.AuthRoles.Create().
+			_, err := tx.AuthRoles.Create().
 				SetRole(role).
 				SetToken(dbToken).
 				Save(rolesCtx)
@@ -134,6 +152,11 @@ func (r *TokenRepository) CreateToken(ctx context.Context, createToken UserAuthT
 		}
 		rolesSpan.End()
 	}
+	if err := tx.Commit(); err != nil {
+		recordSpanError(span, err)
+		return UserAuthToken{}, err
+	}
+	committed = true
 
 	return UserAuthToken{
 		UserAuthTokenCreate: UserAuthTokenCreate{
@@ -143,6 +166,58 @@ func (r *TokenRepository) CreateToken(ctx context.Context, createToken UserAuthT
 		},
 		CreatedAt: dbToken.CreatedAt,
 	}, nil
+}
+
+func (r *TokenRepository) resolveSessionToken(ctx context.Context, tokenHash []byte) (uuid.UUID, time.Time, error) {
+	dbToken, err := r.db.AuthTokens.Query().
+		Where(authtokens.Token(tokenHash)).
+		WithUser().
+		Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return uuid.Nil, time.Time{}, ErrSessionTokenNotFound
+		}
+		return uuid.Nil, time.Time{}, err
+	}
+	usr, err := dbToken.Edges.UserOrErr()
+	if err != nil {
+		return uuid.Nil, time.Time{}, err
+	}
+	return usr.ID, dbToken.ExpiresAt, nil
+}
+
+// DeleteSessionByToken revokes both bearer rows minted for one login. Session
+// rows share the same user and exact expiry timestamp; the user-facing token
+// and restricted attachment token differ only in their token hash and role.
+func (r *TokenRepository) DeleteSessionByToken(ctx context.Context, tokenHash []byte) (int, error) {
+	ctx, span := entityTracer().Start(ctx, "repo.TokenRepository.DeleteSessionByToken",
+		trace.WithAttributes(attribute.Int("token.hash.length", len(tokenHash))))
+	defer span.End()
+
+	userID, expiresAt, err := r.resolveSessionToken(ctx, tokenHash)
+	if err != nil {
+		recordSpanError(span, err)
+		return 0, err
+	}
+	deleted, err := r.db.AuthTokens.Delete().
+		Where(
+			authtokens.HasUserWith(user.ID(userID)),
+			authtokens.ExpiresAtEQ(expiresAt),
+		).
+		Exec(ctx)
+	if err != nil {
+		recordSpanError(span, err)
+		return 0, err
+	}
+	if deleted == 0 {
+		recordSpanError(span, ErrSessionTokenNotFound)
+		return 0, ErrSessionTokenNotFound
+	}
+	span.SetAttributes(
+		attribute.String("user.id", userID.String()),
+		attribute.Int("tokens.deleted.count", deleted),
+	)
+	return deleted, nil
 }
 
 // DeleteAllByUser revokes every session token for the given user. Called after
@@ -177,6 +252,38 @@ func (r *TokenRepository) DeleteAllByUserExceptToken(ctx context.Context, userID
 		Where(
 			authtokens.HasUserWith(user.ID(userID)),
 			authtokens.TokenNEQ(exceptHash),
+		).
+		Exec(ctx)
+	if err != nil {
+		recordSpanError(span, err)
+		return 0, err
+	}
+	span.SetAttributes(attribute.Int("tokens.deleted.count", deleted))
+	return deleted, nil
+}
+
+// DeleteAllByUserExceptSession revokes every login except the pair containing
+// exceptHash. Preserving by exact user+expiry keeps both the normal bearer and
+// its restricted attachment token alive for the current browser.
+func (r *TokenRepository) DeleteAllByUserExceptSession(ctx context.Context, userID uuid.UUID, exceptHash []byte) (int, error) {
+	ctx, span := entityTracer().Start(ctx, "repo.TokenRepository.DeleteAllByUserExceptSession",
+		trace.WithAttributes(attribute.String("user.id", userID.String())))
+	defer span.End()
+
+	tokenUserID, expiresAt, err := r.resolveSessionToken(ctx, exceptHash)
+	if err != nil {
+		recordSpanError(span, err)
+		return 0, err
+	}
+	if tokenUserID != userID {
+		recordSpanError(span, ErrSessionTokenUserMismatch)
+		return 0, ErrSessionTokenUserMismatch
+	}
+
+	deleted, err := r.db.AuthTokens.Delete().
+		Where(
+			authtokens.HasUserWith(user.ID(userID)),
+			authtokens.ExpiresAtNEQ(expiresAt),
 		).
 		Exec(ctx)
 	if err != nil {

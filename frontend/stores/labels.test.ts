@@ -21,7 +21,7 @@ describe("useLabelPrintQueue", () => {
     q.set([entry("a"), entry("b")]);
     expect(q.entries).toHaveLength(2);
 
-    q.add([entry("b"), entry("c")]);
+    q.add([entry("b"), entry("c"), entry("c")]);
     expect(q.entries.map(e => e.id)).toEqual(["a", "b", "c"]);
 
     q.clear();

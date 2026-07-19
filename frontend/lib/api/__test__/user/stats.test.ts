@@ -40,8 +40,9 @@ function importFileGenerator(entries: number): ImportObj[] {
 
   const pick = (arr: string[]) => arr[Math.floor(Math.random() * arr.length)];
 
-  const tags = faker.word.words(5).split(" ").join(";");
-  const locations = faker.word.words(3).split(" ");
+  const namespace = faker.string.alphanumeric(12);
+  const tags = Array.from({ length: 5 }, (_, index) => `tag-${namespace}-${index}`).join(";");
+  const locations = Array.from({ length: 3 }, (_, index) => `location-${namespace}-${index}`);
 
   const half = Math.floor(entries / 2);
 
@@ -53,7 +54,7 @@ function importFileGenerator(entries: number): ImportObj[] {
       [`HB.import_ref`]: faker.database.mongodbObjectId(),
       [`HB.location`]: pick(locations),
       [`HB.tags`]: tags,
-      [`HB.quantity`]: Number(faker.number.int(2)),
+      [`HB.quantity`]: faker.number.int({ min: 1, max: 3 }),
       [`HB.name`]: faker.word.words(3),
       [`HB.description`]: "",
       [`HB.insured`]: faker.datatype.boolean(),
@@ -66,9 +67,9 @@ function importFileGenerator(entries: number): ImportObj[] {
       [`HB.purchase_date`]: formatDate(faker.date.past()),
       [`HB.lifetime_warranty`]: half > i,
       [`HB.warranty_details`]: "",
-      [`HB.sold_to`]: faker.person.fullName(),
-      [`HB.sold_price`]: faker.number.int(100),
-      [`HB.sold_date`]: formatDate(faker.date.past()),
+      [`HB.sold_to`]: "",
+      [`HB.sold_price`]: 0,
+      [`HB.sold_date`]: "",
       [`HB.sold_notes`]: "",
     });
   }
@@ -106,17 +107,17 @@ describe("group related statistics tests", () => {
       const tags = item[`HB.tags`].split(";");
       for (const tag of tags) {
         if (tagData[tag]) {
-          tagData[tag] += item[`HB.purchase_price`];
+          tagData[tag] += item[`HB.purchase_price`] * item[`HB.quantity`];
         } else {
-          tagData[tag] = item[`HB.purchase_price`];
+          tagData[tag] = item[`HB.purchase_price`] * item[`HB.quantity`];
         }
       }
 
       const location = item[`HB.location`];
       if (locationData[location]) {
-        locationData[location] += item[`HB.purchase_price`];
+        locationData[location] += item[`HB.purchase_price`] * item[`HB.quantity`];
       } else {
-        locationData[location] = item[`HB.purchase_price`];
+        locationData[location] = item[`HB.purchase_price`] * item[`HB.quantity`];
       }
     }
   });

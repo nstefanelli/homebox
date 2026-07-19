@@ -1,418 +1,326 @@
 /**
- * HomeBox Upgrade Verification Tests
+ * Deterministic post-migration checks for the upgrade-test workflow.
  *
- * NOTE: These tests are ONLY meant to run in the upgrade-test workflow.
- * They require test data to be pre-created by the create-test-data.sh script.
- * These tests are stored in test/upgrade/ (not test/e2e/) to prevent them
- * from running during normal E2E test runs.
+ * The pre-upgrade script stores credentials and stable fixture identifiers,
+ * but never authentication tokens. Every user must establish a fresh session
+ * against the upgraded application before any persistence checks run.
  */
 
-import { expect, test } from "@playwright/test";
-import * as fs from "fs";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { expect, request as playwrightRequest, test } from "@playwright/test";
+import type { APIRequestContext, APIResponse } from "@playwright/test";
 
-// Load test data created by the setup script
-const testDataPath = process.env.TEST_DATA_FILE || "/tmp/test-users.json";
+type UserKey = "group1Owner" | "group1Member" | "group2Owner";
 
 interface TestUser {
+  key: UserKey;
   email: string;
   password: string;
-  token: string;
-  group: string;
+  group: "group1" | "group2";
+  role: "owner" | "member";
+}
+
+interface StoredEntity {
+  id: string;
+  name: string;
+  description: string;
+  quantity?: number;
 }
 
 interface TestData {
-  users?: TestUser[];
-  locations?: Record<string, string[]>;
-  tags?: Record<string, string[]>;
-  items?: Record<string, string[]>;
-  notifiers?: Record<string, string[]>;
+  users: TestUser[];
+  groups: {
+    group1: {
+      location: StoredEntity;
+      tag: {
+        id: string;
+        name: string;
+        description: string;
+        color: string;
+      };
+      item: StoredEntity & {
+        quantity: number;
+        locationId: string;
+        tagId: string;
+      };
+      notifier: {
+        id: string;
+        name: string;
+        url: string;
+      };
+      attachment: {
+        id: string;
+        entityId: string;
+        title: string;
+        type: string;
+        sha256: string;
+      };
+    };
+    group2: {
+      item: StoredEntity & {
+        quantity: number;
+      };
+    };
+  };
 }
 
-let testData: TestData = {};
+interface LoginResponse {
+  token: string;
+}
 
-test.beforeAll(() => {
-  if (fs.existsSync(testDataPath)) {
-    const rawData = fs.readFileSync(testDataPath, "utf-8");
-    testData = JSON.parse(rawData);
-    console.log("Loaded test data:", JSON.stringify(testData, null, 2));
-  } else {
-    console.error(`Test data file not found at ${testDataPath}`);
-    throw new Error("Test data file not found");
+interface UserSelfResponse {
+  item: {
+    id: string;
+    email: string;
+    defaultGroupId: string;
+    groupIds: string[];
+  };
+}
+
+interface EntityResponse {
+  id: string;
+  name: string;
+  description: string;
+  quantity: number;
+  parent?: { id: string; name: string } | null;
+  tags: { id: string; name: string }[];
+  attachments: {
+    id: string;
+    title: string;
+    type: string;
+    mimeType: string;
+  }[];
+}
+
+interface EntityListResponse {
+  items: {
+    id: string;
+    name: string;
+  }[];
+}
+
+interface TagResponse {
+  id: string;
+  name: string;
+  description: string;
+  color: string;
+}
+
+interface NotifierResponse {
+  id: string;
+  name: string;
+  url: string;
+  isActive: boolean;
+}
+
+interface GroupMemberResponse {
+  email: string;
+}
+
+const baseURL = process.env.E2E_BASE_URL || "http://localhost:7745";
+const testDataPath = process.env.TEST_DATA_FILE || "/tmp/test-users.json";
+
+let testData: TestData;
+const apiContexts = new Map<UserKey, APIRequestContext>();
+const userProfiles = new Map<UserKey, UserSelfResponse["item"]>();
+
+async function expectJson<T>(response: APIResponse, expectedStatus = 200): Promise<T> {
+  expect(response.status()).toBe(expectedStatus);
+  return (await response.json()) as T;
+}
+
+function user(key: UserKey): TestUser {
+  const match = testData.users.find(candidate => candidate.key === key);
+  if (!match) {
+    throw new Error(`Missing upgrade fixture user: ${key}`);
+  }
+  return match;
+}
+
+function apiContext(key: UserKey): APIRequestContext {
+  const context = apiContexts.get(key);
+  if (!context) {
+    throw new Error(`Missing authenticated API context: ${key}`);
+  }
+  return context;
+}
+
+function profile(key: UserKey): UserSelfResponse["item"] {
+  const currentProfile = userProfiles.get(key);
+  if (!currentProfile) {
+    throw new Error(`Missing upgraded user profile: ${key}`);
+  }
+  return currentProfile;
+}
+
+test.describe.configure({ mode: "serial" });
+
+test.beforeAll(async () => {
+  testData = JSON.parse(readFileSync(testDataPath, "utf8")) as TestData;
+  expect(testData.users).toHaveLength(3);
+
+  for (const fixtureUser of testData.users) {
+    const loginContext = await playwrightRequest.newContext({ baseURL });
+    const loginResponse = await loginContext.post("/api/v1/users/login", {
+      data: {
+        username: fixtureUser.email,
+        password: fixtureUser.password,
+        stayLoggedIn: false,
+      },
+    });
+    const login = await expectJson<LoginResponse>(loginResponse);
+    expect(login.token).toMatch(/^Bearer \S+$/);
+    await loginContext.dispose();
+
+    // A new context prevents Homebox session cookies from one user overriding
+    // another user's Authorization header.
+    const context = await playwrightRequest.newContext({
+      baseURL,
+      extraHTTPHeaders: { Authorization: login.token },
+    });
+    apiContexts.set(fixtureUser.key, context);
+
+    const selfResponse = await context.get("/api/v1/users/self");
+    const self = await expectJson<UserSelfResponse>(selfResponse);
+    userProfiles.set(fixtureUser.key, self.item);
   }
 });
 
-test.describe("HomeBox Upgrade Verification", () => {
-  test("verify all users can log in", async ({ page }) => {
-    // Test each user from the test data
-    for (const user of testData.users || []) {
-      await page.goto("/");
-      await expect(page).toHaveURL("/");
+test.afterAll(async () => {
+  await Promise.all([...apiContexts.values()].map(context => context.dispose()));
+});
 
-      // Wait for login form to be ready
-      await page.waitForSelector("input[type='text']", { state: "visible" });
+test("all users can log in and group membership survives", async () => {
+  const group1Owner = user("group1Owner");
+  const group1Member = user("group1Member");
+  const group2Owner = user("group2Owner");
 
-      // Fill in login form
-      await page.fill("input[type='text']", user.email);
-      await page.fill("input[type='password']", user.password);
-      await page.click("button[type='submit']");
+  expect(profile("group1Owner").email).toBe(group1Owner.email);
+  expect(profile("group1Member").email).toBe(group1Member.email);
+  expect(profile("group2Owner").email).toBe(group2Owner.email);
+  expect(profile("group1Member").defaultGroupId).toBe(profile("group1Owner").defaultGroupId);
+  expect(profile("group2Owner").defaultGroupId).not.toBe(profile("group1Owner").defaultGroupId);
 
-      // Wait for navigation to home page
-      await expect(page).toHaveURL("/home", { timeout: 10000 });
+  const membersResponse = await apiContext("group1Owner").get("/api/v1/groups/members");
+  const members = await expectJson<GroupMemberResponse[]>(membersResponse);
+  expect(members.map(member => member.email)).toEqual(expect.arrayContaining([group1Owner.email, group1Member.email]));
+  expect(members.map(member => member.email)).not.toContain(group2Owner.email);
+});
 
-      console.log(`✓ User ${user.email} logged in successfully`);
+test("shared group entities, location, and tag survive", async () => {
+  const { location, tag, item } = testData.groups.group1;
+  const memberContext = apiContext("group1Member");
 
-      // Navigate back to login for next user
-      await page.goto("/");
-      await page.waitForSelector("input[type='text']", { state: "visible" });
-    }
+  const locationResponse = await memberContext.get(`/api/v1/entities/${location.id}`);
+  const persistedLocation = await expectJson<EntityResponse>(locationResponse);
+  expect(persistedLocation).toMatchObject({
+    id: location.id,
+    name: location.name,
+    description: location.description,
   });
 
-  test("verify application version is displayed", async ({ page }) => {
-    // Login as first user
-    const firstUser = testData.users?.[0];
-    if (!firstUser) {
-      throw new Error("No users found in test data");
-    }
-
-    await page.goto("/");
-    await page.fill("input[type='text']", firstUser.email);
-    await page.fill("input[type='password']", firstUser.password);
-    await page.click("button[type='submit']");
-    await expect(page).toHaveURL("/home", { timeout: 10000 });
-
-    // Look for version in footer or about section
-    // The version might be in the footer or a settings page
-    // Check if footer exists and contains version info
-    const footer = page.locator("footer");
-    if ((await footer.count()) > 0) {
-      const footerText = await footer.textContent();
-      console.log("Footer text:", footerText);
-
-      // Version should be present in some form
-      // This is a basic check - the version format may vary
-      expect(footerText).toBeTruthy();
-    }
-
-    console.log("✓ Application version check complete");
+  const itemResponse = await memberContext.get(`/api/v1/entities/${item.id}`);
+  const persistedItem = await expectJson<EntityResponse>(itemResponse);
+  expect(persistedItem).toMatchObject({
+    id: item.id,
+    name: item.name,
+    description: item.description,
+    quantity: item.quantity,
   });
-
-  test("verify locations are present", async ({ page }) => {
-    const firstUser = testData.users?.[0];
-    if (!firstUser) {
-      throw new Error("No users found in test data");
-    }
-
-    await page.goto("/");
-    await page.fill("input[type='text']", firstUser.email);
-    await page.fill("input[type='password']", firstUser.password);
-    await page.click("button[type='submit']");
-    await expect(page).toHaveURL("/home", { timeout: 10000 });
-
-    // Wait for page to load
-    await page.waitForSelector("body", { state: "visible" });
-
-    // Try to find locations link in navigation
-    const locationsLink = page.locator("a[href*='location'], button:has-text('Locations')").first();
-
-    if ((await locationsLink.count()) > 0) {
-      await locationsLink.click();
-      await page.waitForLoadState("networkidle");
-
-      // Check if locations are displayed
-      // The exact structure depends on the UI, but we should see location names
-      const pageContent = await page.textContent("body");
-
-      // Verify some of our test locations exist
-      expect(pageContent).toContain("Living Room");
-      console.log("✓ Locations verified");
-    } else {
-      console.log("! Could not find locations navigation - skipping detailed check");
-    }
-  });
-
-  test("verify tags are present", async ({ page }) => {
-    const firstUser = testData.users?.[0];
-    if (!firstUser) {
-      throw new Error("No users found in test data");
-    }
-
-    await page.goto("/");
-    await page.fill("input[type='text']", firstUser.email);
-    await page.fill("input[type='password']", firstUser.password);
-    await page.click("button[type='submit']");
-    await expect(page).toHaveURL("/home", { timeout: 10000 });
-
-    await page.waitForSelector("body", { state: "visible" });
-
-    // Try to find tags link in navigation
-    const tagsLink = page.locator("a[href*='tag'], button:has-text('Tags')").first();
-
-    if ((await tagsLink.count()) > 0) {
-      await tagsLink.click();
-      await page.waitForLoadState("networkidle");
-
-      const pageContent = await page.textContent("body");
-
-      // Verify some of our test tags exist
-      expect(pageContent).toContain("Electronics");
-      console.log("✓ Tags verified");
-    } else {
-      console.log("! Could not find tags navigation - skipping detailed check");
-    }
-  });
-
-  test("verify items are present", async ({ page }) => {
-    const firstUser = testData.users?.[0];
-    if (!firstUser) {
-      throw new Error("No users found in test data");
-    }
-
-    await page.goto("/");
-    await page.fill("input[type='text']", firstUser.email);
-    await page.fill("input[type='password']", firstUser.password);
-    await page.click("button[type='submit']");
-    await expect(page).toHaveURL("/home", { timeout: 10000 });
-
-    await page.waitForSelector("body", { state: "visible" });
-
-    // Navigate to items list
-    // This might be the home page or a separate items page
-    const itemsLink = page.locator("a[href*='item'], button:has-text('Items')").first();
-
-    if ((await itemsLink.count()) > 0) {
-      await itemsLink.click();
-      await page.waitForLoadState("networkidle");
-    }
-
-    const pageContent = await page.textContent("body");
-
-    // Verify some of our test items exist
-    expect(pageContent).toContain("Laptop Computer");
-    console.log("✓ Items verified");
-  });
-
-  test("verify notifier is present", async ({ page }) => {
-    const firstUser = testData.users?.[0];
-    if (!firstUser) {
-      throw new Error("No users found in test data");
-    }
-
-    await page.goto("/");
-    await page.fill("input[type='text']", firstUser.email);
-    await page.fill("input[type='password']", firstUser.password);
-    await page.click("button[type='submit']");
-    await expect(page).toHaveURL("/home", { timeout: 10000 });
-
-    await page.waitForSelector("body", { state: "visible" });
-
-    // Navigate to settings or profile
-    // Notifiers are typically in settings
-    const settingsLink = page.locator("a[href*='setting'], a[href*='profile'], button:has-text('Settings')").first();
-
-    if ((await settingsLink.count()) > 0) {
-      await settingsLink.click();
-      await page.waitForLoadState("networkidle");
-
-      // Look for notifiers section
-      const notifiersLink = page.locator("a:has-text('Notif'), button:has-text('Notif')").first();
-
-      if ((await notifiersLink.count()) > 0) {
-        await notifiersLink.click();
-        await page.waitForLoadState("networkidle");
-
-        const pageContent = await page.textContent("body");
-
-        // Verify our test notifier exists
-        expect(pageContent).toContain("TESTING");
-        console.log("✓ Notifier verified");
-      } else {
-        console.log("! Could not find notifiers section - skipping detailed check");
-      }
-    } else {
-      console.log("! Could not find settings navigation - skipping notifier check");
-    }
-  });
-
-  test("verify attachments are present for items", async ({ page }) => {
-    const firstUser = testData.users?.[0];
-    if (!firstUser) {
-      throw new Error("No users found in test data");
-    }
-
-    await page.goto("/");
-    await page.fill("input[type='text']", firstUser.email);
-    await page.fill("input[type='password']", firstUser.password);
-    await page.click("button[type='submit']");
-    await expect(page).toHaveURL("/home", { timeout: 10000 });
-
-    await page.waitForSelector("body", { state: "visible" });
-
-    // Search for "Laptop Computer" which should have attachments
-    const searchInput = page.locator("input[type='search'], input[placeholder*='Search']").first();
-
-    if ((await searchInput.count()) > 0) {
-      await searchInput.fill("Laptop Computer");
-      await page.waitForLoadState("networkidle");
-
-      // Click on the laptop item
-      const laptopItem = page.locator("text=Laptop Computer").first();
-      await laptopItem.click();
-      await page.waitForLoadState("networkidle");
-
-      // Look for attachments section
-      const pageContent = await page.textContent("body");
-
-      // Check for attachment indicators (could be files, documents, attachments, etc.)
-      const hasAttachments =
-        pageContent?.includes("laptop-receipt") ||
-        pageContent?.includes("laptop-warranty") ||
-        pageContent?.includes("attachment") ||
-        pageContent?.includes("Attachment") ||
-        pageContent?.includes("document");
-
-      expect(hasAttachments).toBeTruthy();
-      console.log("✓ Attachments verified");
-    } else {
-      console.log("! Could not find search - trying direct navigation");
-
-      // Try alternative: look for items link and browse
-      const itemsLink = page.locator("a[href*='item'], button:has-text('Items')").first();
-      if ((await itemsLink.count()) > 0) {
-        await itemsLink.click();
-        await page.waitForLoadState("networkidle");
-
-        const laptopLink = page.locator("text=Laptop Computer").first();
-        if ((await laptopLink.count()) > 0) {
-          await laptopLink.click();
-          await page.waitForLoadState("networkidle");
-
-          const pageContent = await page.textContent("body");
-          const hasAttachments =
-            pageContent?.includes("laptop-receipt") ||
-            pageContent?.includes("laptop-warranty") ||
-            pageContent?.includes("attachment");
-
-          expect(hasAttachments).toBeTruthy();
-          console.log("✓ Attachments verified via direct navigation");
-        }
-      }
-    }
-  });
-
-  test("verify theme can be adjusted", async ({ page }) => {
-    const firstUser = testData.users?.[0];
-    if (!firstUser) {
-      throw new Error("No users found in test data");
-    }
-
-    await page.goto("/");
-    await page.fill("input[type='text']", firstUser.email);
-    await page.fill("input[type='password']", firstUser.password);
-    await page.click("button[type='submit']");
-    await expect(page).toHaveURL("/home", { timeout: 10000 });
-
-    await page.waitForSelector("body", { state: "visible" });
-
-    // Look for theme toggle (usually a sun/moon icon or settings)
-    // Common selectors for theme toggles
-    const themeToggle = page
-      .locator(
-        "button[aria-label*='theme'], button[aria-label*='Theme'], " +
-          "button:has-text('Dark'), button:has-text('Light'), " +
-          "[data-theme-toggle], .theme-toggle"
-      )
-      .first();
-
-    if ((await themeToggle.count()) > 0) {
-      // Get initial theme state (could be from class, attribute, or computed style)
-      const bodyBefore = page.locator("body");
-      const classNameBefore = (await bodyBefore.getAttribute("class")) || "";
-
-      // Click theme toggle
-      await themeToggle.click();
-      // Wait for theme change to complete
-      await page.waitForTimeout(500);
-
-      // Get theme state after toggle
-      const classNameAfter = (await bodyBefore.getAttribute("class")) || "";
-
-      // Verify that something changed
-      expect(classNameBefore).not.toBe(classNameAfter);
-
-      console.log(`✓ Theme toggle working (${classNameBefore} -> ${classNameAfter})`);
-    } else {
-      // Try to find theme in settings
-      const settingsLink = page.locator("a[href*='setting'], a[href*='profile']").first();
-
-      if ((await settingsLink.count()) > 0) {
-        await settingsLink.click();
-        await page.waitForLoadState("networkidle");
-
-        const themeOption = page.locator("select[name*='theme'], button:has-text('Theme')").first();
-
-        if ((await themeOption.count()) > 0) {
-          console.log("✓ Theme settings found");
-        } else {
-          console.log("! Could not find theme toggle - feature may not be easily accessible");
-        }
-      } else {
-        console.log("! Could not find theme controls");
-      }
-    }
-  });
-
-  test("verify data counts match expectations", async ({ page }) => {
-    const firstUser = testData.users?.[0];
-    if (!firstUser) {
-      throw new Error("No users found in test data");
-    }
-
-    await page.goto("/");
-    await page.fill("input[type='text']", firstUser.email);
-    await page.fill("input[type='password']", firstUser.password);
-    await page.click("button[type='submit']");
-    await expect(page).toHaveURL("/home", { timeout: 10000 });
-
-    await page.waitForSelector("body", { state: "visible" });
-
-    // Check that we have the expected number of items for group 1 (5 items)
-    const pageContent = await page.textContent("body");
-
-    // Look for item count indicators
-    // This is dependent on the UI showing counts
-    console.log("✓ Logged in and able to view dashboard");
-
-    // Verify at least that the page loaded and shows some content
-    expect(pageContent).toBeTruthy();
-    if (pageContent) {
-      expect(pageContent.length).toBeGreaterThan(100);
-    }
-  });
-
-  test("verify second group users and data isolation", async ({ page }) => {
-    // Login as user from group 2
-    const group2User = testData.users?.find(u => u.group === "2");
-    if (!group2User) {
-      console.log("! No group 2 users found - skipping isolation test");
-      return;
-    }
-
-    await page.goto("/");
-    await page.fill("input[type='text']", group2User.email);
-    await page.fill("input[type='password']", group2User.password);
-    await page.click("button[type='submit']");
-    await expect(page).toHaveURL("/home", { timeout: 10000 });
-
-    await page.waitForSelector("body", { state: "visible" });
-
-    const pageContent = await page.textContent("body");
-
-    // Verify group 2 can see their items
-    expect(pageContent).toContain("Monitor");
-
-    // Verify group 2 cannot see group 1 items
-    expect(pageContent).not.toContain("Laptop Computer");
-
-    console.log("✓ Data isolation verified between groups");
-  });
+  expect(persistedItem.parent?.id).toBe(item.locationId);
+  expect(persistedItem.tags.map(persistedTag => persistedTag.id)).toContain(item.tagId);
+
+  const tagsResponse = await memberContext.get("/api/v1/tags");
+  const persistedTags = await expectJson<TagResponse[]>(tagsResponse);
+  expect(persistedTags).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        id: tag.id,
+        name: tag.name,
+        description: tag.description,
+        color: tag.color,
+      }),
+    ])
+  );
+});
+
+test("owner-only notifier and attachment bytes survive", async () => {
+  const { item, notifier, attachment } = testData.groups.group1;
+  const ownerContext = apiContext("group1Owner");
+
+  const notifiersResponse = await ownerContext.get("/api/v1/notifiers");
+  const persistedNotifiers = await expectJson<NotifierResponse[]>(notifiersResponse);
+  expect(persistedNotifiers).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        id: notifier.id,
+        name: notifier.name,
+        url: notifier.url,
+        isActive: true,
+      }),
+    ])
+  );
+
+  const itemResponse = await ownerContext.get(`/api/v1/entities/${item.id}`);
+  const persistedItem = await expectJson<EntityResponse>(itemResponse);
+  expect(persistedItem.attachments).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        id: attachment.id,
+        title: attachment.title,
+        type: attachment.type,
+      }),
+    ])
+  );
+
+  const downloadResponse = await ownerContext.get(
+    `/api/v1/entities/${attachment.entityId}/attachments/${attachment.id}`
+  );
+  expect(downloadResponse.status()).toBe(200);
+  expect(downloadResponse.headers()["content-disposition"]).toContain(attachment.title);
+  const downloadedBytes = await downloadResponse.body();
+  expect(createHash("sha256").update(downloadedBytes).digest("hex")).toBe(attachment.sha256);
+});
+
+test("tenant isolation survives the migration", async () => {
+  const group1Item = testData.groups.group1.item;
+  const group2Item = testData.groups.group2.item;
+
+  const group1ItemsResponse = await apiContext("group1Member").get(
+    "/api/v1/entities?isLocation=false&page=1&pageSize=100"
+  );
+  const group1Items = await expectJson<EntityListResponse>(group1ItemsResponse);
+  expect(group1Items.items.map(item => item.id)).toContain(group1Item.id);
+  expect(group1Items.items.map(item => item.id)).not.toContain(group2Item.id);
+  expect(group1Items.items.map(item => item.name)).not.toContain(group2Item.name);
+
+  const group2ItemsResponse = await apiContext("group2Owner").get(
+    "/api/v1/entities?isLocation=false&page=1&pageSize=100"
+  );
+  const group2Items = await expectJson<EntityListResponse>(group2ItemsResponse);
+  expect(group2Items.items).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        id: group2Item.id,
+        name: group2Item.name,
+      }),
+    ])
+  );
+  expect(group2Items.items.map(item => item.id)).not.toContain(group1Item.id);
+  expect(group2Items.items.map(item => item.name)).not.toContain(group1Item.name);
+});
+
+test("an upgraded account can log in through the browser", async ({ page }) => {
+  const group1Owner = user("group1Owner");
+
+  await page.goto("/home");
+  await expect(page).toHaveURL("/");
+  await expect(page.locator("#login-form")).toBeVisible();
+  await page.locator("#login-username").fill(group1Owner.email);
+  await page.locator("#login-password").fill(group1Owner.password);
+  await page.locator('#login-form button[type="submit"]').click();
+
+  await expect(page).toHaveURL("/home");
+  await expect(page.getByTestId("logout-button")).toBeVisible();
 });

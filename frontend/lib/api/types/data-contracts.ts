@@ -779,6 +779,7 @@ export interface EntityFieldData {
   name: string;
   numberValue: number;
   textValue: string;
+  timeValue: string | null;
   type: string;
 }
 
@@ -809,6 +810,11 @@ export interface EntityOut {
   itemCount: number;
   /** Warranty */
   lifetimeWarranty: boolean;
+  /**
+   * Location is the nearest ancestor whose entity type is a location.
+   * It can differ from Parent when an item is nested in other entities.
+   */
+  location?: EntitySummary | null;
   manufacturer: string;
   modelNumber: string;
   name: string;
@@ -1104,7 +1110,15 @@ export interface GroupStatistics {
 }
 
 export interface GroupUpdate {
+  /**
+   * @minLength 1
+   * @maxLength 16
+   */
   currency: string;
+  /**
+   * @minLength 1
+   * @maxLength 255
+   */
   name: string;
 }
 
@@ -1263,7 +1277,7 @@ export interface TemplateField {
   name: string;
   numberValue: number;
   textValue: string;
-  timeValue: string;
+  timeValue: string | null;
   type: string;
 }
 
@@ -1404,6 +1418,10 @@ export interface ChangePassword {
 }
 
 export interface CreateRequest {
+  /**
+   * @minLength 1
+   * @maxLength 255
+   */
   name: string;
 }
 

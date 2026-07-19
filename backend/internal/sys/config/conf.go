@@ -46,13 +46,22 @@ func redactURLUserinfo(raw string) string {
 	return u.String()
 }
 
+// RedactURLUserinfo is the exported form of redactURLUserinfo for response
+// mappers that must display an operator-configured URL without exposing an
+// embedded password.
+func RedactURLUserinfo(raw string) string {
+	return redactURLUserinfo(raw)
+}
+
 const (
-	ModeDevelopment = "development"
-	ModeProduction  = "production"
+	ModeDevelopment   = "development"
+	ModeProduction    = "production"
+	defaultConfigPath = "/data/config.yml"
 )
 
 type Config struct {
 	conf.Version
+	Args       conf.Args      `json:"-"          yaml:"-"`
 	Mode       string         `yaml:"mode"       conf:"default:development"` // development or production
 	Web        WebConfig      `yaml:"web"`
 	Storage    Storage        `yaml:"storage"`
@@ -76,7 +85,7 @@ type Options struct {
 	AllowRegistration    bool   `yaml:"disable_registration"    conf:"default:true"`
 	AutoIncrementAssetID bool   `yaml:"auto_increment_asset_id" conf:"default:true"`
 	CurrencyConfig       string `yaml:"currencies"`
-	GithubReleaseCheck   bool   `yaml:"check_github_release"    conf:"default:true"`
+	GithubReleaseCheck   bool   `yaml:"check_github_release"    conf:"default:false"`
 	AllowAnalytics       bool   `yaml:"allow_analytics"         conf:"default:false"`
 	AllowLocalLogin      bool   `yaml:"allow_local_login"       conf:"default:true"`
 	TrustProxy           bool   `yaml:"trust_proxy"             conf:"default:false"`
@@ -176,6 +185,11 @@ type AIConf struct {
 	APIKey         string `yaml:"api_key"`
 	Model          string `yaml:"model"`
 	TimeoutSeconds int    `yaml:"timeout_seconds" conf:"default:120"`
+
+	// BaseURLIsUntrusted is runtime provenance, not operator configuration.
+	// EffectiveAI sets it only when BaseURL came from a tenant-managed group
+	// override, causing the AI package to use the public-network-only client.
+	BaseURLIsUntrusted bool `json:"-" yaml:"-"`
 }
 
 func (c AIConf) MarshalJSON() ([]byte, error) {
@@ -184,6 +198,7 @@ func (c AIConf) MarshalJSON() ([]byte, error) {
 	if a.APIKey != "" {
 		a.APIKey = redactedValue
 	}
+	a.BaseURL = redactURLUserinfo(a.BaseURL)
 	return json.Marshal(a)
 }
 
@@ -213,24 +228,57 @@ type AuthRateLimit struct {
 	MaxBackoff  time.Duration `yaml:"max_backoff"  conf:"default:5m"`
 }
 
-// New parses the CLI/Config file and returns a Config struct. If the file argument is an empty string, the
-// file is not read. If the file is not empty, the file is read and the Config struct is returned.
+// New parses configuration defaults, an optional positional YAML file, environment variables, and CLI flags.
+// Environment variables override YAML values, and CLI flags override both.
 func New(buildstr string, description string) (*Config, error) {
-	var cfg Config
 	const prefix = "HBOX"
 
-	cfg.Version = conf.Version{
-		Build: buildstr,
-		Desc:  description,
+	newConfig := func() Config {
+		return Config{
+			Version: conf.Version{
+				Build: buildstr,
+				Desc:  description,
+			},
+		}
 	}
 
+	cfg := newConfig()
 	help, err := conf.Parse(prefix, &cfg)
 	if err != nil {
-		if errors.Is(err, conf.ErrHelpWanted) {
+		if errors.Is(err, conf.ErrHelpWanted) || errors.Is(err, conf.ErrVersionWanted) {
 			fmt.Println(help)
 			os.Exit(0)
 		}
 		return &cfg, fmt.Errorf("parsing config: %w", err)
+	}
+
+	configPath := cfg.Args.Num(0)
+	if configPath == "" {
+		return &cfg, nil
+	}
+
+	// #nosec G304 -- the operator explicitly selects this local configuration
+	// file through the positional CLI argument.
+	configData, err := os.ReadFile(configPath)
+	if err != nil {
+		// The container images use this path as their default command, while a
+		// newly created /data volume intentionally contains no config file.
+		if errors.Is(err, os.ErrNotExist) && configPath == defaultConfigPath {
+			return &cfg, nil
+		}
+		return &cfg, fmt.Errorf("reading config file %q: %w", configPath, err)
+	}
+
+	// Rebuild the config so YAML is applied before defaults, environment, and
+	// command-line flags. This preserves conf's documented override order.
+	cfg = newConfig()
+	help, err = conf.Parse(prefix, &cfg, strictYAML{data: configData})
+	if err != nil {
+		if errors.Is(err, conf.ErrHelpWanted) || errors.Is(err, conf.ErrVersionWanted) {
+			fmt.Println(help)
+			os.Exit(0)
+		}
+		return &cfg, fmt.Errorf("parsing config file %q: %w", configPath, err)
 	}
 
 	return &cfg, nil

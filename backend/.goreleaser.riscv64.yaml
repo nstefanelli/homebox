@@ -4,16 +4,13 @@ project_name: homebox
 
 # Architecture-specific config for riscv64
 # Make sure to check the documentation at https://goreleaser.com
-before:
-  hooks:
-    - go generate ./...
 builds:
   - main: ./app/api
     env:
       - CGO_ENABLED=0
+    # Go 1.26 supports riscv64 releases on Linux only.
     goos:
       - linux
-      - freebsd
     goarch:
       - riscv64
     flags:
@@ -22,12 +19,9 @@ builds:
       - -s -w
       - -X main.version={{.Version}}
       - -X main.commit={{.Commit}}
-      - -X main.date={{.Date}}
+      - -X main.buildTime={{.Date}}
     tags:
-      - >-
-        {{- if eq .Arch "riscv64" }}nodynamic
-        {{- else if eq .Os "freebsd" }}nodynamic
-        {{ end }}
+      - nodynamic
 
 archives:
   - formats: [ 'tar.gz' ]

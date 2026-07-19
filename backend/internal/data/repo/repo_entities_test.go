@@ -8,10 +8,18 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/attachment"
+	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/entity"
+	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/group"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/types"
+)
+
+const (
+	testFieldTypeNumber  = "number"
+	testFieldTypeBoolean = "boolean"
 )
 
 func containerFactory() EntityCreate {
@@ -201,6 +209,130 @@ func TestEntityRepository_Create_WithFractionalQuantity(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestEntityRepository_QueryByGroup_FilteredInventoryValueIgnoresPagination(t *testing.T) {
+	ctx := context.Background()
+	itemType := useItemEntityType(t)
+	prefix := "inventory-filter-" + uuid.NewString()
+	createdIDs := make([]uuid.UUID, 0, 6)
+	t.Cleanup(func() {
+		for _, id := range createdIDs {
+			_ = tRepos.Entities.Delete(ctx, id)
+		}
+	})
+
+	createPriced := func(suffix string, quantity, price float64) EntityOut {
+		t.Helper()
+		out, err := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+			Name:         prefix + "-" + suffix,
+			Quantity:     quantity,
+			EntityTypeID: itemType.ID,
+		})
+		require.NoError(t, err)
+		createdIDs = append(createdIDs, out.ID)
+		require.NoError(t, tClient.Entity.UpdateOneID(out.ID).SetPurchasePrice(price).Exec(ctx))
+		return out
+	}
+
+	createPriced("active-a", 2, 10)
+	createPriced("active-b", 3, 5)
+
+	sold := createPriced("sold", 4, 100)
+	require.NoError(t, tClient.Entity.UpdateOneID(sold.ID).SetSoldDate(time.Now()).Exec(ctx))
+
+	archived := createPriced("archived", 1, 999)
+	require.NoError(t, tClient.Entity.UpdateOneID(archived.ID).SetArchived(true).Exec(ctx))
+
+	// A matching entity with a legacy cross-tenant type edge must be excluded
+	// from both the visible query and its aggregate.
+	_, _, foreignTypeID := makeForeignGroup(t)
+	corrupt := createPriced("foreign-type", 1, 777)
+	require.NoError(t, tClient.Entity.UpdateOneID(corrupt.ID).SetEntityTypeID(foreignTypeID).Exec(ctx))
+
+	createPriced("other-search", 1, 123)
+
+	result, err := tRepos.Entities.QueryByGroup(ctx, tGroup.ID, EntityQuery{
+		Page:                  1,
+		PageSize:              1,
+		Search:                prefix + "-active",
+		IncludeInventoryValue: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Items, 1)
+	assert.Equal(t, 2, result.Total)
+	assert.InDelta(t, 35, result.FilteredInventoryValue, 0.001,
+		"the total must include every filtered row, not only the current page")
+
+	result, err = tRepos.Entities.QueryByGroup(ctx, tGroup.ID, EntityQuery{
+		Page:                  1,
+		PageSize:              1,
+		Search:                prefix,
+		IncludeArchived:       true,
+		IncludeInventoryValue: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 5, result.Total, "active, sold, archived, and unrelated-suffix rows use the search filter; corrupt type is excluded")
+	assert.InDelta(t, 158, result.FilteredInventoryValue, 0.001,
+		"archived and sold rows remain excluded even when the list includes archived entities")
+}
+
+func TestEntityRepository_PaginationReturnsFullFilteredCount(t *testing.T) {
+	ctx := context.Background()
+	prefix := "pagination-" + uuid.NewString()
+	itemType := useItemEntityType(t)
+	created := make([]EntityOut, 0, 3)
+
+	for _, suffix := range []string{"a", "b", "c"} {
+		out, err := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+			Name:         prefix + "-" + suffix,
+			EntityTypeID: itemType.ID,
+		})
+		require.NoError(t, err)
+		created = append(created, out)
+	}
+	t.Cleanup(func() {
+		for _, out := range created {
+			_ = tRepos.Entities.Delete(context.Background(), out.ID)
+		}
+	})
+
+	first, err := tRepos.Entities.QueryByGroup(ctx, tGroup.ID, EntityQuery{
+		Page:     1,
+		PageSize: 2,
+		Search:   prefix,
+	})
+	require.NoError(t, err)
+	require.Len(t, first.Items, 2)
+	assert.Equal(t, 3, first.Total)
+
+	second, err := tRepos.Entities.QueryByGroup(ctx, tGroup.ID, EntityQuery{
+		Page:     2,
+		PageSize: 2,
+		Search:   prefix,
+	})
+	require.NoError(t, err)
+	require.Len(t, second.Items, 1)
+	assert.Equal(t, 3, second.Total)
+
+	all, err := tRepos.Entities.QueryByGroup(ctx, tGroup.ID, EntityQuery{
+		Page:     -1,
+		PageSize: -1,
+		Search:   prefix,
+	})
+	require.NoError(t, err)
+	require.Len(t, all.Items, 3)
+	assert.Equal(t, 3, all.Total)
+
+	assetID := AssetID(time.Now().UnixNano())
+	for _, out := range created {
+		require.NoError(t, tClient.Entity.UpdateOneID(out.ID).SetAssetID(int64(assetID)).Exec(ctx))
+	}
+
+	assetPage, err := tRepos.Entities.QueryByAssetID(ctx, tGroup.ID, assetID, 1, 2)
+	require.NoError(t, err)
+	require.Len(t, assetPage.Items, 2)
+	assert.Equal(t, 3, assetPage.Total)
+}
+
 func TestEntityRepository_Create_RejectsNonFiniteQuantity(t *testing.T) {
 	containerET := useContainerEntityType(t)
 	itemET := useItemEntityType(t)
@@ -222,6 +354,199 @@ func TestEntityRepository_Create_RejectsNonFiniteQuantity(t *testing.T) {
 	// Cleanup
 	err = tRepos.Entities.Delete(context.Background(), container.ID)
 	require.NoError(t, err)
+}
+
+func TestEntityRepository_Update_RollsBackEntityAndTagsWhenFieldWriteFails(t *testing.T) {
+	ctx := context.Background()
+	itemET := useItemEntityType(t)
+	tags := useTags(t, 1)
+
+	created, err := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+		Name:         "atomic-update-original",
+		Quantity:     1,
+		EntityTypeID: itemET.ID,
+		TagIDs:       []uuid.UUID{tags[0].ID},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tRepos.Entities.Delete(context.Background(), created.ID) })
+
+	_, err = tRepos.Entities.UpdateByGroup(ctx, tGroup.ID, EntityUpdate{
+		ID:           created.ID,
+		Name:         "must-roll-back",
+		Quantity:     2,
+		EntityTypeID: itemET.ID,
+		TagIDs:       []uuid.UUID{},
+		Fields: []EntityFieldData{{
+			Type: "not-a-valid-field-type",
+			Name: "invalid",
+		}},
+	})
+	require.Error(t, err)
+
+	got, err := tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "atomic-update-original", got.Name)
+	assert.InDelta(t, 1, got.Quantity, 0.000001)
+	require.Len(t, got.Tags, 1)
+	assert.Equal(t, tags[0].ID, got.Tags[0].ID)
+	assert.Empty(t, got.Fields)
+}
+
+func TestEntityRepository_Duplicate_PreservesTypedCustomFields(t *testing.T) {
+	ctx := context.Background()
+	itemType := useItemEntityType(t)
+	source, err := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+		Name:         "typed-duplicate-source",
+		Quantity:     1,
+		EntityTypeID: itemType.ID,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tRepos.Entities.Delete(ctx, source.ID) })
+
+	timeValue := time.Date(2026, time.June, 7, 8, 9, 10, 0, time.UTC)
+	source, err = tRepos.Entities.UpdateByGroup(ctx, tGroup.ID, EntityUpdate{
+		ID:           source.ID,
+		Name:         source.Name,
+		Quantity:     1,
+		EntityTypeID: itemType.ID,
+		Fields: []EntityFieldData{
+			{Type: "text", Name: "text", TextValue: "duplicate-me"},
+			{Type: testFieldTypeNumber, Name: "number", NumberValue: 91},
+			{Type: testFieldTypeBoolean, Name: "boolean", BooleanValue: true},
+			{Type: "time", Name: "time", TimeValue: timeValue},
+		},
+	})
+	require.NoError(t, err)
+
+	duplicate, err := tRepos.Entities.Duplicate(ctx, tGroup.ID, source.ID, DuplicateOptions{
+		CopyCustomFields: true,
+		CopyPrefix:       "typed-copy-",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tRepos.Entities.Delete(ctx, duplicate.ID) })
+	require.Len(t, duplicate.Fields, 4)
+
+	byName := lo.SliceToMap(duplicate.Fields, func(field EntityFieldData) (string, EntityFieldData) {
+		return field.Name, field
+	})
+	assert.Equal(t, "duplicate-me", byName["text"].TextValue)
+	assert.Equal(t, 91, byName["number"].NumberValue)
+	assert.True(t, byName["boolean"].BooleanValue)
+	assert.WithinDuration(t, timeValue, byName["time"].TimeValue, time.Second)
+}
+
+func TestEntityRepository_Duplicate_RollsBackWhenRequestedCopyFails(t *testing.T) {
+	ctx := context.Background()
+	itemType := useItemEntityType(t)
+	source, err := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+		Name:         "duplicate-rollback-source",
+		Quantity:     1,
+		EntityTypeID: itemType.ID,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tRepos.Entities.Delete(ctx, source.ID) })
+
+	_, err = tRepos.Entities.UpdateByGroup(ctx, tGroup.ID, EntityUpdate{
+		ID:           source.ID,
+		Name:         source.Name,
+		Quantity:     1,
+		EntityTypeID: itemType.ID,
+		Fields: []EntityFieldData{{
+			Type:      "text",
+			Name:      "duplicate-rollback-sentinel",
+			TextValue: "source survives",
+		}},
+	})
+	require.NoError(t, err)
+
+	_, err = tClient.Sql().ExecContext(ctx, `
+		CREATE TRIGGER duplicate_field_failure
+		BEFORE INSERT ON entity_fields
+		WHEN NEW.name = 'duplicate-rollback-sentinel'
+		BEGIN
+			SELECT RAISE(ABORT, 'forced duplicate field failure');
+		END`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = tClient.Sql().ExecContext(context.Background(), `DROP TRIGGER IF EXISTS duplicate_field_failure`)
+	})
+
+	copyPrefix := "duplicate-must-not-persist-" + uuid.NewString()
+	_, err = tRepos.Entities.Duplicate(ctx, tGroup.ID, source.ID, DuplicateOptions{
+		CopyCustomFields: true,
+		CopyPrefix:       copyPrefix,
+	})
+	require.Error(t, err)
+
+	count, err := tClient.Entity.Query().
+		Where(
+			entity.HasGroupWith(group.ID(tGroup.ID)),
+			entity.NameHasPrefix(copyPrefix),
+		).
+		Count(ctx)
+	require.NoError(t, err)
+	assert.Zero(t, count, "the duplicate entity must roll back when a requested child copy fails")
+
+	got, err := tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, source.ID)
+	require.NoError(t, err)
+	require.Len(t, got.Fields, 1)
+	assert.Equal(t, "source survives", got.Fields[0].TextValue)
+}
+
+func TestEntityRepository_RejectsHierarchyCycles(t *testing.T) {
+	ctx := context.Background()
+	itemET := useItemEntityType(t)
+	containerET := useContainerEntityType(t)
+
+	create := func(name string, entityTypeID, parentID uuid.UUID) EntityOut {
+		t.Helper()
+		out, err := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+			Name:         name,
+			Quantity:     1,
+			EntityTypeID: entityTypeID,
+			ParentID:     parentID,
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = tRepos.Entities.Delete(context.Background(), out.ID) })
+		return out
+	}
+
+	root := create("cycle-root", itemET.ID, uuid.Nil)
+	child := create("cycle-child", itemET.ID, root.ID)
+	grandchild := create("cycle-grandchild", itemET.ID, child.ID)
+
+	_, err := tRepos.Entities.UpdateByGroup(ctx, tGroup.ID, EntityUpdate{
+		ID:           root.ID,
+		Name:         root.Name,
+		Quantity:     1,
+		EntityTypeID: itemET.ID,
+		ParentID:     grandchild.ID,
+	})
+	require.ErrorContains(t, err, "hierarchy cycle")
+
+	err = tRepos.Entities.Patch(ctx, tGroup.ID, child.ID, EntityPatch{
+		ParentID: child.ID,
+	})
+	require.ErrorContains(t, err, "hierarchy cycle")
+
+	rootContainer := create("container-cycle-root", containerET.ID, uuid.Nil)
+	childContainer := create("container-cycle-child", containerET.ID, rootContainer.ID)
+	_, err = tRepos.Entities.UpdateContainer(ctx, tGroup.ID, rootContainer.ID, EntityUpdate{
+		Name:     rootContainer.Name,
+		ParentID: childContainer.ID,
+	})
+	require.ErrorContains(t, err, "hierarchy cycle")
+
+	gotRoot, err := tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, root.ID)
+	require.NoError(t, err)
+	assert.Nil(t, gotRoot.Parent)
+	gotChild, err := tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, child.ID)
+	require.NoError(t, err)
+	require.NotNil(t, gotChild.Parent)
+	assert.Equal(t, root.ID, gotChild.Parent.ID)
+	gotContainerRoot, err := tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, rootContainer.ID)
+	require.NoError(t, err)
+	assert.Nil(t, gotContainerRoot.Parent)
 }
 
 func TestEntityRepository_Create_WithParent(t *testing.T) {
@@ -791,7 +1116,12 @@ func TestEntityRepository_WipeInventory_OnlyItems(t *testing.T) {
 	_, err = tRepos.Tags.GetOneByGroup(context.Background(), tGroup.ID, tagObj.ID)
 	require.NoError(t, err, "Tag should still exist")
 
+	// Containers are retained unless wipeContainers is explicitly requested.
+	_, err = tRepos.Entities.GetOneByGroup(context.Background(), tGroup.ID, container.ID)
+	require.NoError(t, err, "Container should still exist")
+
 	// Cleanup
+	_ = tRepos.Entities.Delete(context.Background(), container.ID)
 	_ = tRepos.Tags.DeleteByGroup(context.Background(), tGroup.ID, tagObj.ID)
 }
 
@@ -966,4 +1296,169 @@ func TestEntityRepository_PathForEntity_CarriesIconFields(t *testing.T) {
 	// Cleanup
 	require.NoError(t, tRepos.Entities.Delete(ctx, c.ID))
 	require.NoError(t, tRepos.Entities.Delete(ctx, p.ID))
+}
+
+func TestEntityRepository_GetOne_DerivesNearestLocationAncestor(t *testing.T) {
+	ctx := context.Background()
+	locationET := useContainerEntityType(t)
+	itemET := useItemEntityType(t)
+
+	create := func(name string, entityTypeID, parentID uuid.UUID) EntityOut {
+		t.Helper()
+		out, err := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+			Name:         name,
+			Quantity:     1,
+			EntityTypeID: entityTypeID,
+			ParentID:     parentID,
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = tRepos.Entities.Delete(context.Background(), out.ID) })
+		return out
+	}
+
+	location := create("nearest-location", locationET.ID, uuid.Nil)
+	box := create("nearest-location-box", itemET.ID, location.ID)
+	nested := create("nearest-location-item", itemET.ID, box.ID)
+	direct := create("direct-location-item", itemET.ID, location.ID)
+
+	got, err := tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, nested.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.Parent)
+	assert.Equal(t, box.ID, got.Parent.ID)
+	require.NotNil(t, got.Location)
+	assert.Equal(t, location.ID, got.Location.ID)
+
+	got, err = tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, direct.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.Location)
+	assert.Equal(t, location.ID, got.Location.ID)
+
+	got, err = tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, location.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got.Location)
+}
+
+func TestEntityRepository_GetOne_DoesNotFollowLegacyForeignParent(t *testing.T) {
+	ctx := context.Background()
+	itemET := useItemEntityType(t)
+	own, err := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+		Name:         "legacy-cross-group-child",
+		Quantity:     1,
+		EntityTypeID: itemET.ID,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tRepos.Entities.Delete(context.Background(), own.ID) })
+
+	foreignGID, _, _ := makeForeignGroup(t)
+	foreignLocationET, err := tRepos.EntityTypes.GetDefault(ctx, foreignGID, true)
+	require.NoError(t, err)
+	foreignLocation, err := tRepos.Entities.Create(ctx, foreignGID, EntityCreate{
+		Name:         "foreign-location-must-not-leak",
+		Quantity:     1,
+		EntityTypeID: foreignLocationET.ID,
+	})
+	require.NoError(t, err)
+
+	_, err = tClient.Entity.UpdateOneID(own.ID).SetParentID(foreignLocation.ID).Save(ctx)
+	require.NoError(t, err)
+
+	got, err := tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, own.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got.Parent, "foreign direct parent must be filtered")
+	assert.Nil(t, got.Location, "foreign location ancestor must be filtered")
+}
+
+func TestEntityRepository_SyncChildLocationsFlagControlsFlattening(t *testing.T) {
+	ctx := context.Background()
+	locationET := useContainerEntityType(t)
+	itemET := useItemEntityType(t)
+
+	create := func(name string, entityTypeID, parentID uuid.UUID) EntityOut {
+		t.Helper()
+		out, err := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+			Name:         name,
+			Quantity:     1,
+			EntityTypeID: entityTypeID,
+			ParentID:     parentID,
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = tRepos.Entities.Delete(context.Background(), out.ID) })
+		return out
+	}
+
+	locationA := create("move-location-a", locationET.ID, uuid.Nil)
+	locationB := create("move-location-b", locationET.ID, uuid.Nil)
+	box := create("move-box", itemET.ID, locationA.ID)
+	child := create("move-child", itemET.ID, box.ID)
+
+	_, err := tRepos.Entities.UpdateByGroup(ctx, tGroup.ID, EntityUpdate{
+		ID:           box.ID,
+		Name:         box.Name,
+		Quantity:     1,
+		EntityTypeID: itemET.ID,
+		ParentID:     locationB.ID,
+	})
+	require.NoError(t, err)
+
+	got, err := tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, child.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.Parent)
+	assert.Equal(t, box.ID, got.Parent.ID, "disabled sync must preserve nesting")
+	require.NotNil(t, got.Location)
+	assert.Equal(t, locationB.ID, got.Location.ID)
+
+	_, err = tRepos.Entities.UpdateByGroup(ctx, tGroup.ID, EntityUpdate{
+		ID:                       box.ID,
+		Name:                     box.Name,
+		Quantity:                 1,
+		EntityTypeID:             itemET.ID,
+		ParentID:                 locationB.ID,
+		SyncChildEntityLocations: true,
+	})
+	require.NoError(t, err)
+
+	got, err = tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, child.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.Parent)
+	assert.Equal(t, locationB.ID, got.Parent.ID, "enabled sync moves direct children to the entity's location")
+
+	patchChild := create("move-patch-child", itemET.ID, box.ID)
+	err = tRepos.Entities.Patch(ctx, tGroup.ID, box.ID, EntityPatch{ParentID: locationA.ID})
+	require.NoError(t, err)
+	got, err = tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, patchChild.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.Parent)
+	assert.Equal(t, locationA.ID, got.Parent.ID, "patch honors the entity's persisted sync flag")
+}
+
+func TestEntityRepository_RejectsNegativeQuantity(t *testing.T) {
+	ctx := context.Background()
+	itemET := useItemEntityType(t)
+
+	_, err := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+		Name:         "negative-create",
+		Quantity:     -1,
+		EntityTypeID: itemET.ID,
+	})
+	require.ErrorContains(t, err, "must not be negative")
+
+	created, err := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+		Name:         "negative-guard",
+		Quantity:     1,
+		EntityTypeID: itemET.ID,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tRepos.Entities.Delete(context.Background(), created.ID) })
+
+	_, err = tRepos.Entities.UpdateByGroup(ctx, tGroup.ID, EntityUpdate{
+		ID:           created.ID,
+		Name:         created.Name,
+		Quantity:     -2,
+		EntityTypeID: itemET.ID,
+	})
+	require.ErrorContains(t, err, "must not be negative")
+
+	negative := -3.0
+	err = tRepos.Entities.Patch(ctx, tGroup.ID, created.ID, EntityPatch{Quantity: &negative})
+	require.ErrorContains(t, err, "must not be negative")
 }

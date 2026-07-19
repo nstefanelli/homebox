@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/sysadminsmedia/homebox/backend/internal/sys/config"
 )
@@ -29,10 +28,6 @@ type anthropicProvider struct {
 }
 
 func newAnthropicProvider(conf config.AIConf) *anthropicProvider {
-	timeout := conf.TimeoutSeconds
-	if timeout <= 0 {
-		timeout = 120
-	}
 	baseURL := strings.TrimSuffix(conf.BaseURL, "/")
 	if baseURL == "" {
 		baseURL = anthropicDefaultBaseURL
@@ -41,7 +36,7 @@ func newAnthropicProvider(conf config.AIConf) *anthropicProvider {
 		baseURL: baseURL,
 		apiKey:  conf.APIKey,
 		model:   conf.Model,
-		client:  &http.Client{Timeout: time.Duration(timeout) * time.Second},
+		client:  providerHTTPClient(conf),
 	}
 }
 

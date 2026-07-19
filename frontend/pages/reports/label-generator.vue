@@ -67,7 +67,11 @@
   // Sheet presets (Task 8 module): last choice persisted to localStorage.
   // "measure" is bundled with the other dimension fields since presets fix it too.
   const PRESET_STORAGE_KEY = "homebox:labelPreset";
-  const selectedPresetId = ref<string>(localStorage.getItem(PRESET_STORAGE_KEY) ?? "avery-5160");
+  const storedPresetId = localStorage.getItem(PRESET_STORAGE_KEY);
+  const validPresetIds = new Set([...LABEL_PRESETS.map(p => p.id), CUSTOM_PRESET_ID]);
+  const selectedPresetId = ref<string>(
+    storedPresetId && validPresetIds.has(storedPresetId) ? storedPresetId : "avery-5160"
+  );
   const DIMENSION_REFS = new Set<keyof typeof displayProperties>([
     "measure",
     "cardHeight",
@@ -219,7 +223,10 @@
     return route("/qrcode", { data: encodeURIComponent(payload) });
   }
 
-  function getItem(n: number, item: { assetId: string; name: string; location: { name: string } } | null): LabelData {
+  function getItem(
+    n: number,
+    item: { assetId: string; name: string; parent?: { name: string } | null } | null
+  ): LabelData {
     // format n into - seperated string with leading zeros
     const assetID = fmtAssetID(item?.assetId ?? n + 1);
 
@@ -227,7 +234,7 @@
       url: getQRCodeUrl(assetID),
       topLine: item?.assetId ?? assetID,
       nameLine: item?.name ?? labelBlankLine,
-      locationLine: item?.location?.name ?? labelBlankLine,
+      locationLine: item?.parent?.name ?? labelBlankLine,
     };
   }
 
@@ -257,11 +264,9 @@
     const items: LabelData[] = [];
     for (let i = displayProperties.assetRange - 1; i < displayProperties.assetRangeMax - 1; i++) {
       const item = allFields?.value?.items?.[i];
-      if (item?.location) {
-        items.push(getItem(i, item as { assetId: string; location: { name: string }; name: string }));
-      } else {
-        items.push(getItem(i, null));
-      }
+      // Real entities use the `parent` edge for their whereabouts. Indices
+      // beyond the inventory remain blank, pre-printable labels.
+      items.push(getItem(i, item ?? null));
     }
     return items;
   });
@@ -636,6 +641,7 @@
           <div class="flex items-center">
             <img
               :src="item.url"
+              :alt="$t('reports.label_generator.qr_code_alt', { label: item.topLine })"
               :style="{
                 minWidth: `${out.card.height * 0.9}${out.measure}`,
                 width: `${out.card.height * 0.9}${out.measure}`,

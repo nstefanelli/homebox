@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -136,6 +137,12 @@ func (ctrl *V1Controller) HandleEntityAttachmentExternalCreate() errchain.Handle
 		if err != nil {
 			recordCtrlSpanError(span, err)
 			log.Err(err).Msg("failed to add external link attachment")
+			if errors.Is(err, services.ErrInvalidExternalAttachmentURL) {
+				return repo.EntityOut{}, validate.NewRequestError(
+					validate.NewFieldErrors().Append("external_id", err.Error()),
+					http.StatusBadRequest,
+				)
+			}
 			return repo.EntityOut{}, validate.NewRequestError(err, http.StatusInternalServerError)
 		}
 

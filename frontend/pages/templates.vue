@@ -9,6 +9,7 @@
   import BaseSectionHeader from "@/components/Base/SectionHeader.vue";
   import TemplateCard from "~/components/Template/Card.vue";
   import TemplateCreateModal from "~/components/Template/CreateModal.vue";
+  import { useEntityTypeStore } from "~~/stores/entityTypes";
   import { CONTAINER_CATALOG, CONTAINER_TYPE_NAME, catalogFields } from "~~/lib/container-catalog";
   import type { EntityTypeCreate } from "~~/lib/api/types/data-contracts";
 
@@ -24,6 +25,7 @@
 
   const api = useUserApi();
   const { openDialog } = useDialog();
+  const entityTypeStore = useEntityTypeStore();
 
   const { data: templates, refresh } = useAsyncData("templates", async () => {
     const { data, error } = await api.templates.getAll();
@@ -42,25 +44,37 @@
   const importing = ref(false);
 
   async function importCatalog() {
+    if (importing.value) return;
     importing.value = true;
     try {
       // 1. Ensure the "Tote" container entity type exists (idempotent by name).
-      const { data: types } = await api.entityTypes.getAll();
-      const tote = (types ?? []).find(et => et.name === CONTAINER_TYPE_NAME);
+      const { data: types, error: typesError } = await api.entityTypes.getAll();
+      if (typesError || !Array.isArray(types)) {
+        throw new Error("entity type load failed");
+      }
+      const tote = types.find(et => et.name === CONTAINER_TYPE_NAME);
+      if (tote && (!tote.isLocation || !tote.isContainer)) {
+        throw new Error("an incompatible entity type named Tote already exists");
+      }
       if (!tote) {
         const { error } = await api.entityTypes.create({
           name: CONTAINER_TYPE_NAME,
           isLocation: true,
           isContainer: true,
-          icon: "mdi-package-variant-closed",
+          icon: "package-variant-closed",
         } as EntityTypeCreate);
         if (error) throw new Error("entity type create failed");
       }
+      await entityTypeStore.refresh();
 
       // 2. Create missing templates (idempotent by name).
-      const { data: existing } = await api.templates.getAll();
-      const existingNames = new Set((existing ?? []).map(tpl => tpl.name));
+      const { data: existing, error: templatesError } = await api.templates.getAll();
+      if (templatesError || !Array.isArray(existing)) {
+        throw new Error("template load failed");
+      }
+      const existingNames = new Set(existing.map(tpl => tpl.name));
       let createdCount = 0;
+      let failedCount = 0;
       for (const entry of CONTAINER_CATALOG) {
         if (existingNames.has(entry.name)) continue;
         const { error } = await api.templates.create({
@@ -76,12 +90,29 @@
           includeSoldFields: false,
           fields: catalogFields(entry),
         });
-        if (!error) createdCount++;
+        if (error) {
+          failedCount++;
+        } else {
+          createdCount++;
+          existingNames.add(entry.name);
+        }
       }
-      toast.success(
-        t("pages.templates.import_done", { created: createdCount, skipped: CONTAINER_CATALOG.length - createdCount })
-      );
+      const skippedCount = CONTAINER_CATALOG.length - createdCount - failedCount;
+      if (failedCount > 0) {
+        toast.warning(
+          t("pages.templates.import_done_with_failures", {
+            created: createdCount,
+            skipped: skippedCount,
+            failed: failedCount,
+          })
+        );
+      } else {
+        toast.success(t("pages.templates.import_done", { created: createdCount, skipped: skippedCount }));
+      }
       await refresh();
+      await refreshNuxtData("templates-selector");
+    } catch {
+      toast.error(t("pages.templates.import_failed"));
     } finally {
       importing.value = false;
     }

@@ -31,7 +31,7 @@ func TestUserRepo_GetOneEmail(t *testing.T) {
 
 	assert.NotNil(foundUser)
 	require.NoError(t, err)
-	assert.Equal(user.Email, foundUser.Email)
+	assert.Equal(normalizeEmail(user.Email), foundUser.Email)
 	assert.Equal(user.Name, foundUser.Name)
 
 	// Cleanup
@@ -49,7 +49,7 @@ func TestUserRepo_GetOneId(t *testing.T) {
 
 	assert.NotNil(foundUser)
 	require.NoError(t, err)
-	assert.Equal(user.Email, foundUser.Email)
+	assert.Equal(normalizeEmail(user.Email), foundUser.Email)
 	assert.Equal(user.Name, foundUser.Name)
 
 	// Cleanup
@@ -172,4 +172,41 @@ func TestUserRepo_GetSuperusers(t *testing.T) {
 	// Cleanup
 	err = tRepos.Users.DeleteAll(ctx)
 	require.NoError(t, err)
+}
+
+func TestSetOIDCIdentityOnlyClaimsPasswordlessUnboundAccount(t *testing.T) {
+	ctx := context.Background()
+
+	passwordless, err := tRepos.Users.Create(ctx, UserCreate{
+		Name:           fk.Str(10),
+		Email:          fk.Email(),
+		Password:       nil,
+		DefaultGroupID: tGroup.ID,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tRepos.Users.Delete(context.Background(), passwordless.ID) })
+
+	require.NoError(t, tRepos.Users.SetOIDCIdentity(ctx, passwordless.ID, "https://issuer.example", "subject-1"))
+
+	err = tRepos.Users.SetOIDCIdentity(ctx, passwordless.ID, "https://attacker.example", "subject-2")
+	require.ErrorIs(t, err, ErrOIDCIdentityConflict)
+
+	got, err := tRepos.Users.GetOneID(ctx, passwordless.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.OidcIssuer)
+	require.NotNil(t, got.OidcSubject)
+	assert.Equal(t, "https://issuer.example", *got.OidcIssuer)
+	assert.Equal(t, "subject-1", *got.OidcSubject)
+
+	withPassword, err := tRepos.Users.Create(ctx, userFactory())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tRepos.Users.Delete(context.Background(), withPassword.ID) })
+
+	err = tRepos.Users.SetOIDCIdentity(ctx, withPassword.ID, "https://issuer.example", "subject-password")
+	require.ErrorIs(t, err, ErrOIDCIdentityConflict)
+
+	got, err = tRepos.Users.GetOneID(ctx, withPassword.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got.OidcIssuer)
+	assert.Nil(t, got.OidcSubject)
 }

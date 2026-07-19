@@ -1,7 +1,6 @@
 package v1
 
 import (
-	"errors"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -11,6 +10,13 @@ import (
 	"github.com/sysadminsmedia/homebox/backend/internal/sys/validate"
 	"github.com/sysadminsmedia/homebox/backend/internal/web/adapters"
 )
+
+func validateEntityTypeFlags(isLocation, isContainer bool) error {
+	if isContainer && !isLocation {
+		return validate.NewRequestError(repo.ErrContainerRequiresLocation, http.StatusBadRequest)
+	}
+	return nil
+}
 
 // HandleEntityTypeGetAll godoc
 //
@@ -36,14 +42,13 @@ func (ctrl *V1Controller) HandleEntityTypeGetAll() errchain.HandlerFunc {
 //	@Produce	json
 //	@Param		payload	body		repo.EntityTypeCreate	true	"Entity Type Data"
 //	@Success	201		{object}	repo.EntityTypeSummary
-//	@Failure	400	{object}	validate.ErrorResponse
+//	@Failure	400		{object}	validate.ErrorResponse
 //	@Router		/v1/entity-types [POST]
 //	@Security	Bearer
 func (ctrl *V1Controller) HandleEntityTypeCreate() errchain.HandlerFunc {
 	fn := func(r *http.Request, body repo.EntityTypeCreate) (repo.EntityTypeSummary, error) {
-		if body.IsContainer && !body.IsLocation {
-			return repo.EntityTypeSummary{}, validate.NewRequestError(
-				errors.New("container entity types must also be locations"), http.StatusBadRequest)
+		if err := validateEntityTypeFlags(body.IsLocation, body.IsContainer); err != nil {
+			return repo.EntityTypeSummary{}, err
 		}
 
 		auth := services.NewContext(r.Context())
@@ -61,14 +66,13 @@ func (ctrl *V1Controller) HandleEntityTypeCreate() errchain.HandlerFunc {
 //	@Param		id		path		string					true	"Entity Type ID"
 //	@Param		payload	body		repo.EntityTypeUpdate	true	"Entity Type Data"
 //	@Success	200		{object}	repo.EntityTypeSummary
-//	@Failure	400	{object}	validate.ErrorResponse
+//	@Failure	400		{object}	validate.ErrorResponse
 //	@Router		/v1/entity-types/{id} [PUT]
 //	@Security	Bearer
 func (ctrl *V1Controller) HandleEntityTypeUpdate() errchain.HandlerFunc {
 	fn := func(r *http.Request, ID uuid.UUID, body repo.EntityTypeUpdate) (repo.EntityTypeSummary, error) {
-		if body.IsContainer && !body.IsLocation {
-			return repo.EntityTypeSummary{}, validate.NewRequestError(
-				errors.New("container entity types must also be locations"), http.StatusBadRequest)
+		if err := validateEntityTypeFlags(body.IsLocation, body.IsContainer); err != nil {
+			return repo.EntityTypeSummary{}, err
 		}
 
 		auth := services.NewContext(r.Context())

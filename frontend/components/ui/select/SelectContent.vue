@@ -9,7 +9,8 @@ import {
   useForwardPropsEmits,
 } from 'reka-ui'
 import { computed, type HTMLAttributes } from 'vue'
-import { SelectScrollDownButton, SelectScrollUpButton } from '.'
+import SelectScrollDownButton from './SelectScrollDownButton.vue'
+import SelectScrollUpButton from './SelectScrollUpButton.vue'
 
 defineOptions({
   inheritAttrs: false,

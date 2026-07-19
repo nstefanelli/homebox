@@ -2,6 +2,86 @@
 
 All notable changes to this fork are documented in this file. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Upstream is [sysadminsmedia/homebox](https://github.com/sysadminsmedia/homebox); this file only covers fork-specific work on top of v0.26.2.
 
+## Unreleased - 2026-07-18
+
+### Security
+
+- Enforced collection ownership before entity, entity-type, attachment, tag,
+  hierarchy, integration, group-member, and import/export side effects; added
+  cross-collection regression coverage for reads, writes, and error responses.
+- Hardened OIDC discovery, outbound URLs, redirect handling, password-reset and
+  login throttling, sessions, multipart/archive parsing, MIME validation, CSV
+  formula output, custom-field links, telemetry, and secret-bearing logs.
+- Removed authenticated API responses from the service-worker runtime cache and
+  added one-time cleanup of the legacy `api-cache`, whose URL-only cache keys
+  could cross user or collection boundaries.
+- Updated the Go and frontend dependency graphs to patched releases; strict
+  `gosec`, `golangci-lint`, production dependency audit, and reachable
+  vulnerability scans are clean.
+
+### Fixed
+
+- Made multi-step entity, template, tag, CSV, attachment, and restore mutations
+  atomic, with database commit preceding best-effort blob deletion and shared
+  blob references retained until their final owner is removed.
+- Rejected hierarchy cycles, foreign-collection relationships, invalid custom
+  fields, negative quantities, and unsafe pagination; restored the explicit
+  sync-child location contract without enabling it by default for containers.
+- Preserved template default tags, template photos, attachment blobs, IDs, and
+  relationships through export/import, including fail-closed archive and
+  rollback behavior.
+- Corrected container totals and active-inventory valuation, template and batch
+  defaults, AI/bulk-catalog race handling, integration redaction, label grid and
+  queue behavior, tenant switching, and owner/member workflows.
+- Made in-memory background-job topics reusable across repeated attachment,
+  thumbnail, export, and import publications, and made worker shutdown clean and
+  idempotent.
+- Serialized startup and daily cleanup writes so fresh SQLite launches no
+  longer emit transient lock errors, and retained background-task identities
+  for diagnostics.
+- Corrected dynamic-label translation handling and supplied accessible dialog
+  and drawer metadata, eliminating the confirmed browser console warnings.
+
+### Data and migrations
+
+- Added tenant-oriented indexes for dominant entity, hierarchy, tag, template,
+  field, and membership queries on SQLite and PostgreSQL.
+- Enforced the invariant that a container type is also a location type, with a
+  forward migration that normalizes legacy rows and named database constraints
+  that reject future invalid writes.
+- Assigned asset IDs immediately to fresh-install default locations instead of
+  relying on a later process restart to backfill them.
+- Configured SQLite write transactions to reserve the writer at `BEGIN`,
+  preventing deferred read-to-write upgrade races while retaining WAL readers.
+
+### Build, release, and operations
+
+- Pinned reproducible Go, Node, pnpm, lint, release, SBOM, action, and container
+  toolchains; corrected multi-architecture image logic and excluded signing-key
+  material from container build contexts.
+- Made GitLab merge-request pipelines fork-safe and prevented registry login,
+  push, or shared-cache mutation outside trusted release contexts.
+- Hardened currency and GHCR maintenance workflows with immutable sources,
+  bounded downloads, schema validation, atomic file replacement, and fork-aware
+  ownership.
+- Made Compose require the API-key pepper, persist `/data`, use the supported
+  log setting, retain exact build provenance, and restart unless stopped.
+- Implemented strict positional YAML loading with documented precedence and
+  made production/unknown demo mode require an explicit 12+ byte password.
+- Aligned binary releases to the nine Go-supported targets; added archive,
+  SBOM, checksum, and generated-tree gates; fixed embedded build timestamps and
+  clean `--version` behavior; and removed release-time source mutation.
+
+### Validation
+
+- Added regression coverage for authorization boundaries, transactions,
+  storage lifecycle, migrations, query plans, background jobs, tenant-aware
+  frontend state, custom workflows, and PWA cache privacy.
+- Validated clean and v0.26.2-era SQLite upgrades, clean PostgreSQL migrations,
+  backend race/static-security suites, frontend lint/type/unit/build checks,
+  and regular, rootless, and hardened container paths. See
+  `REMEDIATION_REPORT.md` for the final matrix and environment-dependent limits.
+
 ## v0.26.2-phase3.3 - 2026-07-06
 
 ### Fixed

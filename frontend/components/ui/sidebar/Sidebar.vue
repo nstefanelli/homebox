@@ -1,7 +1,7 @@
 <script setup lang="ts">
   import { SIDEBAR_WIDTH_MOBILE, useSidebar } from "./utils";
   import type { SidebarProps } from ".";
-  import { Sheet, SheetContent } from "@/components/ui/sheet";
+  import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
   import { cn } from "@/lib/utils";
 
   defineOptions({
@@ -36,6 +36,8 @@
         '--sidebar-width': SIDEBAR_WIDTH_MOBILE,
       }"
     >
+      <SheetTitle class="sr-only">HomeBox navigation</SheetTitle>
+      <SheetDescription class="sr-only">Main navigation and collection actions</SheetDescription>
       <div class="flex size-full flex-col">
         <slot />
       </div>

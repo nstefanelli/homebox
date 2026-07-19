@@ -11,10 +11,35 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/sysadminsmedia/homebox/backend/internal/core/services"
 	"github.com/sysadminsmedia/homebox/backend/internal/core/services/reporting/eventbus"
+	"github.com/sysadminsmedia/homebox/backend/internal/data/ent"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/repo"
 	"github.com/sysadminsmedia/homebox/backend/internal/sys/validate"
 	"go.opentelemetry.io/otel/attribute"
 )
+
+func registrationRequestError(err error) error {
+	switch {
+	case errors.Is(err, services.ErrorPasswordTooShort),
+		errors.Is(err, repo.ErrInvitationExpired),
+		errors.Is(err, repo.ErrInvitationExhausted),
+		ent.IsNotFound(err):
+		return validate.NewRequestError(err, http.StatusBadRequest)
+	case errors.Is(err, services.ErrorEmailAlreadyExists):
+		return validate.NewRequestError(err, http.StatusConflict)
+	default:
+		return validate.NewRequestError(errors.New("failed to register user"), http.StatusInternalServerError)
+	}
+}
+
+func changePasswordRequestError(err error) error {
+	switch {
+	case errors.Is(err, services.ErrorCurrentPasswordWrong),
+		errors.Is(err, services.ErrorPasswordTooShort):
+		return validate.NewRequestError(err, http.StatusBadRequest)
+	default:
+		return validate.NewRequestError(errors.New("failed to change password"), http.StatusInternalServerError)
+	}
+}
 
 // HandleUserRegistration godoc
 //
@@ -41,7 +66,7 @@ func (ctrl *V1Controller) HandleUserRegistration() errchain.HandlerFunc {
 			recordCtrlSpanError(span, err)
 			span.SetAttributes(attribute.String("registration.outcome", "decode_failed"))
 			log.Err(err).Msg("failed to decode user registration data")
-			return validate.NewRequestError(err, http.StatusInternalServerError)
+			return validate.NewRequestError(errors.New("invalid registration request"), http.StatusBadRequest)
 		}
 		span.SetAttributes(
 			attribute.Int("user.name.length", len(regData.Name)),
@@ -60,7 +85,7 @@ func (ctrl *V1Controller) HandleUserRegistration() errchain.HandlerFunc {
 			recordCtrlSpanError(span, err)
 			span.SetAttributes(attribute.String("registration.outcome", "register_failed"))
 			log.Err(err).Msg("failed to register user")
-			return validate.NewRequestError(err, http.StatusInternalServerError)
+			return registrationRequestError(err)
 		}
 		span.SetAttributes(
 			attribute.String("registration.outcome", "success"),
@@ -158,6 +183,9 @@ func (ctrl *V1Controller) HandleUserSelfDelete() errchain.HandlerFunc {
 		if err := ctrl.svc.User.DeleteSelf(spanCtx, actor.ID); err != nil {
 			recordCtrlSpanError(span, err)
 			span.SetAttributes(attribute.String("delete.outcome", "delete_failed"))
+			if errors.Is(err, services.ErrorOwnedGroupHasMembers) {
+				return validate.NewRequestError(err, http.StatusConflict)
+			}
 			return validate.NewRequestError(err, http.StatusInternalServerError)
 		}
 		span.SetAttributes(attribute.String("delete.outcome", "success"))
@@ -263,7 +291,7 @@ func (ctrl *V1Controller) HandleUserSelfChangePassword() errchain.HandlerFunc {
 
 		if ctrl.isDemo {
 			span.SetAttributes(attribute.String("change_password.outcome", "demo_blocked"))
-			return validate.NewRequestError(nil, http.StatusForbidden)
+			return validate.NewRequestError(errors.New("password changes are disabled in demo mode"), http.StatusForbidden)
 		}
 
 		var cp ChangePassword
@@ -272,6 +300,7 @@ func (ctrl *V1Controller) HandleUserSelfChangePassword() errchain.HandlerFunc {
 			recordCtrlSpanError(span, err)
 			span.SetAttributes(attribute.String("change_password.outcome", "decode_failed"))
 			log.Err(err).Msg("user failed to change password")
+			return validate.NewRequestError(errors.New("invalid change-password request"), http.StatusBadRequest)
 		}
 		span.SetAttributes(
 			attribute.Int("password.current.length", len(cp.Current)),
@@ -281,11 +310,12 @@ func (ctrl *V1Controller) HandleUserSelfChangePassword() errchain.HandlerFunc {
 		ctx := services.NewContext(spanCtx)
 		span.SetAttributes(attribute.String("user.id", ctx.UID.String()))
 
-		ok := ctrl.svc.User.ChangePassword(ctx, cp.Current, cp.New)
-		span.SetAttributes(attribute.Bool("change_password.ok", ok))
-		if !ok {
+		err = ctrl.svc.User.ChangePassword(ctx, cp.Current, cp.New)
+		span.SetAttributes(attribute.Bool("change_password.ok", err == nil))
+		if err != nil {
+			recordCtrlSpanError(span, err)
 			span.SetAttributes(attribute.String("change_password.outcome", "service_rejected"))
-			return validate.NewRequestError(err, http.StatusInternalServerError)
+			return changePasswordRequestError(err)
 		}
 		span.SetAttributes(attribute.String("change_password.outcome", "success"))
 

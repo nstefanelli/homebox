@@ -2,11 +2,13 @@ package v1
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -21,9 +23,29 @@ import (
 )
 
 const (
-	barcodeHTTPTimeoutSec = 10
-	schemeHTTPS           = "https"
+	barcodeHTTPTimeoutSec       = 10
+	schemeHTTPS                 = "https"
+	maxBarcodeAPIResponseBytes  = int64(4 << 20)
+	maxProductImageBytes        = int64(8 << 20)
+	maxProductImageRedirectHops = 10
 )
+
+type imageResolver func(context.Context, string) ([]net.IP, error)
+type imageDialer func(context.Context, string, string) (net.Conn, error)
+
+func readBoundedHTTPBody(body io.Reader, contentLength, maxBytes int64) ([]byte, error) {
+	if contentLength > maxBytes {
+		return nil, fmt.Errorf("response body declares %d bytes, exceeds limit %d", contentLength, maxBytes)
+	}
+	data, err := io.ReadAll(io.LimitReader(body, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("response body exceeds limit %d", maxBytes)
+	}
+	return data, nil
+}
 
 // flexibleString is a string that can be unmarshaled from either a JSON
 // string or a JSON number. upcitemdb.com sometimes returns price fields
@@ -186,7 +208,7 @@ func lookupUPCItemDB(iEan string) ([]repo.BarcodeProduct, error) {
 		return nil, fmt.Errorf("API returned status code: %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readBoundedHTTPBody(resp.Body, resp.ContentLength, maxBarcodeAPIResponseBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +270,7 @@ func lookupBarcodespider(tokenAPI string, iEan string) ([]repo.BarcodeProduct, e
 		return nil, fmt.Errorf("barcodespider API returned status code: %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readBoundedHTTPBody(resp.Body, resp.ContentLength, maxBarcodeAPIResponseBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -390,7 +412,7 @@ func lookupOpenFacts(contact string, source openFactsSource, iEan string) ([]rep
 		return nil, fmt.Errorf("%s API returned status code: %d", source.Name, resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readBoundedHTTPBody(resp.Body, resp.ContentLength, maxBarcodeAPIResponseBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -413,10 +435,158 @@ func lookupOpenFacts(contact string, source openFactsSource, iEan string) ([]rep
 	return []repo.BarcodeProduct{p}, nil
 }
 
-// fetchImageBase64 fetches an image from the given HTTPS URL and returns it as a base64-encoded data URI.
-func fetchImageBase64(imageURL string) (string, error) {
-	client := &http.Client{Timeout: barcodeHTTPTimeoutSec * time.Second}
-	res, err := client.Get(imageURL)
+func defaultImageResolver(ctx context.Context, host string) ([]net.IP, error) {
+	if literal := net.ParseIP(host); literal != nil {
+		return []net.IP{literal}, nil
+	}
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	ips := make([]net.IP, 0, len(addrs))
+	for _, addr := range addrs {
+		ips = append(ips, addr.IP)
+	}
+	return ips, nil
+}
+
+func isPublicProductImageIP(ip net.IP) bool {
+	if ip == nil ||
+		ip.IsUnspecified() ||
+		ip.IsLoopback() ||
+		ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() ||
+		ip.IsMulticast() {
+		return false
+	}
+
+	// Go's IsPrivate intentionally excludes carrier-grade NAT. It is still
+	// shared internal address space and must not be reachable by an
+	// attacker-selected product image URL.
+	_, sharedNet, _ := net.ParseCIDR("100.64.0.0/10")
+	if sharedNet.Contains(ip) {
+		return false
+	}
+
+	// A NAT64 address can carry a blocked IPv4 destination while looking like
+	// a public IPv6 address. Check the RFC 6052 well-known /96 embedding.
+	ip16 := ip.To16()
+	_, wellKnownDNS64, _ := net.ParseCIDR("64:ff9b::/96")
+	if ip.To4() == nil && ip16 != nil && wellKnownDNS64.Contains(ip) {
+		embedded := net.IPv4(ip16[12], ip16[13], ip16[14], ip16[15])
+		return isPublicProductImageIP(embedded)
+	}
+
+	return ip.IsGlobalUnicast() &&
+		!ip.IsUnspecified() &&
+		!ip.IsMulticast()
+}
+
+func resolvePublicProductImageIPs(
+	ctx context.Context,
+	host string,
+	resolve imageResolver,
+) ([]net.IP, error) {
+	ips, err := resolve(ctx, host)
+	if err != nil {
+		return nil, fmt.Errorf("resolve image host: %w", err)
+	}
+	if len(ips) == 0 {
+		return nil, errors.New("image host resolved to no addresses")
+	}
+	for _, ip := range ips {
+		if !isPublicProductImageIP(ip) {
+			return nil, fmt.Errorf("image host resolved to blocked address %s", ip)
+		}
+	}
+	return ips, nil
+}
+
+func validateProductImageURL(
+	ctx context.Context,
+	rawURL string,
+	resolve imageResolver,
+) (*url.URL, error) {
+	u, err := url.ParseRequestURI(strings.TrimSpace(rawURL))
+	if err != nil {
+		return nil, fmt.Errorf("invalid image URL: %w", err)
+	}
+	if u.Scheme != schemeHTTPS || u.Host == "" || u.User != nil || u.Fragment != "" {
+		return nil, errors.New("image URL must be an absolute HTTPS URL without credentials or fragment")
+	}
+	if _, err := resolvePublicProductImageIPs(ctx, u.Hostname(), resolve); err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
+func productImageDialContext(resolve imageResolver, dial imageDialer) imageDialer {
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, fmt.Errorf("invalid image dial address: %w", err)
+		}
+		ips, err := resolvePublicProductImageIPs(ctx, host, resolve)
+		if err != nil {
+			return nil, err
+		}
+
+		var dialErrs []error
+		for _, ip := range ips {
+			conn, err := dial(ctx, network, net.JoinHostPort(ip.String(), port))
+			if err == nil {
+				return conn, nil
+			}
+			dialErrs = append(dialErrs, err)
+		}
+		return nil, fmt.Errorf("connect to image host: %w", errors.Join(dialErrs...))
+	}
+}
+
+func productImageRedirectGuard(resolve imageResolver) func(*http.Request, []*http.Request) error {
+	return func(req *http.Request, via []*http.Request) error {
+		if len(via) >= maxProductImageRedirectHops {
+			return fmt.Errorf("stopped after %d image redirects", maxProductImageRedirectHops)
+		}
+		if req.URL == nil {
+			return errors.New("image redirect has no URL")
+		}
+		_, err := validateProductImageURL(req.Context(), req.URL.String(), resolve)
+		if err != nil {
+			return fmt.Errorf("blocked image redirect: %w", err)
+		}
+		return nil
+	}
+}
+
+func newProductImageHTTPClient(resolve imageResolver, dial imageDialer) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// A proxy would perform its own target resolution after Homebox's
+	// validation, defeating the address pinning.
+	transport.Proxy = nil
+	transport.DialContext = productImageDialContext(resolve, dial)
+	return &http.Client{
+		Timeout:       barcodeHTTPTimeoutSec * time.Second,
+		Transport:     transport,
+		CheckRedirect: productImageRedirectGuard(resolve),
+	}
+}
+
+// fetchImageBase64 fetches a public HTTPS image and returns it as a base64 data URI.
+func fetchImageBase64(ctx context.Context, imageURL string) (string, error) {
+	resolve := imageResolver(defaultImageResolver)
+	u, err := validateProductImageURL(ctx, imageURL, resolve)
+	if err != nil {
+		return "", err
+	}
+	dialer := &net.Dialer{}
+	client := newProductImageHTTPClient(resolve, dialer.DialContext)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return "", err
+	}
+	res, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -433,13 +603,12 @@ func fetchImageBase64(imageURL string) (string, error) {
 		return "", fmt.Errorf("non-image content type: %s", contentType)
 	}
 
-	limitedReader := io.LimitReader(res.Body, 8*1024*1024)
-	bytes, err := io.ReadAll(limitedReader)
+	imageBytes, err := readBoundedHTTPBody(res.Body, res.ContentLength, maxProductImageBytes)
 	if err != nil {
 		return "", err
 	}
 
-	mimeType := http.DetectContentType(bytes)
+	mimeType := http.DetectContentType(imageBytes)
 	var base64Encoding string
 	switch mimeType {
 	case "image/jpeg":
@@ -450,7 +619,7 @@ func fetchImageBase64(imageURL string) (string, error) {
 		return "", fmt.Errorf("unsupported image type: %s", mimeType)
 	}
 
-	return base64Encoding + base64.StdEncoding.EncodeToString(bytes), nil
+	return base64Encoding + base64.StdEncoding.EncodeToString(imageBytes), nil
 }
 
 // HandleProductSearchFromBarcode godoc
@@ -518,16 +687,9 @@ func (ctrl *V1Controller) HandleProductSearchFromBarcode() errchain.HandlerFunc 
 				continue
 			}
 
-			// Validate URL is HTTPS
-			u, err := url.Parse(p.ImageURL)
-			if err != nil || u.Scheme != schemeHTTPS {
-				log.Warn().Msg("Skipping non-HTTPS image URL: " + p.ImageURL)
-				continue
-			}
-
-			base64Img, err := fetchImageBase64(p.ImageURL)
+			base64Img, err := fetchImageBase64(r.Context(), p.ImageURL)
 			if err != nil {
-				log.Warn().Msg("Cannot fetch image for URL: " + p.ImageURL + ": " + err.Error())
+				log.Warn().Str("image_url", redactExternalURLForTrace(p.ImageURL)).Err(err).Msg("cannot fetch product image")
 				continue
 			}
 			p.ImageBase64 = base64Img

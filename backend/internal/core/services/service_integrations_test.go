@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -75,11 +76,12 @@ func Test_IntegrationsService_EffectiveAI(t *testing.T) {
 				AIModel:    "group-model",
 			},
 			want: config.AIConf{
-				Provider:       AIProviderAnthropic,
-				BaseURL:        groupBaseURL,
-				APIKey:         "group-api-key",
-				Model:          "group-model",
-				TimeoutSeconds: envAI.TimeoutSeconds,
+				Provider:           AIProviderAnthropic,
+				BaseURL:            groupBaseURL,
+				APIKey:             "group-api-key",
+				Model:              "group-model",
+				TimeoutSeconds:     envAI.TimeoutSeconds,
+				BaseURLIsUntrusted: true,
 			},
 			explain: "when provider set, group fields win outright",
 		},
@@ -98,20 +100,21 @@ func Test_IntegrationsService_EffectiveAI(t *testing.T) {
 			explain: "empty BaseURL/APIKey/Model must individually fall back to env, but Provider stays group's",
 		},
 		{
-			name: "provider set with partial fields mixes group and env per-field",
+			name: "group endpoint never inherits administrator API key",
 			group: types.GroupIntegrations{
 				AIProvider: AIProviderAnthropic,
 				AIBaseURL:  groupBaseURL,
 				// AIAPIKey and AIModel left empty
 			},
 			want: config.AIConf{
-				Provider:       AIProviderAnthropic,
-				BaseURL:        groupBaseURL,
-				APIKey:         envAI.APIKey,
-				Model:          envAI.Model,
-				TimeoutSeconds: envAI.TimeoutSeconds,
+				Provider:           AIProviderAnthropic,
+				BaseURL:            groupBaseURL,
+				APIKey:             "",
+				Model:              envAI.Model,
+				TimeoutSeconds:     envAI.TimeoutSeconds,
+				BaseURLIsUntrusted: true,
 			},
-			explain: "per-field fallback is independent per field, not all-or-nothing",
+			explain: "a tenant-selected endpoint must not receive the administrator's env API key",
 		},
 		{
 			name: "timeout is always env even when provider and fields are group-set",
@@ -122,11 +125,12 @@ func Test_IntegrationsService_EffectiveAI(t *testing.T) {
 				AIModel:    "group-model",
 			},
 			want: config.AIConf{
-				Provider:       AIProviderAnthropic,
-				BaseURL:        groupBaseURL,
-				APIKey:         "group-api-key",
-				Model:          "group-model",
-				TimeoutSeconds: envAI.TimeoutSeconds,
+				Provider:           AIProviderAnthropic,
+				BaseURL:            groupBaseURL,
+				APIKey:             "group-api-key",
+				Model:              "group-model",
+				TimeoutSeconds:     envAI.TimeoutSeconds,
+				BaseURLIsUntrusted: true,
 			},
 			explain: "TimeoutSeconds is never UI-managed; it's always the env value",
 		},
@@ -242,6 +246,87 @@ func Test_IntegrationsService_Update_ProviderValidation(t *testing.T) {
 			svc := newIntegrationsSvc(config.AIConf{}, config.BarcodeAPIConf{})
 			err := svc.Update(context.Background(), gid, types.GroupIntegrations{AIProvider: provider})
 			assert.Error(t, err)
+		})
+	}
+}
+
+func Test_IntegrationsService_Update_BaseURLValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		baseURL string
+		wantErr bool
+	}{
+		{name: "empty is allowed for fallback", baseURL: ""},
+		{name: "http endpoint", baseURL: "http://ollama.local:11434/v1"},
+		{name: "https endpoint", baseURL: "https://api.example.com/v1"},
+		{name: "surrounding whitespace is normalized", baseURL: "  https://api.example.com/v1  "},
+		{name: "relative URL rejected", baseURL: "/v1", wantErr: true},
+		{name: "unsupported scheme rejected", baseURL: "file:///etc/passwd", wantErr: true},
+		{name: "userinfo rejected", baseURL: "https://user:secret@example.com/v1", wantErr: true},
+		{name: "query rejected", baseURL: "https://example.com/v1?token=secret", wantErr: true},
+		{name: "fragment rejected", baseURL: "https://example.com/v1#fragment", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gid := integrationsTestGroup(t)
+			svc := newIntegrationsSvc(config.AIConf{}, config.BarcodeAPIConf{})
+
+			err := svc.Update(context.Background(), gid, types.GroupIntegrations{
+				AIProvider: AIProviderOpenAICompatible,
+				AIBaseURL:  tt.baseURL,
+			})
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, ErrInvalidAIBaseURL)
+				return
+			}
+			require.NoError(t, err)
+
+			got, err := tRepos.Groups.IntegrationsGet(context.Background(), gid)
+			require.NoError(t, err)
+			assert.Equal(t, strings.TrimSpace(tt.baseURL), got.AIBaseURL)
+		})
+	}
+}
+
+func Test_IntegrationsService_Update_FieldBoundsAndHeaderSafety(t *testing.T) {
+	tests := []struct {
+		name string
+		data types.GroupIntegrations
+	}{
+		{
+			name: "base URL too long",
+			data: types.GroupIntegrations{AIProvider: AIProviderOpenAICompatible, AIBaseURL: "https://example.com/" + strings.Repeat("a", maxIntegrationBaseURLBytes)},
+		},
+		{
+			name: "model too long",
+			data: types.GroupIntegrations{AIModel: strings.Repeat("m", maxIntegrationModelBytes+1)},
+		},
+		{
+			name: "contact too long",
+			data: types.GroupIntegrations{OpenFoodFactsContact: strings.Repeat("c", maxIntegrationContactBytes+1)},
+		},
+		{
+			name: "contact CRLF injection",
+			data: types.GroupIntegrations{OpenFoodFactsContact: "owner@example.com\r\nX-Injected: yes"},
+		},
+		{
+			name: "AI secret too long",
+			data: types.GroupIntegrations{AIAPIKey: strings.Repeat("s", maxIntegrationSecretBytes+1)},
+		},
+		{
+			name: "barcode secret too long",
+			data: types.GroupIntegrations{BarcodeTokenBarcodespider: strings.Repeat("s", maxIntegrationSecretBytes+1)},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gid := integrationsTestGroup(t)
+			svc := newIntegrationsSvc(config.AIConf{}, config.BarcodeAPIConf{})
+			err := svc.Update(context.Background(), gid, tt.data)
+			require.ErrorIs(t, err, ErrInvalidIntegrationData)
 		})
 	}
 }

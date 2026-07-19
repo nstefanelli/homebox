@@ -5,8 +5,6 @@ env:
   HBOX_DATABASE_DRIVER: sqlite3
   HBOX_DATABASE_SQLITE_PATH: .data/homebox.db?_pragma=busy_timeout=1000&_pragma=journal_mode=WAL&_fk=1&_time_format=sqlite
   HBOX_OPTIONS_ALLOW_REGISTRATION: true
-  UNSAFE_DISABLE_PASSWORD_PROJECTION: "yes_i_am_sure"
-  HBOX_AUTH_API_KEY_PEPPER: "dev-only-pepper-not-for-production-use-32b+"
 tasks:
   setup:
     desc: Install development dependencies
@@ -60,6 +58,8 @@ tasks:
   go:run:
     env:
       HBOX_DEMO: true
+      UNSAFE_DISABLE_PASSWORD_PROJECTION: "yes_i_am_sure"
+      HBOX_AUTH_API_KEY_PEPPER: "dev-only-pepper-not-for-production-use-32b+"
     desc: Starts the backend api server (depends on generate task)
     dir: backend
     deps:
@@ -71,6 +71,8 @@ tasks:
   go:run:postgresql:
     env:
       HBOX_DEMO: true
+      UNSAFE_DISABLE_PASSWORD_PROJECTION: "yes_i_am_sure"
+      HBOX_AUTH_API_KEY_PEPPER: "dev-only-pepper-not-for-production-use-32b+"
       HBOX_DATABASE_DRIVER: postgres
       HBOX_DATABASE_USERNAME: homebox
       HBOX_DATABASE_PASSWORD: homebox
@@ -89,7 +91,10 @@ tasks:
   go:ci:
     env:
       HBOX_DEMO: true
-    desc: Runs all go test and lint related tasks
+      HBOX_AUTH_RATE_LIMIT_ENABLED: false
+      UNSAFE_DISABLE_PASSWORD_PROJECTION: "yes_i_am_sure"
+      HBOX_AUTH_API_KEY_PEPPER: "dev-only-pepper-not-for-production-use-32b+"
+    desc: Starts the backend API for frontend integration tests
     dir: backend
     cmds:
       - go run ./app/api/ {{ .CLI_ARGS }} &
@@ -183,6 +188,11 @@ tasks:
       - pnpm run typecheck
 
   test:ci:
+    env:
+      HBOX_DEMO: false
+      HBOX_AUTH_RATE_LIMIT_ENABLED: false
+      UNSAFE_DISABLE_PASSWORD_PROJECTION: "yes_i_am_sure"
+      HBOX_AUTH_API_KEY_PEPPER: "dev-only-pepper-not-for-production-use-32b+"
     desc: Runs end-to-end test on a live server (only for use in CI)
     cmds:
       - cd backend && go build ./app/api
@@ -193,6 +203,10 @@ tasks:
 
   test:ci:postgresql:
     env:
+      HBOX_DEMO: false
+      HBOX_AUTH_RATE_LIMIT_ENABLED: false
+      UNSAFE_DISABLE_PASSWORD_PROJECTION: "yes_i_am_sure"
+      HBOX_AUTH_API_KEY_PEPPER: "dev-only-pepper-not-for-production-use-32b+"
       HBOX_DATABASE_DRIVER: postgres
       HBOX_DATABASE_USERNAME: homebox
       HBOX_DATABASE_PASSWORD: homebox

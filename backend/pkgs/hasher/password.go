@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -35,6 +36,13 @@ var p = &params{
 	saltLength:  16,
 	keyLength:   32,
 }
+
+const (
+	maxArgonMemoryKiB       = uint32(256 * 1024)
+	maxArgonIterations      = uint32(10)
+	maxArgonParallelism     = uint8(16)
+	maxArgonComponentLength = 1024
+)
 
 func init() { // nolint: gochecknoinits
 	disableHas := os.Getenv("UNSAFE_DISABLE_PASSWORD_PROJECTION") == "yes_i_am_sure"
@@ -131,6 +139,41 @@ func HashPasswordCtx(ctx context.Context, password string) (string, error) {
 // to CheckPasswordHashCtx with a Background context.
 func CheckPasswordHash(password, hash string) (bool, bool) {
 	return CheckPasswordHashCtx(context.Background(), password, hash)
+}
+
+// staticDummyHash is a valid argon2id-encoded hash used as a fallback for timing
+// equalization if hashing a placeholder at runtime ever fails. Because decodeHash
+// reads the argon2 cost parameters from the encoded hash itself, comparing against
+// this runs the full KDF at the same cost as a real login.
+const staticDummyHash = "$argon2id$v=19$m=65536,t=3,p=2$sD6MJ4qEDD8pJGFFb8Ew7A$v0FY6vLHFJyJUm2cAa8qEYLd1x5WlCQ01B24AJ/Tcxs"
+
+var (
+	dummyHashOnce sync.Once
+	dummyHash     string
+)
+
+// timingEqualizationHash returns a valid argon2id hash generated with the active
+// parameters, computed once on first use.
+func timingEqualizationHash() string {
+	dummyHashOnce.Do(func() {
+		h, err := HashPassword("homebox-timing-equalization-placeholder")
+		if err != nil {
+			dummyHash = staticDummyHash
+			return
+		}
+		dummyHash = h
+	})
+	return dummyHash
+}
+
+// CheckDummyPasswordHashCtx performs a full password comparison against a valid
+// dummy argon2id hash. Authentication paths that reject before loading a real hash
+// use it to avoid exposing account existence through response timing.
+func CheckDummyPasswordHashCtx(ctx context.Context) {
+	if !enabled {
+		return
+	}
+	CheckPasswordHashCtx(ctx, "not-a-real-password", timingEqualizationHash())
 }
 
 // CheckPasswordHashCtx checks the password and emits spans for each branch (argon2id
@@ -306,17 +349,30 @@ func decodeHash(encodedHash string) (out *params, salt, hash []byte, err error) 
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("invalid params segment %q: %w", vals[3], err)
 	}
+	if out.memory == 0 || out.memory > maxArgonMemoryKiB ||
+		out.iterations == 0 || out.iterations > maxArgonIterations ||
+		out.parallelism == 0 || out.parallelism > maxArgonParallelism {
+		return nil, nil, nil, fmt.Errorf("argon2 parameters exceed verification limits")
+	}
 
 	salt, err = base64.RawStdEncoding.Strict().DecodeString(vals[4])
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("invalid salt: %w", err)
 	}
+	if len(salt) == 0 || len(salt) > maxArgonComponentLength {
+		return nil, nil, nil, fmt.Errorf("argon2 salt length %d is outside verification limits", len(salt))
+	}
+	// #nosec G115 -- len(salt) is proven nonzero and <= 1024 immediately above.
 	out.saltLength = uint32(len(salt))
 
 	hash, err = base64.RawStdEncoding.Strict().DecodeString(vals[5])
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("invalid key: %w", err)
 	}
+	if len(hash) == 0 || len(hash) > maxArgonComponentLength {
+		return nil, nil, nil, fmt.Errorf("argon2 key length %d is outside verification limits", len(hash))
+	}
+	// #nosec G115 -- len(hash) is proven nonzero and <= 1024 immediately above.
 	out.keyLength = uint32(len(hash))
 
 	return out, salt, hash, nil

@@ -108,18 +108,25 @@ func (ctrl *V1Controller) readPhotoUpload(w http.ResponseWriter, r *http.Request
 		log.Warn().Err(err).Msg("failed to extend response deadline for analyze-photo")
 	}
 
-	if err := r.ParseMultipartForm(ctrl.maxUploadSize << 20); err != nil {
-		return nil, "", validate.NewRequestError(errors.New("failed to parse multipart form"), http.StatusBadRequest)
+	r.Body = http.MaxBytesReader(w, r.Body, multipartRequestLimit(ctrl.maxUploadSize))
+	// #nosec G120 -- the complete body is bounded by MaxBytesReader
+	// immediately above; maxMemory controls only RAM versus temp-file use.
+	if err := r.ParseMultipartForm(megabytesToBytes(ctrl.maxUploadSize)); err != nil {
+		return nil, "", multipartParseRequestError(err)
 	}
 	file, _, err := r.FormFile("file")
 	if err != nil {
-		return nil, "", validate.NewRequestError(errors.New("no image provided"), http.StatusBadRequest)
+		return nil, "", multipartFileRequestError(err, "image")
 	}
 	defer func() { _ = file.Close() }()
 
-	imageBytes, err := io.ReadAll(io.LimitReader(file, ctrl.maxUploadSize<<20))
+	maxBytes := megabytesToBytes(ctrl.maxUploadSize)
+	imageBytes, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
 	if err != nil {
-		return nil, "", validate.NewRequestError(errors.New("failed to read image"), http.StatusBadRequest)
+		return nil, "", multipartContentReadError(err, "image")
+	}
+	if int64(len(imageBytes)) > maxBytes {
+		return nil, "", validate.NewRequestError(errors.New("image exceeds upload size limit"), http.StatusRequestEntityTooLarge)
 	}
 	mimeType := http.DetectContentType(imageBytes)
 	switch mimeType {

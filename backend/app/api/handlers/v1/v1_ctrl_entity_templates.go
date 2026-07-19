@@ -1,11 +1,17 @@
 package v1
 
 import (
+	"bytes"
 	"errors"
+	"image"
+	_ "image/jpeg"
+	_ "image/png"
+	"io"
 	"mime"
 	"net/http"
 	"net/url"
 
+	"github.com/gen2brain/webp"
 	"github.com/google/uuid"
 	"github.com/hay-kot/httpkit/errchain"
 	"github.com/hay-kot/httpkit/server"
@@ -22,6 +28,27 @@ import (
 	_ "gocloud.dev/blob/s3blob"
 	"gocloud.dev/gcerrors"
 )
+
+func validateTemplatePhotoContent(content []byte) (string, error) {
+	if len(content) == 0 {
+		return "", errors.New("photo is empty")
+	}
+
+	mimeType := http.DetectContentType(content)
+	var err error
+	switch mimeType {
+	case "image/jpeg", "image/png":
+		_, _, err = image.DecodeConfig(bytes.NewReader(content))
+	case "image/webp":
+		_, err = webp.DecodeConfig(bytes.NewReader(content))
+	default:
+		return "", errors.New("file is not a supported image (jpeg/png/webp)")
+	}
+	if err != nil {
+		return "", errors.New("file is not a valid image")
+	}
+	return mimeType, nil
+}
 
 // HandleEntityTemplatesGetAll godoc
 //
@@ -158,6 +185,7 @@ func (ctrl *V1Controller) HandleEntityTemplatesCreateItem() errchain.HandlerFunc
 				TextValue:    f.TextValue,
 				NumberValue:  f.NumberValue,
 				BooleanValue: f.BooleanValue,
+				TimeValue:    f.TimeValue,
 			}
 		})
 
@@ -228,6 +256,7 @@ func (ctrl *V1Controller) HandleEntityTemplatesBatchCreate() errchain.HandlerFun
 				TextValue:    f.TextValue,
 				NumberValue:  f.NumberValue,
 				BooleanValue: f.BooleanValue,
+				TimeValue:    f.TimeValue,
 			}
 		})
 
@@ -268,16 +297,31 @@ func (ctrl *V1Controller) HandleEntityTemplatesBatchCreate() errchain.HandlerFun
 //	@Security	Bearer
 func (ctrl *V1Controller) HandleEntityTemplatePhotoUpload() errchain.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) error {
-		err := r.ParseMultipartForm(ctrl.maxUploadSize << 20)
+		r.Body = http.MaxBytesReader(w, r.Body, multipartRequestLimit(ctrl.maxUploadSize))
+		// #nosec G120 -- the complete body is bounded by MaxBytesReader
+		// immediately above; maxMemory controls only RAM versus temp-file use.
+		err := r.ParseMultipartForm(megabytesToBytes(ctrl.maxUploadSize))
 		if err != nil {
-			return validate.NewRequestError(errors.New("failed to parse multipart form"), http.StatusBadRequest)
+			return multipartParseRequestError(err)
 		}
 
 		file, header, err := r.FormFile("file")
 		if err != nil {
-			return validate.NewRequestError(errors.New("file is required"), http.StatusBadRequest)
+			return multipartFileRequestError(err, "photo")
 		}
 		defer func() { _ = file.Close() }()
+
+		maxBytes := megabytesToBytes(ctrl.maxUploadSize)
+		content, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
+		if err != nil {
+			return multipartContentReadError(err, "photo")
+		}
+		if int64(len(content)) > maxBytes {
+			return validate.NewRequestError(errors.New("photo exceeds upload size limit"), http.StatusRequestEntityTooLarge)
+		}
+		if _, err := validateTemplatePhotoContent(content); err != nil {
+			return validate.NewRequestError(err, http.StatusBadRequest)
+		}
 
 		id, err := ctrl.routeID(r)
 		if err != nil {
@@ -293,7 +337,7 @@ func (ctrl *V1Controller) HandleEntityTemplatePhotoUpload() errchain.HandlerFunc
 
 		res, err := ctrl.repo.Attachments.UploadFileByGroupID(r.Context(), auth.GID, repo.ItemCreateAttachment{
 			Title:   sanitizeAttachmentName(header.Filename),
-			Content: file,
+			Content: bytes.NewReader(content),
 		})
 		if err != nil {
 			return validate.NewRequestError(err, http.StatusInternalServerError)
