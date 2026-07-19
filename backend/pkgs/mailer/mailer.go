@@ -65,8 +65,18 @@ func (m *Mailer) SendContext(ctx context.Context, msg *Message) (sendErr error) 
 		defer cancel()
 	}
 	defer func() {
-		if sendErr != nil && ctx.Err() != nil {
-			sendErr = ctx.Err()
+		if sendErr == nil {
+			return
+		}
+		if contextErr := ctx.Err(); contextErr != nil {
+			sendErr = contextErr
+			return
+		}
+		// The connection and context share a deadline, but the socket can
+		// report its timeout just before the context timer publishes Err().
+		// Preserve the context-aware contract at that scheduling boundary.
+		if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+			sendErr = context.DeadlineExceeded
 		}
 	}()
 
