@@ -3,10 +3,13 @@ package repo
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/sysadminsmedia/homebox/backend/internal/data/ent"
+	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/tag"
 )
 
 func tagFactory() TagCreate {
@@ -319,4 +322,208 @@ func TestTagRepository_Update_RemoveParent(t *testing.T) {
 
 	_ = tRepos.Tags.delete(context.Background(), child.ID)
 	_ = tRepos.Tags.delete(context.Background(), parent.ID)
+}
+
+func TestTagRepository_RelationshipReadsExcludeCrossGroupEdges(t *testing.T) {
+	ctx := context.Background()
+	parent, err := tRepos.Tags.Create(ctx, tGroup.ID, TagCreate{Name: "scoped-parent"})
+	require.NoError(t, err)
+	child, err := tRepos.Tags.Create(ctx, tGroup.ID, TagCreate{
+		Name:     "scoped-child",
+		ParentID: parent.ID,
+	})
+	require.NoError(t, err)
+	_, foreignTagID, _ := makeForeignGroup(t)
+
+	t.Cleanup(func() {
+		_ = tClient.Tag.UpdateOneID(child.ID).ClearParent().Exec(context.Background())
+		_ = tClient.Tag.UpdateOneID(foreignTagID).ClearParent().Exec(context.Background())
+		_ = tRepos.Tags.delete(context.Background(), child.ID)
+		_ = tRepos.Tags.delete(context.Background(), parent.ID)
+		_ = tRepos.Tags.delete(context.Background(), foreignTagID)
+	})
+
+	// Simulate legacy corruption in both directions.
+	require.NoError(t, tClient.Tag.UpdateOneID(child.ID).SetParentID(foreignTagID).Exec(ctx))
+	require.NoError(t, tClient.Tag.UpdateOneID(foreignTagID).SetParentID(parent.ID).Exec(ctx))
+
+	gotParent, err := tRepos.Tags.GetOne(ctx, tGroup.ID, parent.ID)
+	require.NoError(t, err)
+	assert.Empty(t, gotParent.Children, "foreign children must not be disclosed")
+
+	gotChild, err := tRepos.Tags.GetOne(ctx, tGroup.ID, child.ID)
+	require.NoError(t, err)
+	assert.Nil(t, gotChild.Parent, "foreign parents must not be disclosed")
+	assert.Equal(t, uuid.Nil, gotChild.ParentID)
+
+	all, err := tRepos.Tags.GetAll(ctx, tGroup.ID)
+	require.NoError(t, err)
+	matched := false
+	for _, item := range all {
+		if item.ID == child.ID {
+			matched = true
+			assert.Equal(t, uuid.Nil, item.ParentID)
+		}
+	}
+	assert.True(t, matched)
+}
+
+func TestTagRepository_DescendantsAreTenantScoped(t *testing.T) {
+	ctx := context.Background()
+	root, err := tRepos.Tags.Create(ctx, tGroup.ID, TagCreate{Name: "descendant-root"})
+	require.NoError(t, err)
+	child, err := tRepos.Tags.Create(ctx, tGroup.ID, TagCreate{
+		Name:     "descendant-child",
+		ParentID: root.ID,
+	})
+	require.NoError(t, err)
+	_, foreignTagID, _ := makeForeignGroup(t)
+
+	t.Cleanup(func() {
+		_ = tClient.Tag.UpdateOneID(foreignTagID).ClearParent().Exec(context.Background())
+		_ = tRepos.Tags.delete(context.Background(), child.ID)
+		_ = tRepos.Tags.delete(context.Background(), root.ID)
+		_ = tRepos.Tags.delete(context.Background(), foreignTagID)
+	})
+	require.NoError(t, tClient.Tag.UpdateOneID(foreignTagID).SetParentID(root.ID).Exec(ctx))
+
+	descendants, err := tRepos.Tags.GetDescendantTagIDs(ctx, tGroup.ID, []uuid.UUID{root.ID})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []uuid.UUID{root.ID, child.ID}, descendants)
+	assert.NotContains(t, descendants, foreignTagID)
+
+	_, err = tRepos.Tags.GetDescendantTagIDs(ctx, tGroup.ID, []uuid.UUID{foreignTagID})
+	require.Error(t, err)
+	assert.True(t, ent.IsNotFound(err))
+
+	_, err = tRepos.Entities.QueryByGroup(ctx, tGroup.ID, EntityQuery{TagIDs: []uuid.UUID{foreignTagID}})
+	require.Error(t, err)
+	assert.True(t, ent.IsNotFound(err))
+}
+
+func TestTagRepository_RejectsCrossGroupMutationTargetsAndParents(t *testing.T) {
+	ctx := context.Background()
+	own, err := tRepos.Tags.Create(ctx, tGroup.ID, TagCreate{Name: "own-tag"})
+	require.NoError(t, err)
+	foreignGID, foreignTagID, _ := makeForeignGroup(t)
+	t.Cleanup(func() {
+		_ = tRepos.Tags.delete(context.Background(), own.ID)
+		_ = tRepos.Tags.delete(context.Background(), foreignTagID)
+	})
+
+	_, err = tRepos.Tags.Create(ctx, tGroup.ID, TagCreate{
+		Name:     "foreign-parent-create",
+		ParentID: foreignTagID,
+	})
+	require.Error(t, err)
+
+	_, err = tRepos.Tags.UpdateByGroup(ctx, tGroup.ID, TagUpdate{
+		ID:       own.ID,
+		Name:     "must-not-change",
+		ParentID: foreignTagID,
+	})
+	require.Error(t, err)
+
+	_, err = tRepos.Tags.UpdateByGroup(ctx, tGroup.ID, TagUpdate{
+		ID:   foreignTagID,
+		Name: "foreign-must-not-change",
+	})
+	require.Error(t, err)
+	assert.True(t, ent.IsNotFound(err))
+
+	gotOwn, err := tRepos.Tags.GetOne(ctx, tGroup.ID, own.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "own-tag", gotOwn.Name)
+	gotForeign, err := tRepos.Tags.GetOne(ctx, foreignGID, foreignTagID)
+	require.NoError(t, err)
+	assert.NotEqual(t, "foreign-must-not-change", gotForeign.Name)
+}
+
+func TestTagRepository_CorruptCycleTraversalIsBounded(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	a, err := tRepos.Tags.Create(ctx, tGroup.ID, TagCreate{Name: "cycle-a"})
+	require.NoError(t, err)
+	b, err := tRepos.Tags.Create(ctx, tGroup.ID, TagCreate{Name: "cycle-b", ParentID: a.ID})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = tClient.Tag.UpdateOneID(a.ID).ClearParent().Exec(context.Background())
+		_ = tClient.Tag.UpdateOneID(b.ID).ClearParent().Exec(context.Background())
+		_ = tRepos.Tags.delete(context.Background(), b.ID)
+		_ = tRepos.Tags.delete(context.Background(), a.ID)
+	})
+	require.NoError(t, tClient.Tag.UpdateOneID(a.ID).SetParentID(b.ID).Exec(ctx))
+
+	descendants, err := tRepos.Tags.GetDescendantTagIDs(ctx, tGroup.ID, []uuid.UUID{a.ID})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []uuid.UUID{a.ID, b.ID}, descendants)
+
+	_, err = tRepos.Tags.Create(ctx, tGroup.ID, TagCreate{
+		Name:     "cycle-child",
+		ParentID: a.ID,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "max depth")
+}
+
+func TestTagRepository_ConcurrentMovesCannotCreateCycle(t *testing.T) {
+	ctx := context.Background()
+	a, err := tRepos.Tags.Create(ctx, tGroup.ID, TagCreate{Name: "concurrent-a"})
+	require.NoError(t, err)
+	b, err := tRepos.Tags.Create(ctx, tGroup.ID, TagCreate{Name: "concurrent-b"})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = tClient.Tag.UpdateOneID(a.ID).ClearParent().Exec(context.Background())
+		_ = tClient.Tag.UpdateOneID(b.ID).ClearParent().Exec(context.Background())
+		_ = tRepos.Tags.delete(context.Background(), b.ID)
+		_ = tRepos.Tags.delete(context.Background(), a.ID)
+	})
+
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	go func() {
+		<-start
+		_, moveErr := tRepos.Tags.UpdateByGroup(ctx, tGroup.ID, TagUpdate{
+			ID:       a.ID,
+			Name:     a.Name,
+			ParentID: b.ID,
+		})
+		results <- moveErr
+	}()
+	go func() {
+		<-start
+		_, moveErr := tRepos.Tags.UpdateByGroup(ctx, tGroup.ID, TagUpdate{
+			ID:       b.ID,
+			Name:     b.Name,
+			ParentID: a.ID,
+		})
+		results <- moveErr
+	}()
+	close(start)
+
+	firstErr := <-results
+	secondErr := <-results
+	successes := 0
+	if firstErr == nil {
+		successes++
+	}
+	if secondErr == nil {
+		successes++
+	}
+	assert.LessOrEqual(t, successes, 1)
+
+	parentID := func(id uuid.UUID) uuid.UUID {
+		t.Helper()
+		parent, queryErr := tClient.Tag.Query().
+			Where(tag.ID(id)).
+			QueryParent().
+			Only(ctx)
+		if ent.IsNotFound(queryErr) {
+			return uuid.Nil
+		}
+		require.NoError(t, queryErr)
+		return parent.ID
+	}
+	assert.False(t, parentID(a.ID) == b.ID && parentID(b.ID) == a.ID)
 }

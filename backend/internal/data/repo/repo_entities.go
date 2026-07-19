@@ -844,7 +844,7 @@ func applyEntityTypeQueryFilters(qb *ent.EntityQuery, gid uuid.UUID, q EntityQue
 	)
 }
 
-func prepareEntityFetchQuery(qb *ent.EntityQuery, q EntityQuery) *ent.EntityQuery {
+func prepareEntityFetchQuery(qb *ent.EntityQuery, gid uuid.UUID, q EntityQuery) *ent.EntityQuery {
 	switch q.OrderBy {
 	case "createdAt":
 		qb = qb.Order(ent.Desc(entity.FieldCreatedAt))
@@ -857,9 +857,15 @@ func prepareEntityFetchQuery(qb *ent.EntityQuery, q EntityQuery) *ent.EntityQuer
 	}
 
 	qb = qb.
-		WithTag().
-		WithParent().
-		WithEntityType().
+		WithTag(func(tagQuery *ent.TagQuery) {
+			tagQuery.Where(tag.HasGroupWith(group.ID(gid)))
+		}).
+		WithParent(func(parentQuery *ent.EntityQuery) {
+			parentQuery.Where(entity.HasGroupWith(group.ID(gid)))
+		}).
+		WithEntityType(func(typeQuery *ent.EntityTypeQuery) {
+			typeQuery.Where(entitytype.HasGroupWith(group.ID(gid)))
+		}).
 		WithAttachments(func(aq *ent.AttachmentQuery) {
 			aq.Where(attachment.Primary(true))
 			aq.WithThumbnail()
@@ -923,13 +929,12 @@ func (r *EntityRepository) QueryByGroup(ctx context.Context, gid uuid.UUID, q En
 			tagRepo := &TagRepository{r.db, r.bus}
 			ctxDescendants, descSpan := entityTracer().Start(ctx, "repo.EntityRepository.QueryByGroup.tagDescendants",
 				trace.WithAttributes(attribute.Int("query.tag_ids.count", len(q.TagIDs))))
-			descendants, err := tagRepo.GetDescendantTagIDs(ctxDescendants, q.TagIDs)
-			if err != nil {
-				recordSpanError(descSpan, err)
-				log.Warn().Err(err).Msg("failed to get descendant tags, using only direct tags")
-				descendants = q.TagIDs
-			} else if len(descendants) == 0 {
-				descendants = q.TagIDs
+			descendants, descendantsErr := tagRepo.GetDescendantTagIDs(ctxDescendants, gid, q.TagIDs)
+			if descendantsErr != nil {
+				recordSpanError(descSpan, descendantsErr)
+				descSpan.End()
+				recordSpanError(span, descendantsErr)
+				return PaginationResult[EntitySummary]{}, descendantsErr
 			}
 			descSpan.SetAttributes(attribute.Int("query.tag_descendants.count", len(descendants)))
 			descSpan.End()
@@ -1025,7 +1030,7 @@ func (r *EntityRepository) QueryByGroup(ctx context.Context, gid uuid.UUID, q En
 	countSpan.SetAttributes(attribute.Int("query.total.count", count))
 	countSpan.End()
 
-	qb = prepareEntityFetchQuery(qb, q)
+	qb = prepareEntityFetchQuery(qb, gid, q)
 
 	fetchCtx, fetchSpan := entityTracer().Start(ctx, "repo.EntityRepository.QueryByGroup.fetch")
 	entities, err := mapEntitiesSummaryErr(qb.All(fetchCtx))
@@ -1181,9 +1186,15 @@ func (r *EntityRepository) GetAll(ctx context.Context, gid uuid.UUID) ([]EntityO
 
 	out, err := mapEntitiesOutErr(r.db.Entity.Query().
 		Where(entity.HasGroupWith(group.ID(gid))).
-		WithTag().
-		WithParent().
-		WithEntityType().
+		WithTag(func(tagQuery *ent.TagQuery) {
+			tagQuery.Where(tag.HasGroupWith(group.ID(gid)))
+		}).
+		WithParent(func(parentQuery *ent.EntityQuery) {
+			parentQuery.Where(entity.HasGroupWith(group.ID(gid)))
+		}).
+		WithEntityType(func(typeQuery *ent.EntityTypeQuery) {
+			typeQuery.Where(entitytype.HasGroupWith(group.ID(gid)))
+		}).
 		WithFields().
 		All(ctx))
 	if err != nil {
