@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ardanlabs/conf/v3"
+	confyaml "github.com/ardanlabs/conf/v3/yaml"
 )
 
 // redactedValue is the sentinel substituted for any sensitive field when the
@@ -54,12 +55,14 @@ func RedactURLUserinfo(raw string) string {
 }
 
 const (
-	ModeDevelopment = "development"
-	ModeProduction  = "production"
+	ModeDevelopment   = "development"
+	ModeProduction    = "production"
+	defaultConfigPath = "/data/config.yml"
 )
 
 type Config struct {
 	conf.Version
+	Args       conf.Args      `json:"-" yaml:"-"`
 	Mode       string         `yaml:"mode"       conf:"default:development"` // development or production
 	Web        WebConfig      `yaml:"web"`
 	Storage    Storage        `yaml:"storage"`
@@ -226,17 +229,21 @@ type AuthRateLimit struct {
 	MaxBackoff  time.Duration `yaml:"max_backoff"  conf:"default:5m"`
 }
 
-// New parses the CLI/Config file and returns a Config struct. If the file argument is an empty string, the
-// file is not read. If the file is not empty, the file is read and the Config struct is returned.
+// New parses configuration defaults, an optional positional YAML file, environment variables, and CLI flags.
+// Environment variables override YAML values, and CLI flags override both.
 func New(buildstr string, description string) (*Config, error) {
-	var cfg Config
 	const prefix = "HBOX"
 
-	cfg.Version = conf.Version{
-		Build: buildstr,
-		Desc:  description,
+	newConfig := func() Config {
+		return Config{
+			Version: conf.Version{
+				Build: buildstr,
+				Desc:  description,
+			},
+		}
 	}
 
+	cfg := newConfig()
 	help, err := conf.Parse(prefix, &cfg)
 	if err != nil {
 		if errors.Is(err, conf.ErrHelpWanted) {
@@ -244,6 +251,33 @@ func New(buildstr string, description string) (*Config, error) {
 			os.Exit(0)
 		}
 		return &cfg, fmt.Errorf("parsing config: %w", err)
+	}
+
+	configPath := cfg.Args.Num(0)
+	if configPath == "" {
+		return &cfg, nil
+	}
+
+	configData, err := os.ReadFile(configPath)
+	if err != nil {
+		// The container images use this path as their default command, while a
+		// newly created /data volume intentionally contains no config file.
+		if errors.Is(err, os.ErrNotExist) && configPath == defaultConfigPath {
+			return &cfg, nil
+		}
+		return &cfg, fmt.Errorf("reading config file %q: %w", configPath, err)
+	}
+
+	// Rebuild the config so YAML is applied before defaults, environment, and
+	// command-line flags. This preserves conf's documented override order.
+	cfg = newConfig()
+	help, err = conf.Parse(prefix, &cfg, confyaml.WithData(configData))
+	if err != nil {
+		if errors.Is(err, conf.ErrHelpWanted) {
+			fmt.Println(help)
+			os.Exit(0)
+		}
+		return &cfg, fmt.Errorf("parsing config file %q: %w", configPath, err)
 	}
 
 	return &cfg, nil
