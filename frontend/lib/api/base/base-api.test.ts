@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { hasKey, parseDate } from "./base-api";
 
 describe("hasKey works as expected", () => {
@@ -26,5 +26,24 @@ describe("parseDate should work as expected", () => {
     const result = parseDate(obj, ["key1", "key2"]);
     expect(result.key1).toBeInstanceOf(Date);
     expect(result.key2).toBeInstanceOf(Date);
+  });
+
+  test("parseDate does not log or expose invalid field values", () => {
+    const sensitiveValue = "private_field_value";
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    let thrown: unknown;
+
+    try {
+      parseDate({ createdAt: sensitiveValue, updatedAt: "2021-01-01" });
+    } catch (error) {
+      thrown = error;
+    } finally {
+      consoleSpy.mockRestore();
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect(String(thrown)).toContain("Invalid date format");
+    expect(String(thrown)).not.toContain(sensitiveValue);
+    expect(consoleSpy).not.toHaveBeenCalled();
   });
 });

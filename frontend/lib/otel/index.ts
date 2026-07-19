@@ -14,6 +14,7 @@ import type { Span, Attributes } from "@opentelemetry/api";
 import { trace, context, propagation, SpanKind, SpanStatusCode } from "@opentelemetry/api";
 import { ExportResultCode } from "@opentelemetry/core";
 import type { ExportResult } from "@opentelemetry/core";
+import { sanitizeTraceURL } from "./url";
 
 // Types for the telemetry configuration
 export interface OTelConfig {
@@ -205,7 +206,7 @@ export function initializeOTel(config: Partial<OTelConfig> = {}): void {
         applyCustomAttributesOnSpan: (span, request) => {
           // Add custom attributes to fetch spans
           if (request instanceof Request) {
-            span.setAttribute("http.url", request.url);
+            span.setAttribute("http.url", sanitizeTraceURL(request.url));
           }
         },
       }),

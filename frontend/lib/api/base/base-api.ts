@@ -44,8 +44,7 @@ export function parseDate<T>(obj: T, keys: Array<keyof T> = []): T {
       const split = value.split("-");
 
       if (split.length !== 3) {
-        console.log(`Invalid date format: ${value}`);
-        throw new Error(`Invalid date format: ${value}`);
+        throw new Error("Invalid date format");
       }
 
       const [year, month, day] = split as [string, string, string];

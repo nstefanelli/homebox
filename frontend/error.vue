@@ -2,14 +2,12 @@
   import type { NuxtError } from "#app";
   import { buttonVariants } from "@/components/ui/button";
 
-  const props = defineProps({
+  defineProps({
     error: {
       type: Object as () => NuxtError,
       required: true,
     },
   });
-
-  console.log(props.error);
 </script>
 
 <template>
