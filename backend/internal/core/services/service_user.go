@@ -26,6 +26,10 @@ var (
 	ErrorMailerNotConfigured  = errors.New("password reset by email is unavailable: SMTP is not configured")
 	ErrorPasswordResetInvalid = errors.New("password reset link is invalid or has expired")
 	ErrorPasswordTooShort     = fmt.Errorf("password must be at least %d characters", PasswordMinLength)
+	ErrorOwnedGroupHasMembers = errors.New("cannot delete account while an owned group has other members")
+	ErrorEmailAlreadyExists   = errors.New("an account with this email already exists")
+	ErrorOIDCAccountConflict  = errors.New("this email belongs to an account that cannot be linked automatically")
+	ErrorCurrentPasswordWrong = errors.New("current password is incorrect")
 )
 
 // PasswordMinLength is the minimum length enforced server-side for any flow
@@ -70,6 +74,26 @@ func SkipPasswordValidation() RegisterOption {
 	return func(o *registerOptions) { o.skipPasswordValidation = true }
 }
 
+// cleanupFailedOwnedGroupRegistration compensates for the repository methods
+// used by registration spanning multiple transactions. Delete the user first;
+// if that fails, keep its group intact so the account is not stranded with a
+// nil default group. Only newly-created, solely-owned groups may use this.
+func (svc *UserService) cleanupFailedOwnedGroupRegistration(
+	ctx context.Context,
+	groupID, userID uuid.UUID,
+	cause error,
+) error {
+	if userID != uuid.Nil {
+		if deleteErr := svc.repos.Users.Delete(ctx, userID); deleteErr != nil {
+			return errors.Join(cause, fmt.Errorf("clean up failed registration user: %w", deleteErr))
+		}
+	}
+	if deleteErr := svc.repos.Groups.GroupDelete(ctx, groupID); deleteErr != nil {
+		return errors.Join(cause, fmt.Errorf("clean up failed registration group: %w", deleteErr))
+	}
+	return cause
+}
+
 // RegisterUser creates a new user and group in the data with the provided data. It also bootstraps the user's group
 // with default Tags and Locations.
 func (svc *UserService) RegisterUser(ctx context.Context, data UserRegistration, opts ...RegisterOption) (repo.UserOut, error) {
@@ -94,12 +118,19 @@ func (svc *UserService) RegisterUser(ctx context.Context, data UserRegistration,
 		return repo.UserOut{}, ErrorPasswordTooShort
 	}
 
+	// Check before creating a new group. Besides handling legacy mixed-case
+	// rows that predate canonical storage, this avoids leaving an orphan group
+	// behind when a duplicate registration is rejected.
+	if _, err := svc.repos.Users.GetOneEmailNoEdges(ctx, data.Email); err == nil {
+		return repo.UserOut{}, ErrorEmailAlreadyExists
+	} else if !ent.IsNotFound(err) {
+		return repo.UserOut{}, err
+	}
+
 	// Don't log the raw invitation token — it's a single-use credential that
 	// grants group membership and is replayable from log aggregators until it
 	// expires. The boolean is enough for diagnostics.
 	log.Debug().
-		Str("name", data.Name).
-		Str("email", data.Email).
 		Bool("hasGroupToken", data.GroupToken != "").
 		Msg("Registering new user")
 
@@ -140,7 +171,7 @@ func (svc *UserService) RegisterUser(ctx context.Context, data UserRegistration,
 		}
 
 		if token.ExpiresAt.Before(time.Now()) {
-			err := errors.New("invitation expired")
+			err := repo.ErrInvitationExpired
 			joinSpan.SetAttributes(attribute.String("invitation.error", "expired"))
 			recordServiceSpanError(joinSpan, err)
 			joinSpan.End()
@@ -148,7 +179,7 @@ func (svc *UserService) RegisterUser(ctx context.Context, data UserRegistration,
 			return repo.UserOut{}, err
 		}
 		if token.Uses <= 0 {
-			err := errors.New("invitation used up")
+			err := repo.ErrInvitationExhausted
 			joinSpan.SetAttributes(attribute.String("invitation.error", "used_up"))
 			recordServiceSpanError(joinSpan, err)
 			joinSpan.End()
@@ -169,11 +200,19 @@ func (svc *UserService) RegisterUser(ctx context.Context, data UserRegistration,
 		attribute.Bool("registration.creating_group", creatingGroup),
 	)
 
+	var createdUserID uuid.UUID
+	cleanup := func(cause error) error {
+		if !creatingGroup {
+			return cause
+		}
+		return svc.cleanupFailedOwnedGroupRegistration(ctx, group.ID, createdUserID, cause)
+	}
+
 	hashed, err := hasher.HashPasswordCtx(ctx, data.Password)
 	if err != nil {
 		recordServiceSpanError(span, err)
 		log.Err(err).Msg("Failed to hash password")
-		return repo.UserOut{}, err
+		return repo.UserOut{}, cleanup(err)
 	}
 	usrCreate := repo.UserCreate{
 		Name:           data.Name,
@@ -187,8 +226,12 @@ func (svc *UserService) RegisterUser(ctx context.Context, data UserRegistration,
 	usr, err := svc.repos.Users.Create(ctx, usrCreate)
 	if err != nil {
 		recordServiceSpanError(span, err)
-		return repo.UserOut{}, err
+		if ent.IsConstraintError(err) {
+			err = ErrorEmailAlreadyExists
+		}
+		return repo.UserOut{}, cleanup(err)
 	}
+	createdUserID = usr.ID
 	span.SetAttributes(attribute.String("user.id", usr.ID.String()))
 	log.Debug().Msg("user created")
 
@@ -203,7 +246,7 @@ func (svc *UserService) RegisterUser(ctx context.Context, data UserRegistration,
 				recordServiceSpanError(bootstrapSpan, err)
 				bootstrapSpan.End()
 				recordServiceSpanError(span, err)
-				return repo.UserOut{}, err
+				return repo.UserOut{}, cleanup(err)
 			}
 			tagsCreated++
 		}
@@ -216,7 +259,7 @@ func (svc *UserService) RegisterUser(ctx context.Context, data UserRegistration,
 				recordServiceSpanError(bootstrapSpan, err)
 				bootstrapSpan.End()
 				recordServiceSpanError(span, err)
-				return repo.UserOut{}, err
+				return repo.UserOut{}, cleanup(err)
 			}
 			locsCreated++
 		}
@@ -228,7 +271,7 @@ func (svc *UserService) RegisterUser(ctx context.Context, data UserRegistration,
 			recordServiceSpanError(bootstrapSpan, err)
 			bootstrapSpan.End()
 			recordServiceSpanError(span, err)
-			return repo.UserOut{}, err
+			return repo.UserOut{}, cleanup(err)
 		}
 
 		bootstrapSpan.SetAttributes(
@@ -248,6 +291,9 @@ func (svc *UserService) RegisterUser(ctx context.Context, data UserRegistration,
 			decSpan.End()
 			recordServiceSpanError(span, err)
 			log.Err(err).Msg("Failed to update invitation token")
+			if deleteErr := svc.repos.Users.Delete(ctx, usr.ID); deleteErr != nil {
+				return repo.UserOut{}, errors.Join(err, fmt.Errorf("clean up failed invited user: %w", deleteErr))
+			}
 			return repo.UserOut{}, err
 		}
 		decSpan.End()
@@ -344,6 +390,9 @@ func (svc *UserService) createSessionToken(ctx context.Context, userID uuid.UUID
 		recordServiceSpanError(userSpan, err)
 		userSpan.End()
 		recordServiceSpanError(span, err)
+		if cleanupErr := svc.repos.AuthTokens.DeleteToken(ctx, attachmentToken.Hash); cleanupErr != nil {
+			return UserAuthTokenDetail{}, errors.Join(err, fmt.Errorf("clean up attachment session token: %w", cleanupErr))
+		}
 		return UserAuthTokenDetail{}, err
 	}
 	userSpan.End()
@@ -373,10 +422,11 @@ func (svc *UserService) Login(ctx context.Context, username, password string, ex
 			attribute.Bool("user.found", false),
 			attribute.String("login.outcome", "user_not_found"),
 		)
-		// SECURITY: Perform hash to ensure response times are the same
+		// SECURITY: Compare against a valid dummy hash so this path performs the
+		// same argon2id work as a wrong-password attempt.
 		_, dummySpan := entityServiceTracer().Start(ctx, "service.UserService.Login.timingDummy",
 			trace.WithAttributes(attribute.String("reason", "user_not_found")))
-		hasher.CheckPasswordHashCtx(ctx, "not-a-real-password", "not-a-real-password")
+		hasher.CheckDummyPasswordHashCtx(ctx)
 		dummySpan.End()
 		return UserAuthTokenDetail{}, ErrorInvalidLogin
 	}
@@ -389,11 +439,11 @@ func (svc *UserService) Login(ctx context.Context, username, password string, ex
 
 	// SECURITY: Deny login for users with null or empty password (OIDC users)
 	if usr.PasswordHash == "" {
-		log.Warn().Str("email", username).Msg("Login attempt blocked for user with null password (likely OIDC user)")
+		log.Warn().Stringer("user_id", usr.ID).Msg("Login attempt blocked for user with null password (likely OIDC user)")
 		span.SetAttributes(attribute.String("login.outcome", "blocked_no_password_hash"))
 		_, dummySpan := entityServiceTracer().Start(ctx, "service.UserService.Login.timingDummy",
 			trace.WithAttributes(attribute.String("reason", "no_password_hash")))
-		hasher.CheckPasswordHashCtx(ctx, "not-a-real-password", "not-a-real-password")
+		hasher.CheckDummyPasswordHashCtx(ctx)
 		dummySpan.End()
 		return UserAuthTokenDetail{}, ErrorInvalidLogin
 	}
@@ -457,7 +507,10 @@ func (svc *UserService) LoginOIDC(ctx context.Context, issuer, subject, email, n
 	name = strings.TrimSpace(name)
 
 	if issuer == "" || subject == "" {
-		log.Warn().Str("issuer", issuer).Str("subject", subject).Msg("OIDC login missing issuer or subject")
+		log.Warn().
+			Int("issuer_length", len(issuer)).
+			Int("subject_length", len(subject)).
+			Msg("OIDC login missing issuer or subject")
 		span.SetAttributes(attribute.String("oidc.outcome", "missing_issuer_or_subject"))
 		return UserAuthTokenDetail{}, ErrorInvalidLogin
 	}
@@ -467,28 +520,49 @@ func (svc *UserService) LoginOIDC(ctx context.Context, issuer, subject, email, n
 	if err != nil {
 		if !ent.IsNotFound(err) {
 			recordServiceSpanError(span, err)
-			log.Err(err).Str("issuer", issuer).Str("subject", subject).Msg("failed to lookup user by OIDC identity")
+			log.Err(err).Msg("failed to look up user by OIDC identity")
 			return UserAuthTokenDetail{}, err
 		}
-		// Not found: attempt migration path by email (legacy) if email provided
+		// Not found: the only safe email-based migration is an unclaimed,
+		// passwordless legacy account. A local-password account or an account
+		// already associated with any OIDC identity must never be silently
+		// rebound merely because an IdP asserted the same email address.
 		if email != "" {
 			migrationCtx, migrationSpan := entityServiceTracer().Start(ctx, "service.UserService.LoginOIDC.legacyEmailMigration")
 			legacyUsr, lerr := svc.repos.Users.GetOneEmail(migrationCtx, email)
 			if lerr == nil {
-				log.Info().Str("email", email).Str("issuer", issuer).Str("subject", subject).Msg("migrating legacy email-based OIDC user to issuer+subject")
-				if uerr := svc.repos.Users.SetOIDCIdentity(migrationCtx, legacyUsr.ID, issuer, subject); uerr == nil {
-					usr = legacyUsr
-					migrationSpan.SetAttributes(
-						attribute.String("oidc.migration.outcome", "migrated"),
-						attribute.String("user.id", legacyUsr.ID.String()),
-					)
-				} else {
+				if legacyUsr.PasswordHash != "" || legacyUsr.OidcIssuer != nil || legacyUsr.OidcSubject != nil {
+					migrationSpan.SetAttributes(attribute.String("oidc.migration.outcome", "ineligible_account"))
+					migrationSpan.End()
+					span.SetAttributes(attribute.String("oidc.outcome", "email_link_conflict"))
+					return UserAuthTokenDetail{}, ErrorOIDCAccountConflict
+				}
+
+				log.Info().Stringer("user_id", legacyUsr.ID).Msg("linking eligible legacy account to OIDC identity")
+				uerr := svc.repos.Users.SetOIDCIdentity(migrationCtx, legacyUsr.ID, issuer, subject)
+				if uerr != nil {
 					migrationSpan.SetAttributes(attribute.String("oidc.migration.outcome", "set_identity_failed"))
 					recordServiceSpanError(migrationSpan, uerr)
-					log.Err(uerr).Str("email", email).Msg("failed to set OIDC identity on legacy user")
+					migrationSpan.End()
+					if errors.Is(uerr, repo.ErrOIDCIdentityConflict) {
+						span.SetAttributes(attribute.String("oidc.outcome", "email_link_conflict"))
+						return UserAuthTokenDetail{}, ErrorOIDCAccountConflict
+					}
+					return UserAuthTokenDetail{}, uerr
 				}
-			} else {
+
+				usr = legacyUsr
+				migrationSpan.SetAttributes(
+					attribute.String("oidc.migration.outcome", "migrated"),
+					attribute.String("user.id", legacyUsr.ID.String()),
+				)
+			} else if ent.IsNotFound(lerr) {
 				migrationSpan.SetAttributes(attribute.String("oidc.migration.outcome", "no_legacy_user"))
+			} else {
+				migrationSpan.SetAttributes(attribute.String("oidc.migration.outcome", "email_lookup_failed"))
+				recordServiceSpanError(migrationSpan, lerr)
+				migrationSpan.End()
+				return UserAuthTokenDetail{}, lerr
 			}
 			migrationSpan.End()
 		}
@@ -496,23 +570,23 @@ func (svc *UserService) LoginOIDC(ctx context.Context, issuer, subject, email, n
 
 	// Create user if still not resolved
 	if usr.ID == uuid.Nil {
-		log.Debug().Str("issuer", issuer).Str("subject", subject).Msg("OIDC user not found, creating new user")
+		log.Debug().Msg("OIDC user not found, creating new user")
 		span.SetAttributes(attribute.String("oidc.outcome", "creating_user"))
 		usr, err = svc.registerOIDCUser(ctx, issuer, subject, email, name)
 		if err != nil {
 			if ent.IsConstraintError(err) {
 				if usr2, gerr := svc.repos.Users.GetOneOIDC(ctx, issuer, subject); gerr == nil {
-					log.Info().Str("issuer", issuer).Str("subject", subject).Msg("OIDC user created concurrently; proceeding")
+					log.Info().Stringer("user_id", usr2.ID).Msg("OIDC user created concurrently; proceeding")
 					usr = usr2
 					span.SetAttributes(attribute.String("oidc.outcome", "concurrent_create_resolved"))
 				} else {
 					recordServiceSpanError(span, gerr)
-					log.Err(gerr).Str("issuer", issuer).Str("subject", subject).Msg("failed to fetch user after constraint error")
+					log.Err(gerr).Msg("failed to fetch OIDC user after constraint error")
 					return UserAuthTokenDetail{}, gerr
 				}
 			} else {
 				recordServiceSpanError(span, err)
-				log.Err(err).Str("issuer", issuer).Str("subject", subject).Msg("failed to create OIDC user")
+				log.Err(err).Msg("failed to create OIDC user")
 				return UserAuthTokenDetail{}, err
 			}
 		}
@@ -545,6 +619,11 @@ func (svc *UserService) registerOIDCUser(ctx context.Context, issuer, subject, e
 	}
 	span.SetAttributes(attribute.String("group.id", group.ID.String()))
 
+	var createdUserID uuid.UUID
+	cleanup := func(cause error) error {
+		return svc.cleanupFailedOwnedGroupRegistration(ctx, group.ID, createdUserID, cause)
+	}
+
 	usrCreate := repo.UserCreate{
 		Name:           name,
 		Email:          email,
@@ -557,31 +636,32 @@ func (svc *UserService) registerOIDCUser(ctx context.Context, issuer, subject, e
 	entUser, err := svc.repos.Users.CreateWithOIDC(ctx, usrCreate, issuer, subject)
 	if err != nil {
 		recordServiceSpanError(span, err)
-		return repo.UserOut{}, err
+		return repo.UserOut{}, cleanup(err)
 	}
+	createdUserID = entUser.ID
 	span.SetAttributes(attribute.String("user.id", entUser.ID.String()))
 
 	bootstrapCtx, bootstrapSpan := entityServiceTracer().Start(ctx, "service.UserService.registerOIDCUser.bootstrap")
-	log.Debug().Str("issuer", issuer).Str("subject", subject).Msg("creating default tags for OIDC user")
+	log.Debug().Msg("creating default tags for OIDC user")
 	tagsCreated := 0
 	for _, tag := range defaultTags() {
 		_, err := svc.repos.Tags.Create(bootstrapCtx, group.ID, tag)
 		if err != nil {
 			recordServiceSpanError(bootstrapSpan, err)
-			log.Err(err).Msg("Failed to create default tag")
-			continue
+			bootstrapSpan.End()
+			return repo.UserOut{}, cleanup(fmt.Errorf("create default tag: %w", err))
 		}
 		tagsCreated++
 	}
 
-	log.Debug().Str("issuer", issuer).Str("subject", subject).Msg("creating default locations for OIDC user")
+	log.Debug().Msg("creating default locations for OIDC user")
 	locsCreated := 0
 	for _, loc := range defaultLocations() {
 		_, err := svc.repos.Entities.CreateContainer(bootstrapCtx, group.ID, loc)
 		if err != nil {
 			recordServiceSpanError(bootstrapSpan, err)
-			log.Err(err).Msg("Failed to create default location")
-			continue
+			bootstrapSpan.End()
+			return repo.UserOut{}, cleanup(fmt.Errorf("create default location: %w", err))
 		}
 		locsCreated++
 	}
@@ -593,7 +673,7 @@ func (svc *UserService) registerOIDCUser(ctx context.Context, issuer, subject, e
 		bootstrapSpan.End()
 		recordServiceSpanError(span, err)
 		log.Err(err).Msg("Failed to ensure default entity types")
-		return repo.UserOut{}, err
+		return repo.UserOut{}, cleanup(err)
 	}
 
 	bootstrapSpan.SetAttributes(
@@ -611,7 +691,7 @@ func (svc *UserService) Logout(ctx context.Context, token string) error {
 	defer span.End()
 
 	hash := hasher.HashToken(token)
-	err := svc.repos.AuthTokens.DeleteToken(ctx, hash)
+	_, err := svc.repos.AuthTokens.DeleteSessionByToken(ctx, hash)
 	recordServiceSpanError(span, err)
 	return err
 }
@@ -645,15 +725,15 @@ func (svc *UserService) RenewToken(ctx context.Context, token string) (UserAuthT
 		return out, err
 	}
 
-	// Invalidate the just-rotated token so a leaked refresh request can't
-	// continue to authenticate alongside the freshly issued one. Done after
-	// createSessionToken succeeds — order matters: if the delete ran first and
-	// the new-token issuance failed, the caller would be logged out instead of
-	// just missing a refresh. Delete failures are non-fatal: the new token is
-	// already valid, and the old hash will expire on its own.
-	if delErr := svc.repos.AuthTokens.DeleteToken(ctx, hash); delErr != nil {
+	// Consume the complete old session pair (normal bearer plus restricted
+	// attachment bearer). If another refresh won the race, discard the pair
+	// we just minted and fail this request; only one rotation may succeed.
+	if _, delErr := svc.repos.AuthTokens.DeleteSessionByToken(ctx, hash); delErr != nil {
 		recordServiceSpanError(span, delErr)
-		log.Warn().Err(delErr).Msg("RenewToken: failed to delete prior session token")
+		if _, cleanupErr := svc.repos.AuthTokens.DeleteSessionByToken(ctx, hasher.HashToken(out.Raw)); cleanupErr != nil {
+			delErr = errors.Join(delErr, fmt.Errorf("clean up replacement session: %w", cleanupErr))
+		}
+		return UserAuthTokenDetail{}, delErr
 	}
 	return out, nil
 }
@@ -666,42 +746,84 @@ func (svc *UserService) DeleteSelf(ctx context.Context, id uuid.UUID) error {
 		trace.WithAttributes(attribute.String("user.id", id.String())))
 	defer span.End()
 
-	err := svc.repos.Users.Delete(ctx, id)
+	usr, err := svc.repos.Users.GetOneID(ctx, id)
+	if err != nil {
+		recordServiceSpanError(span, err)
+		return err
+	}
+
+	ownedGroupIDs := make([]uuid.UUID, 0, len(usr.GroupIDs))
+	for _, gid := range usr.GroupIDs {
+		isOwner, err := svc.repos.Groups.IsOwnerOf(ctx, id, gid)
+		if err != nil {
+			recordServiceSpanError(span, err)
+			return err
+		}
+		if !isOwner {
+			continue
+		}
+		members, err := svc.repos.Users.GetUsersByGroupID(ctx, gid)
+		if err != nil {
+			recordServiceSpanError(span, err)
+			return err
+		}
+		if len(members) > 1 {
+			span.SetAttributes(attribute.String("group.id", gid.String()))
+			return ErrorOwnedGroupHasMembers
+		}
+		ownedGroupIDs = append(ownedGroupIDs, gid)
+	}
+
+	// Solely-owned groups would otherwise survive the user-group cascade as
+	// unreachable, ownerless inventories. GroupDelete commits DB state first
+	// and performs blob cleanup post-commit.
+	for _, gid := range ownedGroupIDs {
+		if err := svc.repos.Groups.GroupDelete(ctx, gid); err != nil {
+			recordServiceSpanError(span, err)
+			return err
+		}
+	}
+
+	err = svc.repos.Users.Delete(ctx, id)
 	recordServiceSpanError(span, err)
 	return err
 }
 
-func (svc *UserService) ChangePassword(ctx Context, current string, new string) (ok bool) {
+func (svc *UserService) ChangePassword(ctx Context, current string, newPassword string) error {
 	spanCtx, span := entityServiceTracer().Start(ctx.Context, "service.UserService.ChangePassword",
 		trace.WithAttributes(
 			attribute.String("user.id", ctx.UID.String()),
 			attribute.Int("password.current.length", len(current)),
-			attribute.Int("password.new.length", len(new)),
+			attribute.Int("password.new.length", len(newPassword)),
 		))
 	defer span.End()
 	ctx.Context = spanCtx
+
+	if len(newPassword) < PasswordMinLength {
+		span.SetAttributes(attribute.String("change_password.outcome", "password_too_short"))
+		return ErrorPasswordTooShort
+	}
 
 	usr, err := svc.repos.Users.GetOneID(ctx, ctx.UID)
 	if err != nil {
 		recordServiceSpanError(span, err)
 		span.SetAttributes(attribute.String("change_password.outcome", "user_not_found"))
-		return false
+		return err
 	}
 
 	match, _ := hasher.CheckPasswordHashCtx(spanCtx, current, usr.PasswordHash)
 	span.SetAttributes(attribute.Bool("password.current.match", match))
 	if !match {
 		span.SetAttributes(attribute.String("change_password.outcome", "current_password_incorrect"))
-		log.Err(errors.New("current password is incorrect")).Msg("Failed to change password")
-		return false
+		return ErrorCurrentPasswordWrong
 	}
 
-	hashed, err := hasher.HashPasswordCtx(spanCtx, new)
+	hashed, err := hasher.HashPasswordCtx(spanCtx, newPassword)
 	if err != nil {
 		recordServiceSpanError(span, err)
 		span.SetAttributes(attribute.String("change_password.outcome", "hash_failed"))
 		log.Err(err).Msg("Failed to hash password")
-		return false
+		return err
 	}
 
 	err = svc.repos.Users.ChangePassword(ctx.Context, ctx.UID, hashed)
@@ -709,7 +831,7 @@ func (svc *UserService) ChangePassword(ctx Context, current string, new string) 
 		recordServiceSpanError(span, err)
 		span.SetAttributes(attribute.String("change_password.outcome", "persist_failed"))
 		log.Err(err).Msg("Failed to change password")
-		return false
+		return err
 	}
 
 	// Revoke every other session for this user. The current request's token
@@ -721,7 +843,13 @@ func (svc *UserService) ChangePassword(ctx Context, current string, new string) 
 	var revokeErr error
 	var revoked int
 	if currentRaw != "" {
-		revoked, revokeErr = svc.repos.AuthTokens.DeleteAllByUserExceptToken(ctx.Context, ctx.UID, hasher.HashToken(currentRaw))
+		revoked, revokeErr = svc.repos.AuthTokens.DeleteAllByUserExceptSession(ctx.Context, ctx.UID, hasher.HashToken(currentRaw))
+		if revokeErr != nil {
+			// If the context token disappeared concurrently, there is no
+			// trustworthy current pair to preserve. Revoke all sessions rather
+			// than accidentally retaining an attacker-controlled bearer.
+			revoked, revokeErr = svc.repos.AuthTokens.DeleteAllByUser(ctx.Context, ctx.UID)
+		}
 	} else {
 		revoked, revokeErr = svc.repos.AuthTokens.DeleteAllByUser(ctx.Context, ctx.UID)
 	}
@@ -732,11 +860,12 @@ func (svc *UserService) ChangePassword(ctx Context, current string, new string) 
 		recordServiceSpanError(span, revokeErr)
 		span.SetAttributes(attribute.String("change_password.outcome", "revoke_failed"))
 		log.Warn().Err(revokeErr).Msg("password changed but failed to revoke other sessions")
+		return fmt.Errorf("password changed but session revocation failed: %w", revokeErr)
 	}
 	span.SetAttributes(attribute.Int("change_password.sessions_revoked", revoked))
 
 	span.SetAttributes(attribute.String("change_password.outcome", "success"))
-	return true
+	return nil
 }
 
 func (svc *UserService) GetSettings(ctx context.Context, uid uuid.UUID) (map[string]interface{}, error) {

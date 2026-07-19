@@ -2,6 +2,9 @@ package repo
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/samber/lo"
@@ -15,6 +18,13 @@ import (
 
 type UserRepository struct {
 	db *ent.Client
+}
+
+// normalizeEmail canonicalizes an email address for both storage and lookup.
+// The database uniqueness constraint is case-sensitive, while login lookup is
+// case-insensitive; storing one canonical form prevents case-variant duplicates.
+func normalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
 }
 
 type (
@@ -60,6 +70,11 @@ var (
 	mapUserOutErr      = mapTErrFunc(mapUserOut)
 	mapUsersOutErr     = mapTEachErrFunc(mapUserOut)
 	mapUsersSummaryErr = mapTEachErrFunc(mapUserSummary)
+
+	// ErrOIDCIdentityConflict is returned when a caller attempts to bind an
+	// OIDC identity to an account that is not an unclaimed, passwordless
+	// legacy account, or when that issuer/subject pair is already in use.
+	ErrOIDCIdentityConflict = errors.New("OIDC identity cannot be linked to this account")
 )
 
 func mapUserOut(user *ent.User) UserOut {
@@ -120,7 +135,7 @@ func (r *UserRepository) GetOneEmail(ctx context.Context, email string) (UserOut
 	defer span.End()
 
 	out, err := mapUserOutErr(r.db.User.Query().
-		Where(user.EmailEqualFold(email)).
+		Where(user.EmailEqualFold(normalizeEmail(email))).
 		WithGroups().
 		Only(ctx),
 	)
@@ -148,7 +163,7 @@ func (r *UserRepository) GetOneEmailNoEdges(ctx context.Context, email string) (
 	defer span.End()
 
 	out, err := mapUserOutErr(r.db.User.Query().
-		Where(user.EmailEqualFold(email)).
+		Where(user.EmailEqualFold(normalizeEmail(email))).
 		Only(ctx),
 	)
 	if err != nil {
@@ -203,7 +218,7 @@ func (r *UserRepository) createUserWithMembership(
 	q := tx.User.
 		Create().
 		SetName(usr.Name).
-		SetEmail(usr.Email).
+		SetEmail(normalizeEmail(usr.Email)).
 		SetIsSuperuser(usr.IsSuperuser).
 		SetDefaultGroupID(usr.DefaultGroupID)
 
@@ -295,7 +310,7 @@ func (r *UserRepository) Update(ctx context.Context, id uuid.UUID, data UserUpda
 	q := r.db.User.Update().
 		Where(user.ID(id)).
 		SetName(data.Name).
-		SetEmail(data.Email)
+		SetEmail(normalizeEmail(data.Email))
 
 	_, err := q.Save(ctx)
 	recordSpanError(span, err)
@@ -396,7 +411,27 @@ func (r *UserRepository) SetOIDCIdentity(ctx context.Context, uid uuid.UUID, iss
 		))
 	defer span.End()
 
-	err := r.db.User.UpdateOneID(uid).SetOidcIssuer(issuer).SetOidcSubject(subject).Exec(ctx)
+	// This must remain a single conditional UPDATE. A read followed by an
+	// unconditional UpdateOne permits two simultaneous first-time OIDC
+	// logins with the same email to overwrite each other's issuer/subject.
+	// Including PasswordIsNil also closes the race with a local password
+	// being established between the service's eligibility check and here.
+	updated, err := r.db.User.Update().
+		Where(
+			user.ID(uid),
+			user.PasswordIsNil(),
+			user.OidcIssuerIsNil(),
+			user.OidcSubjectIsNil(),
+		).
+		SetOidcIssuer(issuer).
+		SetOidcSubject(subject).
+		Save(ctx)
+	if err != nil && ent.IsConstraintError(err) {
+		err = fmt.Errorf("%w: issuer and subject are already assigned", ErrOIDCIdentityConflict)
+	}
+	if err == nil && updated != 1 {
+		err = ErrOIDCIdentityConflict
+	}
 	recordSpanError(span, err)
 	return err
 }

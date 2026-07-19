@@ -1,13 +1,18 @@
 package main
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/hay-kot/httpkit/errchain"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/sysadminsmedia/homebox/backend/internal/sys/config"
+	"github.com/sysadminsmedia/homebox/backend/internal/sys/validate"
 )
 
 const (
@@ -90,6 +95,22 @@ func TestSimpleRateLimiter(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestExtractClientIPRejectsMalformedForwardedValues(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.RemoteAddr = proxyRemoteAddr
+	request.Header.Set("X-Real-IP", "attacker-controlled-key\r\n")
+	request.Header.Set("X-Forwarded-For", "also-not-an-ip, 203.0.113.1")
+	assert.Equal(t, "10.0.0.1", extractClientIP(request, true))
+
+	request.Header.Set("X-Real-IP", "2001:0db8:0:0:0:0:0:1")
+	assert.Equal(t, "2001:db8::1", extractClientIP(request, true))
+
+	request.Header.Del("X-Real-IP")
+	request.Header.Set("X-Forwarded-For", "203.0.113.9, 10.0.0.1")
+	assert.Equal(t, "203.0.113.9", extractClientIP(request, true))
+	assert.Equal(t, "10.0.0.1", extractClientIP(request, false))
 }
 
 func TestSimpleRateLimiterRefill(t *testing.T) {
@@ -470,4 +491,84 @@ func TestAuthRateLimiterStop(t *testing.T) {
 
 	// Verify the cleanup goroutine exits (this test passes if no panic occurs)
 	time.Sleep(10 * time.Millisecond)
+}
+
+func TestPasswordResetRateLimiterCountsSuccessfulResponses(t *testing.T) {
+	cfg := &config.Config{
+		Auth: config.AuthConfig{RateLimit: config.AuthRateLimit{
+			Enabled:     true,
+			MaxAttempts: 2,
+			Window:      time.Minute,
+			BaseBackoff: time.Second,
+			MaxBackoff:  time.Minute,
+		}},
+	}
+	a := new(cfg)
+	t.Cleanup(a.stopRateLimiters)
+
+	var calls atomic.Int32
+	handler := a.mwPasswordResetRateLimit(errchain.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) error {
+		calls.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+		return nil
+	}))
+
+	for i := 0; i < cfg.Auth.RateLimit.MaxAttempts; i++ {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/users/forgot-password", nil)
+		req.RemoteAddr = testClientIPAddress + ":1234"
+		require.NoError(t, handler.ServeHTTP(rec, req))
+		assert.Equal(t, http.StatusNoContent, rec.Code)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/users/forgot-password", nil)
+	req.RemoteAddr = testClientIPAddress + ":1234"
+	err := handler.ServeHTTP(rec, req)
+	require.Error(t, err)
+
+	var reqErr *validate.RequestError
+	require.True(t, errors.As(err, &reqErr))
+	assert.Equal(t, http.StatusTooManyRequests, reqErr.Status)
+	assert.EqualValues(t, cfg.Auth.RateLimit.MaxAttempts, calls.Load(), "blocked requests must not reach the email handler")
+}
+
+func TestRegistrationRateLimiterCountsSuccessfulResponses(t *testing.T) {
+	cfg := &config.Config{
+		Auth: config.AuthConfig{RateLimit: config.AuthRateLimit{
+			Enabled:     true,
+			MaxAttempts: 2,
+			Window:      time.Minute,
+			BaseBackoff: time.Second,
+			MaxBackoff:  time.Minute,
+		}},
+	}
+	a := new(cfg)
+	t.Cleanup(a.stopRateLimiters)
+
+	var calls atomic.Int32
+	handler := a.mwRegistrationRateLimit(errchain.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) error {
+		calls.Add(1)
+		w.WriteHeader(http.StatusCreated)
+		return nil
+	}))
+
+	for i := 0; i < cfg.Auth.RateLimit.MaxAttempts; i++ {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/users/register", nil)
+		req.RemoteAddr = testClientIPAddress + ":1234"
+		require.NoError(t, handler.ServeHTTP(rec, req))
+		assert.Equal(t, http.StatusCreated, rec.Code)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/users/register", nil)
+	req.RemoteAddr = testClientIPAddress + ":1234"
+	err := handler.ServeHTTP(rec, req)
+	require.Error(t, err)
+
+	var reqErr *validate.RequestError
+	require.True(t, errors.As(err, &reqErr))
+	assert.Equal(t, http.StatusTooManyRequests, reqErr.Status)
+	assert.EqualValues(t, cfg.Auth.RateLimit.MaxAttempts, calls.Load(), "blocked requests must not reach the registration handler")
 }

@@ -35,7 +35,16 @@ func ValidateNotifierURL(notifierURL string, cfg *config.NotifierConf) error {
 		return fmt.Errorf("invalid URL in generic notifier: %w", err)
 	}
 
-	host := parsedURL.Hostname()
+	return validateHostAgainstPolicy(parsedURL.Hostname(), cfg)
+}
+
+// validateHostAgainstPolicy resolves host and checks every resolved address
+// against the configured notifier network policy.
+func validateHostAgainstPolicy(host string, cfg *config.NotifierConf) error {
+	if cfg == nil {
+		return fmt.Errorf("notifier configuration is nil, cannot validate URL")
+	}
+
 	if host == "" {
 		return fmt.Errorf("no hostname found in URL")
 	}
@@ -47,6 +56,20 @@ func ValidateNotifierURL(notifierURL string, cfg *config.NotifierConf) error {
 		return fmt.Errorf("failed to resolve hostname: %w", err)
 	}
 
+	if len(ips) == 0 {
+		return fmt.Errorf("hostname did not resolve to any IP addresses")
+	}
+
+	return validateNotifierIPs(ips, cfg)
+}
+
+// validateNotifierIPs applies DNS64 expansion and the configured allow/block
+// policy to already-resolved addresses. The notifier transport uses this at dial
+// time so it connects only to the exact addresses that passed validation.
+func validateNotifierIPs(ips []net.IP, cfg *config.NotifierConf) error {
+	if cfg == nil {
+		return fmt.Errorf("notifier configuration is nil, cannot validate addresses")
+	}
 	if len(ips) == 0 {
 		return fmt.Errorf("hostname did not resolve to any IP addresses")
 	}

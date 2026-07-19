@@ -134,7 +134,7 @@ func (ctrl *V1Controller) HandleAuthLogin(ps ...AuthProvider) errchain.HandlerFu
 			attribute.String("auth.session.expires_at", newToken.ExpiresAt.Format(time.RFC3339)),
 		)
 
-		ctrl.setCookies(w, noPort(r.Host), newToken.Raw, newToken.ExpiresAt, true, newToken.AttachmentToken)
+		ctrl.setCookies(w, newToken.Raw, newToken.ExpiresAt, true, newToken.AttachmentToken)
 		return server.JSON(w, http.StatusOK, TokenResponse{
 			Token:           "Bearer " + newToken.Raw,
 			ExpiresAt:       newToken.ExpiresAt,
@@ -348,7 +348,7 @@ func (ctrl *V1Controller) HandleAuthLogout() errchain.HandlerFunc {
 		}
 
 		span.SetAttributes(attribute.String("logout.outcome", "success"))
-		ctrl.unsetCookies(w, noPort(r.Host))
+		ctrl.unsetCookies(w)
 		return server.JSON(w, http.StatusNoContent, nil)
 	}
 }
@@ -395,21 +395,16 @@ func (ctrl *V1Controller) HandleAuthRefresh() errchain.HandlerFunc {
 			attribute.String("refresh.outcome", "success"),
 			attribute.String("refresh.expires_at", newToken.ExpiresAt.Format(time.RFC3339)),
 		)
-		ctrl.setCookies(w, noPort(r.Host), newToken.Raw, newToken.ExpiresAt, false, newToken.AttachmentToken)
+		ctrl.setCookies(w, newToken.Raw, newToken.ExpiresAt, false, newToken.AttachmentToken)
 		return server.JSON(w, http.StatusOK, newToken)
 	}
 }
 
-func noPort(host string) string {
-	return strings.Split(host, ":")[0]
-}
-
-func (ctrl *V1Controller) setCookies(w http.ResponseWriter, domain, token string, expires time.Time, remember bool, attachmentToken string) {
+func (ctrl *V1Controller) setCookies(w http.ResponseWriter, token string, expires time.Time, remember bool, attachmentToken string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     cookieNameRemember,
 		Value:    strconv.FormatBool(remember),
 		Expires:  expires,
-		Domain:   domain,
 		Secure:   ctrl.cookieSecure,
 		HttpOnly: true,
 		Path:     "/",
@@ -421,7 +416,6 @@ func (ctrl *V1Controller) setCookies(w http.ResponseWriter, domain, token string
 		Name:     cookieNameToken,
 		Value:    token,
 		Expires:  expires,
-		Domain:   domain,
 		Secure:   ctrl.cookieSecure,
 		HttpOnly: true,
 		Path:     "/",
@@ -433,7 +427,6 @@ func (ctrl *V1Controller) setCookies(w http.ResponseWriter, domain, token string
 		Name:     cookieNameSession,
 		Value:    "true",
 		Expires:  expires,
-		Domain:   domain,
 		Secure:   ctrl.cookieSecure,
 		HttpOnly: false,
 		Path:     "/",
@@ -446,7 +439,6 @@ func (ctrl *V1Controller) setCookies(w http.ResponseWriter, domain, token string
 			Name:     "hb.auth.attachment_token",
 			Value:    attachmentToken,
 			Expires:  expires,
-			Domain:   domain,
 			Secure:   ctrl.cookieSecure,
 			HttpOnly: false,
 			Path:     "/",
@@ -455,12 +447,11 @@ func (ctrl *V1Controller) setCookies(w http.ResponseWriter, domain, token string
 	}
 }
 
-func (ctrl *V1Controller) unsetCookies(w http.ResponseWriter, domain string) {
+func (ctrl *V1Controller) unsetCookies(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     cookieNameToken,
 		Value:    "",
 		Expires:  time.Unix(0, 0),
-		Domain:   domain,
 		Secure:   ctrl.cookieSecure,
 		HttpOnly: true,
 		Path:     "/",
@@ -471,7 +462,6 @@ func (ctrl *V1Controller) unsetCookies(w http.ResponseWriter, domain string) {
 		Name:     cookieNameRemember,
 		Value:    "false",
 		Expires:  time.Unix(0, 0),
-		Domain:   domain,
 		Secure:   ctrl.cookieSecure,
 		HttpOnly: true,
 		Path:     "/",
@@ -483,7 +473,6 @@ func (ctrl *V1Controller) unsetCookies(w http.ResponseWriter, domain string) {
 		Name:     cookieNameSession,
 		Value:    "false",
 		Expires:  time.Unix(0, 0),
-		Domain:   domain,
 		Secure:   ctrl.cookieSecure,
 		HttpOnly: false,
 		Path:     "/",
@@ -495,7 +484,6 @@ func (ctrl *V1Controller) unsetCookies(w http.ResponseWriter, domain string) {
 		Name:     "hb.auth.attachment_token",
 		Value:    "",
 		Expires:  time.Unix(0, 0),
-		Domain:   domain,
 		Secure:   ctrl.cookieSecure,
 		HttpOnly: false,
 		Path:     "/",
@@ -577,7 +565,7 @@ func (ctrl *V1Controller) HandleOIDCCallback() errchain.HandlerFunc {
 			attribute.String("oidc.outcome", "success"),
 			attribute.String("session.expires_at", newToken.ExpiresAt.Format(time.RFC3339)),
 		)
-		ctrl.setCookies(w, noPort(r.Host), newToken.Raw, newToken.ExpiresAt, true, newToken.AttachmentToken)
+		ctrl.setCookies(w, newToken.Raw, newToken.ExpiresAt, true, newToken.AttachmentToken)
 		http.Redirect(w, r, "/home", http.StatusFound)
 		return nil
 	}

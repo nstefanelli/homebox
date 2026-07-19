@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/sysadminsmedia/homebox/backend/internal/sys/config"
 )
@@ -24,15 +23,11 @@ type openaiCompatibleProvider struct {
 }
 
 func newOpenAICompatibleProvider(conf config.AIConf) *openaiCompatibleProvider {
-	timeout := conf.TimeoutSeconds
-	if timeout <= 0 {
-		timeout = 120
-	}
 	return &openaiCompatibleProvider{
 		baseURL: strings.TrimSuffix(conf.BaseURL, "/"),
 		apiKey:  conf.APIKey,
 		model:   conf.Model,
-		client:  &http.Client{Timeout: time.Duration(timeout) * time.Second},
+		client:  providerHTTPClient(conf),
 	}
 }
 

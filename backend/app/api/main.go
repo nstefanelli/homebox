@@ -19,6 +19,7 @@ import (
 	"github.com/sysadminsmedia/homebox/backend/internal/sys/analytics"
 	"github.com/sysadminsmedia/homebox/backend/internal/sys/config"
 	"github.com/sysadminsmedia/homebox/backend/internal/sys/otel"
+	"github.com/sysadminsmedia/homebox/backend/internal/sys/validate"
 	"github.com/sysadminsmedia/homebox/backend/internal/web/mid"
 	"github.com/sysadminsmedia/homebox/backend/pkgs/hasher"
 
@@ -145,6 +146,7 @@ func main() {
 
 func run(cfg *config.Config) error {
 	app := new(cfg)
+	defer app.stopRateLimiters()
 	app.setupLogger()
 
 	// Fail fast on a missing or weak API key pepper. Without it, the HMAC keying
@@ -157,6 +159,8 @@ func run(cfg *config.Config) error {
 		)
 	}
 	hasher.SetAPIKeyPepper([]byte(cfg.Auth.APIKeyPepper))
+
+	validate.InstallNotifierHTTPGuard(&cfg.Notifier)
 
 	validateAIProviderEnvConfig(cfg.AI.Provider)
 

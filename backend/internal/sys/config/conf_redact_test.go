@@ -113,13 +113,21 @@ func Test_OTelConfig_RedactsHeaders(t *testing.T) {
 }
 
 func Test_AIConf_RedactsAPIKey(t *testing.T) {
-	c := AIConf{Provider: "openai_compatible", BaseURL: "http://ollama.local/v1", APIKey: "sk-super-secret", Model: "qwen3-vl:32b"}
+	c := AIConf{
+		Provider: "openai_compatible",
+		BaseURL:  "https://operator:base-url-secret@ollama.local/v1",
+		APIKey:   "sk-super-secret",
+		Model:    "qwen3-vl:32b",
+	}
 
 	out, err := json.Marshal(c)
 	require.NoError(t, err)
 
 	assert.NotContains(t, string(out), "sk-super-secret")
+	assert.NotContains(t, string(out), "base-url-secret")
 	assert.Contains(t, string(out), sentinel)
+	assert.Contains(t, string(out), "operator")
+	assert.Contains(t, string(out), "REDACTED")
 	assert.Contains(t, string(out), "qwen3-vl:32b")
 }
 

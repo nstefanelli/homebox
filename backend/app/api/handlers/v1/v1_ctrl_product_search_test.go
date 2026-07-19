@@ -1,7 +1,13 @@
 package v1
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -211,5 +217,95 @@ func TestSanitizeHeaderRemovesControlCharacters(t *testing.T) {
 	got := sanitizeHeader("owner@example.com\r\nInjected: value\t")
 	if got != "owner@example.comInjected: value" {
 		t.Fatalf("unexpected sanitized header: %q", got)
+	}
+}
+
+func TestReadBoundedHTTPBodyRejectsDeclaredAndActualOverflow(t *testing.T) {
+	body, err := readBoundedHTTPBody(strings.NewReader("1234"), 4, 4)
+	if err != nil || string(body) != "1234" {
+		t.Fatalf("exact limit should pass, body=%q err=%v", body, err)
+	}
+
+	if _, err := readBoundedHTTPBody(strings.NewReader("1234"), 5, 4); err == nil {
+		t.Fatal("declared overflow should be rejected before reading")
+	}
+	if _, err := readBoundedHTTPBody(strings.NewReader("12345"), -1, 4); err == nil {
+		t.Fatal("streamed overflow should be rejected")
+	}
+}
+
+func productImageTestResolver(_ context.Context, host string) ([]net.IP, error) {
+	switch host {
+	case "public.example":
+		return []net.IP{net.ParseIP("8.8.8.8")}, nil
+	case "private.example":
+		return []net.IP{net.ParseIP("10.0.0.1")}, nil
+	case "mixed.example":
+		return []net.IP{net.ParseIP("8.8.8.8"), net.ParseIP("127.0.0.1")}, nil
+	default:
+		if ip := net.ParseIP(host); ip != nil {
+			return []net.IP{ip}, nil
+		}
+		return nil, &net.DNSError{Name: host, Err: "not found"}
+	}
+}
+
+func TestValidateProductImageURLRequiresPublicHTTPSDestination(t *testing.T) {
+	if _, err := validateProductImageURL(context.Background(), "https://public.example/image.png", productImageTestResolver); err != nil {
+		t.Fatalf("public HTTPS URL should pass: %v", err)
+	}
+
+	for _, rawURL := range []string{
+		"http://public.example/image.png",
+		"https://user:secret@public.example/image.png",
+		"https://private.example/image.png",
+		"https://mixed.example/image.png",
+		"https://127.0.0.1/image.png",
+		"https://169.254.169.254/latest/meta-data",
+		"https://100.64.0.1/image.png",
+		"https://[64:ff9b::7f00:1]/image.png",
+	} {
+		if _, err := validateProductImageURL(context.Background(), rawURL, productImageTestResolver); err == nil {
+			t.Errorf("expected URL to be blocked: %s", rawURL)
+		}
+	}
+}
+
+func TestProductImageDialContextBlocksDNSRebindingBeforeDial(t *testing.T) {
+	called := false
+	resolvePrivate := func(context.Context, string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("127.0.0.1")}, nil
+	}
+	dial := productImageDialContext(resolvePrivate, func(context.Context, string, string) (net.Conn, error) {
+		called = true
+		return nil, io.EOF
+	})
+
+	conn, err := dial(context.Background(), "tcp", "rebind.example:443")
+	if conn != nil {
+		_ = conn.Close()
+	}
+	if err == nil {
+		t.Fatal("private rebinding result must be blocked")
+	}
+	if called {
+		t.Fatal("underlying dialer must not be called for a blocked address")
+	}
+}
+
+func TestProductImageRedirectGuardBlocksDowngradeAndPrivateTarget(t *testing.T) {
+	guard := productImageRedirectGuard(productImageTestResolver)
+	for _, rawURL := range []string{
+		"http://public.example/image.png",
+		"https://private.example/image.png",
+	} {
+		u, err := url.Parse(rawURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := &http.Request{URL: u}
+		if err := guard(req, nil); err == nil {
+			t.Errorf("redirect should be blocked: %s", rawURL)
+		}
 	}
 }

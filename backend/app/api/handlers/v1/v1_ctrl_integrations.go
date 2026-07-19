@@ -123,9 +123,22 @@ type GroupIntegrationsOut struct {
 // its own override — otherwise the hint would relabel the group's own values
 // as "server default" the moment they set anything.
 func redactIntegrations(raw types.GroupIntegrations, effectiveAI config.AIConf, envAI config.AIConf, effectiveBarcode config.BarcodeAPIConf, isOwner bool) GroupIntegrationsOut {
+	// Non-owners need only the effective feature flags used to gate normal
+	// inventory workflows. Integration endpoint/model/contact details are
+	// administrative metadata and may include internal hostnames, so do not
+	// disclose them to every group member.
+	if !isOwner {
+		return GroupIntegrationsOut{
+			IsOwner:                 false,
+			AIConfigured:            effectiveAI.Provider != "",
+			BarcodespiderConfigured: effectiveBarcode.TokenBarcodespider != "",
+		}
+	}
+
 	redacted := raw
 	redacted.AIAPIKey = redactSecretField(raw.AIAPIKey, effectiveAI.APIKey)
 	redacted.BarcodeTokenBarcodespider = redactSecretField(raw.BarcodeTokenBarcodespider, effectiveBarcode.TokenBarcodespider)
+	redacted.AIBaseURL = config.RedactURLUserinfo(raw.AIBaseURL)
 
 	return GroupIntegrationsOut{
 		GroupIntegrations:       redacted,
@@ -133,7 +146,7 @@ func redactIntegrations(raw types.GroupIntegrations, effectiveAI config.AIConf, 
 		AIConfigured:            effectiveAI.Provider != "",
 		BarcodespiderConfigured: effectiveBarcode.TokenBarcodespider != "",
 		EnvAIProvider:           envAI.Provider,
-		EnvAIBaseURL:            envAI.BaseURL,
+		EnvAIBaseURL:            config.RedactURLUserinfo(envAI.BaseURL),
 		EnvAIModel:              envAI.Model,
 	}
 }
@@ -209,7 +222,9 @@ func (ctrl *V1Controller) HandleIntegrationsUpdate() errchain.HandlerFunc {
 		}
 
 		if err := ctrl.svc.Integrations.Update(auth, auth.GID, body); err != nil {
-			if errors.Is(err, services.ErrInvalidAIProvider) {
+			if errors.Is(err, services.ErrInvalidAIProvider) ||
+				errors.Is(err, services.ErrInvalidAIBaseURL) ||
+				errors.Is(err, services.ErrInvalidIntegrationData) {
 				return GroupIntegrationsOut{}, validate.NewRequestError(err, http.StatusBadRequest)
 			}
 			return GroupIntegrationsOut{}, err

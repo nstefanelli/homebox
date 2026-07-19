@@ -1,6 +1,11 @@
 package labelmaker
 
 import (
+	"bytes"
+	"image"
+	"image/png"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,6 +18,42 @@ import (
 	"golang.org/x/image/font/gofont/gobold"
 	"golang.org/x/image/font/gofont/gomedium"
 )
+
+func TestFetchLabelFromURLValidatesResponseBytes(t *testing.T) {
+	t.Parallel()
+
+	params := NewGenerateParams(400, 200, 10, 5, 32, "title", "description", "https://homebox.example/item/1", false, nil)
+	cfg := &config.Config{Web: config.WebConfig{MaxUploadSize: 1}}
+
+	t.Run("rejects active content mislabeled as an image", func(t *testing.T) {
+		t.Parallel()
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write([]byte(`<html><script>alert(1)</script></html>`))
+		}))
+		defer server.Close()
+
+		var out bytes.Buffer
+		err := fetchLabelFromURL(&out, server.URL, &params, cfg)
+		require.ErrorContains(t, err, "not an image")
+		assert.Empty(t, out.Bytes())
+	})
+
+	t.Run("accepts a real image", func(t *testing.T) {
+		t.Parallel()
+		var encoded bytes.Buffer
+		require.NoError(t, png.Encode(&encoded, image.NewRGBA(image.Rect(0, 0, 2, 2))))
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write(encoded.Bytes())
+		}))
+		defer server.Close()
+
+		var out bytes.Buffer
+		require.NoError(t, fetchLabelFromURL(&out, server.URL, &params, cfg))
+		assert.Equal(t, encoded.Bytes(), out.Bytes())
+	})
+}
 
 func TestLoadFont_WithNilConfig(t *testing.T) {
 	font, err := loadFont(nil, FontTypeRegular)

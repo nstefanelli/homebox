@@ -7,12 +7,27 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
+	"time"
 
 	"github.com/sysadminsmedia/homebox/backend/internal/sys/config"
+	"github.com/sysadminsmedia/homebox/backend/internal/sys/validate"
 )
 
 var ErrAIDisabled = errors.New("ai provider not configured")
+
+func providerHTTPClient(conf config.AIConf) *http.Client {
+	timeoutSeconds := conf.TimeoutSeconds
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 120
+	}
+	timeout := time.Duration(timeoutSeconds) * time.Second
+	if conf.BaseURLIsUntrusted {
+		return validate.NewRestrictedHTTPClient(timeout)
+	}
+	return &http.Client{Timeout: timeout}
+}
 
 // AnalyzeResult is the provider-agnostic shape every adapter must produce.
 type AnalyzeResult struct {

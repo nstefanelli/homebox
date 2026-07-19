@@ -3,6 +3,7 @@ package validate
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 )
 
 type UnauthorizedError struct {
@@ -55,14 +56,23 @@ type RequestError struct {
 // NewRequestError wraps a provided error with an HTTP status code. This
 // function should be used when handlers encounter expected errors.
 func NewRequestError(err error, status int) error {
+	if err == nil {
+		err = fmt.Errorf("request failed with status %d", status)
+	}
 	return &RequestError{err, status, nil}
 }
 
 func (err *RequestError) Error() string {
+	if err == nil || err.Err == nil {
+		return "request failed"
+	}
 	return err.Err.Error()
 }
 
 func (err *RequestError) Unwrap() error {
+	if err == nil {
+		return nil
+	}
 	return err.Err
 }
 

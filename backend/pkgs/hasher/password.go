@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -131,6 +132,41 @@ func HashPasswordCtx(ctx context.Context, password string) (string, error) {
 // to CheckPasswordHashCtx with a Background context.
 func CheckPasswordHash(password, hash string) (bool, bool) {
 	return CheckPasswordHashCtx(context.Background(), password, hash)
+}
+
+// staticDummyHash is a valid argon2id-encoded hash used as a fallback for timing
+// equalization if hashing a placeholder at runtime ever fails. Because decodeHash
+// reads the argon2 cost parameters from the encoded hash itself, comparing against
+// this runs the full KDF at the same cost as a real login.
+const staticDummyHash = "$argon2id$v=19$m=65536,t=3,p=2$sD6MJ4qEDD8pJGFFb8Ew7A$v0FY6vLHFJyJUm2cAa8qEYLd1x5WlCQ01B24AJ/Tcxs"
+
+var (
+	dummyHashOnce sync.Once
+	dummyHash     string
+)
+
+// timingEqualizationHash returns a valid argon2id hash generated with the active
+// parameters, computed once on first use.
+func timingEqualizationHash() string {
+	dummyHashOnce.Do(func() {
+		h, err := HashPassword("homebox-timing-equalization-placeholder")
+		if err != nil {
+			dummyHash = staticDummyHash
+			return
+		}
+		dummyHash = h
+	})
+	return dummyHash
+}
+
+// CheckDummyPasswordHashCtx performs a full password comparison against a valid
+// dummy argon2id hash. Authentication paths that reject before loading a real hash
+// use it to avoid exposing account existence through response timing.
+func CheckDummyPasswordHashCtx(ctx context.Context) {
+	if !enabled {
+		return
+	}
+	CheckPasswordHashCtx(ctx, "not-a-real-password", timingEqualizationHash())
 }
 
 // CheckPasswordHashCtx checks the password and emits spans for each branch (argon2id

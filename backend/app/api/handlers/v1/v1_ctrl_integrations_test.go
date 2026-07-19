@@ -122,16 +122,58 @@ func Test_redactIntegrations(t *testing.T) {
 			},
 			isOwner: false,
 			want: GroupIntegrationsOut{
-				GroupIntegrations: types.GroupIntegrations{
-					AIAPIKey:                  config.RedactedValue,
-					BarcodeTokenBarcodespider: config.RedactedValue,
-				},
 				IsOwner:                 false,
 				AIConfigured:            true,
 				BarcodespiderConfigured: true,
-				EnvAIProvider:           services.AIProviderOpenAICompatible,
-				EnvAIBaseURL:            testEnvBaseURL,
-				EnvAIModel:              testEnvModel,
+			},
+		},
+		{
+			name: "non-owner cannot read group or env endpoint metadata",
+			raw: types.GroupIntegrations{
+				AIProvider:           services.AIProviderAnthropic,
+				AIBaseURL:            "https://group-user:group-secret@group.internal/v1",
+				AIAPIKey:             "group-api-key",
+				AIModel:              "group-model",
+				OpenFoodFactsContact: "private@example.com",
+			},
+			effectiveAI: config.AIConf{
+				Provider: services.AIProviderAnthropic,
+				APIKey:   "group-api-key",
+			},
+			envAI: config.AIConf{
+				Provider: services.AIProviderOpenAICompatible,
+				BaseURL:  "https://env-user:env-secret@env.internal/v1",
+				Model:    "env-model",
+			},
+			effectiveBarcode: config.BarcodeAPIConf{TokenBarcodespider: "token"},
+			isOwner:          false,
+			want: GroupIntegrationsOut{
+				IsOwner:                 false,
+				AIConfigured:            true,
+				BarcodespiderConfigured: true,
+			},
+		},
+		{
+			name: "owner endpoint metadata redacts embedded URL passwords",
+			raw: types.GroupIntegrations{
+				AIProvider: services.AIProviderAnthropic,
+				AIBaseURL:  "https://group-user:group-secret@group.internal/v1",
+			},
+			effectiveAI: config.AIConf{Provider: services.AIProviderAnthropic},
+			envAI: config.AIConf{
+				Provider: services.AIProviderOpenAICompatible,
+				BaseURL:  "https://env-user:env-secret@env.internal/v1",
+			},
+			isOwner: true,
+			want: GroupIntegrationsOut{
+				GroupIntegrations: types.GroupIntegrations{
+					AIProvider: services.AIProviderAnthropic,
+					AIBaseURL:  "https://group-user:REDACTED@group.internal/v1",
+				},
+				IsOwner:       true,
+				AIConfigured:  true,
+				EnvAIProvider: services.AIProviderOpenAICompatible,
+				EnvAIBaseURL:  "https://env-user:REDACTED@env.internal/v1",
 			},
 		},
 		{
@@ -173,10 +215,12 @@ func Test_redactIntegrations(t *testing.T) {
 				AIAPIKey: "some-key",
 			},
 			effectiveAI: config.AIConf{},
+			isOwner:     true,
 			want: GroupIntegrationsOut{
 				GroupIntegrations: types.GroupIntegrations{
 					AIAPIKey: config.RedactedValue,
 				},
+				IsOwner:      true,
 				AIConfigured: false,
 			},
 		},
@@ -186,10 +230,12 @@ func Test_redactIntegrations(t *testing.T) {
 				BarcodeTokenBarcodespider: "group-token",
 			},
 			effectiveBarcode: config.BarcodeAPIConf{},
+			isOwner:          true,
 			want: GroupIntegrationsOut{
 				GroupIntegrations: types.GroupIntegrations{
 					BarcodeTokenBarcodespider: config.RedactedValue,
 				},
+				IsOwner:                 true,
 				BarcodespiderConfigured: false,
 			},
 		},

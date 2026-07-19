@@ -46,6 +46,13 @@ func redactURLUserinfo(raw string) string {
 	return u.String()
 }
 
+// RedactURLUserinfo is the exported form of redactURLUserinfo for response
+// mappers that must display an operator-configured URL without exposing an
+// embedded password.
+func RedactURLUserinfo(raw string) string {
+	return redactURLUserinfo(raw)
+}
+
 const (
 	ModeDevelopment = "development"
 	ModeProduction  = "production"
@@ -176,6 +183,11 @@ type AIConf struct {
 	APIKey         string `yaml:"api_key"`
 	Model          string `yaml:"model"`
 	TimeoutSeconds int    `yaml:"timeout_seconds" conf:"default:120"`
+
+	// BaseURLIsUntrusted is runtime provenance, not operator configuration.
+	// EffectiveAI sets it only when BaseURL came from a tenant-managed group
+	// override, causing the AI package to use the public-network-only client.
+	BaseURLIsUntrusted bool `yaml:"-" json:"-"`
 }
 
 func (c AIConf) MarshalJSON() ([]byte, error) {
@@ -184,6 +196,7 @@ func (c AIConf) MarshalJSON() ([]byte, error) {
 	if a.APIKey != "" {
 		a.APIKey = redactedValue
 	}
+	a.BaseURL = redactURLUserinfo(a.BaseURL)
 	return json.Marshal(a)
 }
 

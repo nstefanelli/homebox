@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
 	"net/http"
@@ -54,11 +55,18 @@ func NewOIDCProvider(service *services.UserService, config *config.OIDCConf, opt
 	if config.IssuerURL == "" {
 		return nil, fmt.Errorf("OIDC issuer URL is required when OIDC is enabled (set HBOX_OIDC_ISSUER_URL)")
 	}
+	config.IssuerURL = strings.TrimSpace(config.IssuerURL)
+	issuerURL, err := url.ParseRequestURI(config.IssuerURL)
+	if err != nil || issuerURL.Host == "" ||
+		(issuerURL.Scheme != "http" && issuerURL.Scheme != "https") ||
+		issuerURL.User != nil || issuerURL.RawQuery != "" || issuerURL.Fragment != "" {
+		return nil, fmt.Errorf("OIDC issuer URL must be an absolute http(s) URL without credentials, query, or fragment")
+	}
 
 	// Attempt to create OIDC provider with retry logic for Docker Compose environments
 	// Retries up to 4 times with exponential backoff delays
 	var provider *oidc.Provider
-	var err error
+	err = nil
 	maxRetries := 4
 	delays := []time.Duration{0, 500 * time.Millisecond, 2 * time.Second, 5 * time.Second}
 
@@ -79,7 +87,7 @@ func NewOIDCProvider(service *services.UserService, config *config.OIDCConf, opt
 		if attempt < maxRetries {
 			delay := delays[attempt-1]
 			log.Warn().
-				Err(err).
+				Str("error_type", fmt.Sprintf("%T", err)).
 				Int("attempt", attempt).
 				Dur("retrying_in", delay).
 				Msg("failed to create OIDC provider, retrying...")
@@ -88,7 +96,7 @@ func NewOIDCProvider(service *services.UserService, config *config.OIDCConf, opt
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to create OIDC provider from issuer URL after %d attempts: %w", maxRetries, err)
+		return nil, fmt.Errorf("failed to create OIDC provider after %d attempts (error type %T)", maxRetries, err)
 	}
 
 	// Create ID token verifier
@@ -97,9 +105,6 @@ func NewOIDCProvider(service *services.UserService, config *config.OIDCConf, opt
 	})
 
 	log.Info().
-		Str("issuer", config.IssuerURL).
-		Str("client_id", config.ClientID).
-		Str("scope", config.Scope).
 		Msg("OIDC provider initialized successfully with discovery")
 
 	return &OIDCProvider{
@@ -142,7 +147,10 @@ func (p *OIDCProvider) AuthenticateWithBaseURL(baseURL, expectedNonce, pkceVerif
 
 	token, err := oauth2Config.Exchange(ctx, code, oauth2.SetAuthURLParam("code_verifier", pkceVerifier))
 	if err != nil {
-		log.Err(err).Msg("failed to exchange OIDC code for token")
+		// oauth2 RetrieveError may embed the provider's response body. Log the
+		// class only so a non-conforming provider cannot reflect credentials,
+		// authorization codes, or token material into server logs.
+		log.Error().Str("error_type", fmt.Sprintf("%T", err)).Msg("failed to exchange OIDC code for token")
 		return services.UserAuthTokenDetail{}, fmt.Errorf("failed to exchange code for token")
 	}
 
@@ -168,6 +176,9 @@ func (p *OIDCProvider) AuthenticateWithBaseURL(baseURL, expectedNonce, pkceVerif
 		log.Err(err).Msg("failed to extract claims from ID token")
 		return services.UserAuthTokenDetail{}, fmt.Errorf("failed to extract claims from ID token")
 	}
+	if err := verifyOIDCNonce(rawClaims, expectedNonce); err != nil {
+		return services.UserAuthTokenDetail{}, err
+	}
 
 	// Attempt to retrieve UserInfo claims; use them as primary, fallback to ID token claims.
 	finalClaims := rawClaims
@@ -176,13 +187,18 @@ func (p *OIDCProvider) AuthenticateWithBaseURL(baseURL, expectedNonce, pkceVerif
 
 	userInfo, uiErr := p.provider.UserInfo(userInfoCtx, oauth2.StaticTokenSource(token))
 	if uiErr != nil {
-		log.Debug().Err(uiErr).Msg("OIDC UserInfo fetch failed; falling back to ID token claims")
+		log.Debug().
+			Str("error_type", fmt.Sprintf("%T", uiErr)).
+			Msg("OIDC UserInfo fetch failed; falling back to ID token claims")
 	} else {
 		var uiClaims map[string]interface{}
 		if err := userInfo.Claims(&uiClaims); err != nil {
 			log.Debug().Err(err).Msg("failed to decode UserInfo claims; falling back to ID token claims")
 		} else {
-			finalClaims = mergeOIDCClaims(uiClaims, rawClaims) // UserInfo first, then fill gaps from ID token
+			finalClaims, err = mergeVerifiedOIDCClaims(rawClaims, uiClaims)
+			if err != nil {
+				return services.UserAuthTokenDetail{}, err
+			}
 			log.Debug().Int("userinfo_claims", len(uiClaims)).Int("id_token_claims", len(rawClaims)).Int("merged_claims", len(finalClaims)).Msg("merged UserInfo and ID token claims")
 		}
 	}
@@ -194,23 +210,8 @@ func (p *OIDCProvider) AuthenticateWithBaseURL(baseURL, expectedNonce, pkceVerif
 		return services.UserAuthTokenDetail{}, fmt.Errorf("failed to parse OIDC claims: %w", err)
 	}
 
-	// Verify nonce claim matches expected value (nonce only from ID token; ensure preserved in merged map)
-	tokenNonce, exists := finalClaims["nonce"]
-	if !exists {
-		log.Warn().Msg("nonce claim missing from ID token - possible replay attack")
-		return services.UserAuthTokenDetail{}, fmt.Errorf("nonce claim missing from token")
-	}
-
-	tokenNonceStr, ok := tokenNonce.(string)
-	if !ok {
-		log.Warn().Msg("nonce claim is not a string in ID token")
-		return services.UserAuthTokenDetail{}, fmt.Errorf("invalid nonce claim format")
-	}
-
-	if tokenNonceStr != expectedNonce {
-		log.Warn().Str("received", tokenNonceStr).Str("expected", expectedNonce).Msg("OIDC nonce mismatch - possible replay attack")
-		return services.UserAuthTokenDetail{}, fmt.Errorf("nonce parameter mismatch")
-	}
+	// Nonce was already checked directly against the verified ID-token claims,
+	// before any UserInfo enrichment.
 
 	// Check if email is verified
 	if p.config.VerifyEmail {
@@ -228,9 +229,8 @@ func (p *OIDCProvider) AuthenticateWithBaseURL(baseURL, expectedNonce, pkceVerif
 		allowedGroups := strings.Split(p.config.AllowedGroups, ",")
 		if !p.hasAllowedGroup(claims.Groups, allowedGroups) {
 			log.Warn().
-				Strs("user_groups", claims.Groups).
-				Strs("allowed_groups", allowedGroups).
-				Str("user", claims.Email).
+				Int("user_group_count", len(claims.Groups)).
+				Int("allowed_group_count", len(allowedGroups)).
 				Msg("user not in allowed groups")
 			return services.UserAuthTokenDetail{}, fmt.Errorf("user not in allowed groups")
 		}
@@ -251,11 +251,59 @@ func (p *OIDCProvider) AuthenticateWithBaseURL(baseURL, expectedNonce, pkceVerif
 	// Use the dedicated OIDC login method (issuer + subject identity)
 	sessionToken, err := p.service.LoginOIDC(r.Context(), claims.Issuer, claims.Subject, email, claims.Name)
 	if err != nil {
-		log.Err(err).Str("email", email).Str("issuer", claims.Issuer).Str("subject", claims.Subject).Msg("OIDC login failed")
+		log.Err(err).Msg("OIDC login failed")
 		return services.UserAuthTokenDetail{}, fmt.Errorf("OIDC login failed: %w", err)
 	}
 
 	return sessionToken, nil
+}
+
+func verifyOIDCNonce(idTokenClaims map[string]interface{}, expectedNonce string) error {
+	tokenNonce, exists := idTokenClaims["nonce"]
+	if !exists {
+		log.Warn().Msg("nonce claim missing from ID token - possible replay attack")
+		return fmt.Errorf("nonce claim missing from token")
+	}
+
+	tokenNonceStr, ok := tokenNonce.(string)
+	if !ok {
+		log.Warn().Msg("nonce claim is not a string in ID token")
+		return fmt.Errorf("invalid nonce claim format")
+	}
+
+	if subtle.ConstantTimeCompare([]byte(tokenNonceStr), []byte(expectedNonce)) != 1 {
+		log.Warn().Msg("OIDC nonce mismatch - possible replay attack")
+		return fmt.Errorf("nonce parameter mismatch")
+	}
+	return nil
+}
+
+func verifyUserInfoSubject(idTokenClaims, userInfoClaims map[string]interface{}) error {
+	idSubject, idOK := idTokenClaims["sub"].(string)
+	userInfoSubject, uiOK := userInfoClaims["sub"].(string)
+	if !idOK || idSubject == "" || !uiOK || userInfoSubject == "" {
+		return fmt.Errorf("OIDC UserInfo and ID token must both contain a subject")
+	}
+	if subtle.ConstantTimeCompare([]byte(idSubject), []byte(userInfoSubject)) != 1 {
+		log.Warn().Msg("OIDC UserInfo subject does not match ID token")
+		return fmt.Errorf("OIDC UserInfo subject mismatch")
+	}
+	return nil
+}
+
+func mergeVerifiedOIDCClaims(idTokenClaims, userInfoClaims map[string]interface{}) (map[string]interface{}, error) {
+	if err := verifyUserInfoSubject(idTokenClaims, userInfoClaims); err != nil {
+		return nil, err
+	}
+	merged := mergeOIDCClaims(userInfoClaims, idTokenClaims)
+	// UserInfo may enrich profile and authorization claims, but it must never
+	// replace identity/security claims from the verified ID token.
+	for _, key := range []string{"sub", "iss", "nonce"} {
+		if value, ok := idTokenClaims[key]; ok {
+			merged[key] = value
+		}
+	}
+	return merged, nil
 }
 
 func (p *OIDCProvider) parseOIDCClaims(rawClaims map[string]interface{}) (OIDCClaims, error) {
@@ -401,19 +449,18 @@ func (p *OIDCProvider) initiateOIDCFlow(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Get base URL from request
-	baseURL := p.getBaseURL(r)
-	u, _ := url.Parse(baseURL)
-	domain := u.Hostname()
-	if domain == "" {
-		domain = noPort(r.Host)
+	baseURL, err := p.getBaseURL(r)
+	if err != nil {
+		return services.UserAuthTokenDetail{}, fmt.Errorf("invalid OIDC callback base URL: %w", err)
 	}
 
-	// Store state in session cookie for validation
+	// Keep transient credentials host-only. Setting Domain broadens cookies to
+	// subdomains and needlessly exposes state, nonce, and the PKCE verifier to
+	// sibling applications.
 	http.SetCookie(w, &http.Cookie{
 		Name:     "oidc_state",
 		Value:    state,
 		Expires:  time.Now().Add(p.config.StateExpiry),
-		Domain:   domain,
 		Secure:   p.isSecure(r),
 		HttpOnly: true,
 		Path:     "/",
@@ -425,7 +472,6 @@ func (p *OIDCProvider) initiateOIDCFlow(w http.ResponseWriter, r *http.Request) 
 		Name:     "oidc_nonce",
 		Value:    nonce,
 		Expires:  time.Now().Add(p.config.StateExpiry),
-		Domain:   domain,
 		Secure:   p.isSecure(r),
 		HttpOnly: true,
 		Path:     "/",
@@ -437,7 +483,6 @@ func (p *OIDCProvider) initiateOIDCFlow(w http.ResponseWriter, r *http.Request) 
 		Name:     "oidc_pkce_verifier",
 		Value:    pkceVerifier,
 		Expires:  time.Now().Add(p.config.StateExpiry),
-		Domain:   domain,
 		Secure:   p.isSecure(r),
 		HttpOnly: true,
 		Path:     "/",
@@ -454,19 +499,12 @@ func (p *OIDCProvider) initiateOIDCFlow(w http.ResponseWriter, r *http.Request) 
 
 // handleCallback processes the OAuth2 callback from the OIDC provider
 func (p *OIDCProvider) handleCallback(w http.ResponseWriter, r *http.Request) (services.UserAuthTokenDetail, error) {
-	// Helper to clear state cookie using computed domain
-	baseURL := p.getBaseURL(r)
-	u, _ := url.Parse(baseURL)
-	domain := u.Hostname()
-	if domain == "" {
-		domain = noPort(r.Host)
-	}
+	// Clear the host-only transient cookies set when the flow started.
 	clearCookies := func() {
 		http.SetCookie(w, &http.Cookie{
 			Name:     "oidc_state",
 			Value:    "",
 			Expires:  time.Unix(0, 0),
-			Domain:   domain,
 			MaxAge:   -1,
 			Secure:   p.isSecure(r),
 			HttpOnly: true,
@@ -477,7 +515,6 @@ func (p *OIDCProvider) handleCallback(w http.ResponseWriter, r *http.Request) (s
 			Name:     "oidc_nonce",
 			Value:    "",
 			Expires:  time.Unix(0, 0),
-			Domain:   domain,
 			MaxAge:   -1,
 			Secure:   p.isSecure(r),
 			HttpOnly: true,
@@ -488,13 +525,17 @@ func (p *OIDCProvider) handleCallback(w http.ResponseWriter, r *http.Request) (s
 			Name:     "oidc_pkce_verifier",
 			Value:    "",
 			Expires:  time.Unix(0, 0),
-			Domain:   domain,
 			MaxAge:   -1,
 			Secure:   p.isSecure(r),
 			HttpOnly: true,
 			Path:     "/",
 			SameSite: http.SameSiteLaxMode,
 		})
+	}
+	baseURL, err := p.getBaseURL(r)
+	if err != nil {
+		clearCookies()
+		return services.UserAuthTokenDetail{}, fmt.Errorf("invalid OIDC callback base URL: %w", err)
 	}
 
 	// Check for OAuth error responses first
@@ -520,8 +561,8 @@ func (p *OIDCProvider) handleCallback(w http.ResponseWriter, r *http.Request) (s
 		return services.UserAuthTokenDetail{}, fmt.Errorf("state parameter missing")
 	}
 
-	if stateParam != stateCookie.Value {
-		log.Warn().Str("received", stateParam).Str("expected", stateCookie.Value).Msg("OIDC state mismatch - possible CSRF attack")
+	if subtle.ConstantTimeCompare([]byte(stateParam), []byte(stateCookie.Value)) != 1 {
+		log.Warn().Msg("OIDC state mismatch - possible CSRF attack")
 		clearCookies()
 		return services.UserAuthTokenDetail{}, fmt.Errorf("state parameter mismatch")
 	}
@@ -579,28 +620,77 @@ func generatePKCEChallenge(verifier string) string {
 	return base64.RawURLEncoding.EncodeToString(hash[:])
 }
 
-func noPort(host string) string {
-	return strings.Split(host, ":")[0]
+func firstOIDCHeaderValue(value string) string {
+	if i := strings.IndexByte(value, ','); i >= 0 {
+		value = value[:i]
+	}
+	return strings.TrimSpace(value)
 }
 
-func (p *OIDCProvider) getBaseURL(r *http.Request) string {
-	scheme := "http"
+func validOIDCHost(host string) bool {
+	if host == "" || strings.TrimSpace(host) != host || strings.ContainsAny(host, " \t/?#\\") || strings.Contains(host, "://") {
+		return false
+	}
+	parsed, err := url.Parse("http://" + host)
+	return err == nil && parsed.Host == host && parsed.Hostname() != "" && parsed.User == nil && parsed.Path == "" && parsed.RawQuery == "" && parsed.Fragment == ""
+}
+
+func (p *OIDCProvider) requestScheme(r *http.Request) (string, error) {
 	if r.TLS != nil {
-		scheme = "https"
-	} else if p.options.TrustProxy && r.Header.Get("X-Forwarded-Proto") == "https" {
-		scheme = "https"
+		return "https", nil
+	}
+	if !p.options.TrustProxy {
+		return "http", nil
+	}
+
+	forwarded := strings.ToLower(firstOIDCHeaderValue(r.Header.Get("X-Forwarded-Proto")))
+	switch forwarded {
+	case "", "http":
+		return "http", nil
+	case "https":
+		return "https", nil
+	default:
+		return "", fmt.Errorf("unsupported X-Forwarded-Proto %q", forwarded)
+	}
+}
+
+func (p *OIDCProvider) getBaseURL(r *http.Request) (string, error) {
+	if p.options == nil {
+		return "", fmt.Errorf("OIDC options are not configured")
+	}
+
+	if configured := strings.TrimSpace(p.options.Hostname); configured != "" {
+		if strings.Contains(configured, "://") {
+			parsed, err := url.Parse(configured)
+			if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+				return "", fmt.Errorf("HBOX_OPTIONS_HOSTNAME must be an http(s) origin without credentials, path, query, or fragment")
+			}
+			return strings.TrimSuffix(parsed.String(), "/"), nil
+		}
+		if !validOIDCHost(configured) {
+			return "", fmt.Errorf("HBOX_OPTIONS_HOSTNAME is not a valid host")
+		}
+		scheme, err := p.requestScheme(r)
+		if err != nil {
+			return "", err
+		}
+		return scheme + "://" + configured, nil
 	}
 
 	host := r.Host
-	if p.options.Hostname != "" {
-		host = p.options.Hostname
-	} else if p.options.TrustProxy {
-		if xfHost := r.Header.Get("X-Forwarded-Host"); xfHost != "" {
-			host = xfHost
+	if p.options.TrustProxy {
+		if forwarded := firstOIDCHeaderValue(r.Header.Get("X-Forwarded-Host")); forwarded != "" {
+			host = forwarded
 		}
 	}
-
-	return scheme + "://" + host
+	if !validOIDCHost(host) {
+		return "", fmt.Errorf("request host is invalid")
+	}
+	scheme, err := p.requestScheme(r)
+	if err != nil {
+		return "", err
+	}
+	return scheme + "://" + host, nil
 }
 
 func (p *OIDCProvider) isSecure(r *http.Request) bool {

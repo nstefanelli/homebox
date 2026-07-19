@@ -2,8 +2,10 @@ package ai
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -64,6 +66,23 @@ func TestNewProvider_Selection(t *testing.T) {
 	_, err = NewProvider(config.AIConf{Provider: "bogus"})
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, ErrAIDisabled)
+}
+
+func TestProviderHTTPClientUsesRestrictedTransportOnlyForGroupBaseURL(t *testing.T) {
+	trusted := providerHTTPClient(config.AIConf{TimeoutSeconds: 7})
+	assert.Equal(t, 7*time.Second, trusted.Timeout)
+	assert.Nil(t, trusted.Transport, "operator-configured env endpoints retain the standard client, including local AI")
+
+	untrusted := providerHTTPClient(config.AIConf{
+		TimeoutSeconds:     7,
+		BaseURLIsUntrusted: true,
+	})
+	assert.Equal(t, 7*time.Second, untrusted.Timeout)
+	transport, ok := untrusted.Transport.(*http.Transport)
+	require.True(t, ok)
+	assert.Nil(t, transport.Proxy)
+	require.NotNil(t, transport.DialContext)
+	require.NotNil(t, untrusted.CheckRedirect)
 }
 
 func TestParseAnalyzeResults_ValidArray(t *testing.T) {
