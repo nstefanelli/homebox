@@ -345,7 +345,7 @@ func Test_testBarcodeResponseForConfig(t *testing.T) {
 			name:        "no token anywhere -> not configured, short-circuited",
 			conf:        config.BarcodeAPIConf{},
 			wantHandled: true,
-			want:        TestConnectionResponse{OK: false, Detail: testDetailNoTokenConfigured},
+			want:        TestConnectionResponse{OK: false, Detail: testDetailBarcodeNotConfigured},
 		},
 		{
 			name:        "token configured -> not handled here, caller proceeds to lookup",

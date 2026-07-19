@@ -530,7 +530,8 @@ func (svc *UserService) LoginOIDC(ctx context.Context, issuer, subject, email, n
 		if email != "" {
 			migrationCtx, migrationSpan := entityServiceTracer().Start(ctx, "service.UserService.LoginOIDC.legacyEmailMigration")
 			legacyUsr, lerr := svc.repos.Users.GetOneEmail(migrationCtx, email)
-			if lerr == nil {
+			switch {
+			case lerr == nil:
 				if legacyUsr.PasswordHash != "" || legacyUsr.OidcIssuer != nil || legacyUsr.OidcSubject != nil {
 					migrationSpan.SetAttributes(attribute.String("oidc.migration.outcome", "ineligible_account"))
 					migrationSpan.End()
@@ -556,9 +557,9 @@ func (svc *UserService) LoginOIDC(ctx context.Context, issuer, subject, email, n
 					attribute.String("oidc.migration.outcome", "migrated"),
 					attribute.String("user.id", legacyUsr.ID.String()),
 				)
-			} else if ent.IsNotFound(lerr) {
+			case ent.IsNotFound(lerr):
 				migrationSpan.SetAttributes(attribute.String("oidc.migration.outcome", "no_legacy_user"))
-			} else {
+			default:
 				migrationSpan.SetAttributes(attribute.String("oidc.migration.outcome", "email_lookup_failed"))
 				recordServiceSpanError(migrationSpan, lerr)
 				migrationSpan.End()

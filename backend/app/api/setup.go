@@ -132,7 +132,7 @@ func setupDatabaseURL(cfg *config.Config) (string, error) {
 		databaseURL = cfg.Database.SqlitePath
 		dbFilePath := strings.Split(cfg.Database.SqlitePath, "?")[0]
 		dbDir := filepath.Dir(dbFilePath)
-		if err := os.MkdirAll(dbDir, 0o755); err != nil {
+		if err := os.MkdirAll(dbDir, 0o750); err != nil {
 			log.Error().Err(err).Str("path", dbDir).Msg("failed to create SQLite database directory")
 			return "", fmt.Errorf("failed to create SQLite database directory: %w", err)
 		}

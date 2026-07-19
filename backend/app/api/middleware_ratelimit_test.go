@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -528,7 +527,7 @@ func TestPasswordResetRateLimiterCountsSuccessfulResponses(t *testing.T) {
 	require.Error(t, err)
 
 	var reqErr *validate.RequestError
-	require.True(t, errors.As(err, &reqErr))
+	require.ErrorAs(t, err, &reqErr)
 	assert.Equal(t, http.StatusTooManyRequests, reqErr.Status)
 	assert.EqualValues(t, cfg.Auth.RateLimit.MaxAttempts, calls.Load(), "blocked requests must not reach the email handler")
 }
@@ -568,7 +567,7 @@ func TestRegistrationRateLimiterCountsSuccessfulResponses(t *testing.T) {
 	require.Error(t, err)
 
 	var reqErr *validate.RequestError
-	require.True(t, errors.As(err, &reqErr))
+	require.ErrorAs(t, err, &reqErr)
 	assert.Equal(t, http.StatusTooManyRequests, reqErr.Status)
 	assert.EqualValues(t, cfg.Auth.RateLimit.MaxAttempts, calls.Load(), "blocked requests must not reach the registration handler")
 }

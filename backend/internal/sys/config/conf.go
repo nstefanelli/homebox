@@ -187,7 +187,7 @@ type AIConf struct {
 	// BaseURLIsUntrusted is runtime provenance, not operator configuration.
 	// EffectiveAI sets it only when BaseURL came from a tenant-managed group
 	// override, causing the AI package to use the public-network-only client.
-	BaseURLIsUntrusted bool `yaml:"-" json:"-"`
+	BaseURLIsUntrusted bool `json:"-" yaml:"-"`
 }
 
 func (c AIConf) MarshalJSON() ([]byte, error) {

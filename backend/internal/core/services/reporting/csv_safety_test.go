@@ -66,7 +66,7 @@ func TestBillOfMaterialsCSV_NeutralizesFormulaText(t *testing.T) {
 
 func TestIOSheetCSV_NeutralizesFormulaText(t *testing.T) {
 	sheet := IOSheet{
-		headers: []string{"HB.name", "HB.description", "HB.quantity", "HB.field.command"},
+		headers: []string{HeaderHBName, "HB.description", "HB.quantity", "HB.field.command"},
 		Rows: []ExportCSVRow{{
 			Name:        "=1+1",
 			Description: "  @SUM(1,2)",

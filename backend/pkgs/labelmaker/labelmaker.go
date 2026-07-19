@@ -13,7 +13,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"text/template"
 	"time"
@@ -487,8 +486,7 @@ func splitCommandTemplate(s string) []string {
 }
 
 func PrintLabel(cfg *config.Config, params *GenerateParameters) error {
-	tmpFile := filepath.Join(os.TempDir(), fmt.Sprintf("label-%d.png", time.Now().UnixNano()))
-	f, err := os.OpenFile(tmpFile, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600)
+	f, err := os.CreateTemp("", "homebox-label-*.png")
 	if err != nil {
 		return err
 	}
@@ -560,6 +558,8 @@ func PrintLabel(cfg *config.Config, params *GenerateParameters) error {
 		return nil
 	}
 
+	// #nosec G204 -- the executable and argv template are operator-controlled;
+	// user substitutions are confined to one pre-split argv token above.
 	command := exec.Command(commandParts[0], commandParts[1:]...)
 
 	_, err = command.CombinedOutput()

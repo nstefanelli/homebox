@@ -7,6 +7,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"io"
+	"math"
 	"strings"
 	"testing"
 
@@ -727,7 +728,7 @@ func TestCopyTemplatePhotoBlobsFailsWhenReferencedBlobIsMissing(t *testing.T) {
 	zw := zip.NewWriter(&buf)
 	err = tSvc.Exports.copyTemplatePhotoBlobs(ctx, zw, g.ID)
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "template")
+	require.ErrorContains(t, err, "template")
 	_ = zw.Close()
 }
 
@@ -757,7 +758,7 @@ func TestCopyAttachmentBlobsFailsWhenReferencedBlobIsMissing(t *testing.T) {
 	zw := zip.NewWriter(&buf)
 	err = tSvc.Exports.copyAttachmentBlobs(ctx, zw, g.ID)
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "blob")
+	require.ErrorContains(t, err, "blob")
 	_ = zw.Close()
 }
 
@@ -774,6 +775,23 @@ func TestCopyExactSize(t *testing.T) {
 	dst.Reset()
 	_, err = copyExactSize(&dst, strings.NewReader("abcd"), 3)
 	require.Error(t, err)
+}
+
+func TestCopyDeclaredZipEntryRejectsSizeMismatch(t *testing.T) {
+	var dst bytes.Buffer
+	require.NoError(t, copyDeclaredZipEntry(&dst, strings.NewReader("abc"), 3))
+	assert.Equal(t, "abc", dst.String())
+
+	dst.Reset()
+	err := copyDeclaredZipEntry(&dst, strings.NewReader("abcd"), 3)
+	require.ErrorContains(t, err, "exceeds declared size")
+
+	dst.Reset()
+	err = copyDeclaredZipEntry(&dst, strings.NewReader("ab"), 3)
+	require.ErrorContains(t, err, "size mismatch")
+
+	err = copyDeclaredZipEntry(&dst, strings.NewReader(""), math.MaxUint64)
+	require.ErrorContains(t, err, "unsupported")
 }
 
 func TestRunImportMarksRedeliveredRunningJobFailedAndRetainsUpload(t *testing.T) {

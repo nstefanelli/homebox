@@ -297,7 +297,7 @@ func TestThumbnailSaveFailureCleansUploadedBlob(t *testing.T) {
 			SELECT RAISE(ABORT, 'forced thumbnail save failure');
 		END`, triggerName))
 
-	err = repos.Attachments.CreateThumbnail(ctx, tGroup.ID, source.ID, source.Title, "ignored-event-path")
+	err = repos.Attachments.CreateThumbnail(ctx, tGroup.ID, source.ID, source.Title)
 	require.ErrorContains(t, err, "forced thumbnail save failure")
 	assert.False(t, lifecycleBlobExists(t, repos.Attachments, expected.Path))
 	assert.True(t, lifecycleBlobExists(t, repos.Attachments, source.Path), "source blob remains referenced")
@@ -321,7 +321,7 @@ func TestThumbnailCreationIsIdempotentAfterSuccess(t *testing.T) {
 		"mem://{{ .Topic }}",
 		config.Thumbnail{Enabled: true, Width: 128, Height: 128},
 	)
-	require.NoError(t, repos.Attachments.CreateThumbnail(ctx, tGroup.ID, source.ID, source.Title, source.Path))
+	require.NoError(t, repos.Attachments.CreateThumbnail(ctx, tGroup.ID, source.ID, source.Title))
 	withThumbnail, err := tClient.Attachment.Query().
 		Where(attachment.ID(source.ID)).
 		WithThumbnail().
@@ -334,7 +334,7 @@ func TestThumbnailCreationIsIdempotentAfterSuccess(t *testing.T) {
 		Count(ctx)
 	require.NoError(t, err)
 
-	require.NoError(t, repos.Attachments.CreateThumbnail(ctx, tGroup.ID, source.ID, source.Title, source.Path))
+	require.NoError(t, repos.Attachments.CreateThumbnail(ctx, tGroup.ID, source.ID, source.Title))
 	withThumbnail, err = tClient.Attachment.Query().
 		Where(attachment.ID(source.ID)).
 		WithThumbnail().

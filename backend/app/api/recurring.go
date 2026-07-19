@@ -157,7 +157,7 @@ func registerRecurringTasks(app *app, cfg *config.Config, runner *graceful.Runne
 					if err != nil {
 						log.Error().Err(err).Str("attachment_id", msg.Metadata["attachment_id"]).Msg("failed to parse attachment ID from message metadata")
 					}
-					err = app.repos.Attachments.CreateThumbnail(ctx, groupId, attachmentId, msg.Metadata["title"], msg.Metadata["path"])
+					err = app.repos.Attachments.CreateThumbnail(ctx, groupId, attachmentId, msg.Metadata["title"])
 					if err != nil {
 						log.Err(err).Msg("failed to create thumbnail")
 					}

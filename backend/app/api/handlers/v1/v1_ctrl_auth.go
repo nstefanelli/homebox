@@ -18,9 +18,10 @@ import (
 )
 
 const (
-	cookieNameToken    = "hb.auth.token"
-	cookieNameRemember = "hb.auth.remember"
-	cookieNameSession  = "hb.auth.session"
+	cookieNameToken      = "hb.auth.token" // #nosec G101 -- a public cookie name, not a credential value.
+	cookieNameRemember   = "hb.auth.remember"
+	cookieNameSession    = "hb.auth.session"
+	cookieNameAttachment = "hb.auth.attachment_token"
 )
 
 type (
@@ -401,91 +402,39 @@ func (ctrl *V1Controller) HandleAuthRefresh() errchain.HandlerFunc {
 }
 
 func (ctrl *V1Controller) setCookies(w http.ResponseWriter, token string, expires time.Time, remember bool, attachmentToken string) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     cookieNameRemember,
-		Value:    strconv.FormatBool(remember),
-		Expires:  expires,
-		Secure:   ctrl.cookieSecure,
-		HttpOnly: true,
-		Path:     "/",
-		SameSite: http.SameSiteLaxMode,
-	})
-
-	// Set HTTP only cookie
-	http.SetCookie(w, &http.Cookie{
-		Name:     cookieNameToken,
-		Value:    token,
-		Expires:  expires,
-		Secure:   ctrl.cookieSecure,
-		HttpOnly: true,
-		Path:     "/",
-		SameSite: http.SameSiteLaxMode,
-	})
-
-	// Set Fake Session cookie
-	http.SetCookie(w, &http.Cookie{
-		Name:     cookieNameSession,
-		Value:    "true",
-		Expires:  expires,
-		Secure:   ctrl.cookieSecure,
-		HttpOnly: false,
-		Path:     "/",
-		SameSite: http.SameSiteLaxMode,
-	})
+	ctrl.setAuthCookie(w, cookieNameRemember, strconv.FormatBool(remember), expires, true)
+	ctrl.setAuthCookie(w, cookieNameToken, token, expires, true)
+	ctrl.setAuthCookie(w, cookieNameSession, "true", expires, false)
 
 	// Set attachment token cookie (accessible to frontend, not HttpOnly)
 	if attachmentToken != "" {
-		http.SetCookie(w, &http.Cookie{
-			Name:     "hb.auth.attachment_token",
-			Value:    attachmentToken,
-			Expires:  expires,
-			Secure:   ctrl.cookieSecure,
-			HttpOnly: false,
-			Path:     "/",
-			SameSite: http.SameSiteLaxMode,
-		})
+		ctrl.setAuthCookie(w, cookieNameAttachment, attachmentToken, expires, false)
 	}
 }
 
 func (ctrl *V1Controller) unsetCookies(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     cookieNameToken,
-		Value:    "",
-		Expires:  time.Unix(0, 0),
-		Secure:   ctrl.cookieSecure,
-		HttpOnly: true,
-		Path:     "/",
-		SameSite: http.SameSiteLaxMode,
-	})
+	expired := time.Unix(0, 0)
+	ctrl.setAuthCookie(w, cookieNameToken, "", expired, true)
+	ctrl.setAuthCookie(w, cookieNameRemember, "false", expired, true)
+	ctrl.setAuthCookie(w, cookieNameSession, "false", expired, false)
+	ctrl.setAuthCookie(w, cookieNameAttachment, "", expired, false)
+}
 
+func (ctrl *V1Controller) setAuthCookie(
+	w http.ResponseWriter,
+	name, value string,
+	expires time.Time,
+	httpOnly bool,
+) {
+	// #nosec G124 -- auth/remember cookies are HttpOnly; the session marker and
+	// attachment token are intentionally frontend-readable. Secure follows the
+	// explicit deployment setting to preserve supported HTTP-only self-hosting.
 	http.SetCookie(w, &http.Cookie{
-		Name:     cookieNameRemember,
-		Value:    "false",
-		Expires:  time.Unix(0, 0),
+		Name:     name,
+		Value:    value,
+		Expires:  expires,
 		Secure:   ctrl.cookieSecure,
-		HttpOnly: true,
-		Path:     "/",
-		SameSite: http.SameSiteLaxMode,
-	})
-
-	// Set Fake Session cookie
-	http.SetCookie(w, &http.Cookie{
-		Name:     cookieNameSession,
-		Value:    "false",
-		Expires:  time.Unix(0, 0),
-		Secure:   ctrl.cookieSecure,
-		HttpOnly: false,
-		Path:     "/",
-		SameSite: http.SameSiteLaxMode,
-	})
-
-	// Unset attachment token cookie
-	http.SetCookie(w, &http.Cookie{
-		Name:     "hb.auth.attachment_token",
-		Value:    "",
-		Expires:  time.Unix(0, 0),
-		Secure:   ctrl.cookieSecure,
-		HttpOnly: false,
+		HttpOnly: httpOnly,
 		Path:     "/",
 		SameSite: http.SameSiteLaxMode,
 	})

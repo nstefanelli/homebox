@@ -297,7 +297,10 @@ func (ctrl *V1Controller) HandleEntityTemplatesBatchCreate() errchain.HandlerFun
 //	@Security	Bearer
 func (ctrl *V1Controller) HandleEntityTemplatePhotoUpload() errchain.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) error {
-		err := r.ParseMultipartForm(ctrl.maxUploadSize << 20)
+		r.Body = http.MaxBytesReader(w, r.Body, multipartRequestLimit(ctrl.maxUploadSize))
+		// #nosec G120 -- the complete body is bounded by MaxBytesReader
+		// immediately above; maxMemory controls only RAM versus temp-file use.
+		err := r.ParseMultipartForm(megabytesToBytes(ctrl.maxUploadSize))
 		if err != nil {
 			return multipartParseRequestError(err)
 		}
@@ -308,7 +311,7 @@ func (ctrl *V1Controller) HandleEntityTemplatePhotoUpload() errchain.HandlerFunc
 		}
 		defer func() { _ = file.Close() }()
 
-		maxBytes := ctrl.maxUploadSize << 20
+		maxBytes := megabytesToBytes(ctrl.maxUploadSize)
 		content, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
 		if err != nil {
 			return multipartContentReadError(err, "photo")

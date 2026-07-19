@@ -54,7 +54,10 @@ func (ctrl *V1Controller) HandleEntityAttachmentCreate() errchain.HandlerFunc {
 		defer span.End()
 
 		_, parseSpan := startEntityCtrlSpan(spanCtx, "controller.V1.HandleEntityAttachmentCreate.parseForm")
-		err := r.ParseMultipartForm(ctrl.maxUploadSize << 20)
+		r.Body = http.MaxBytesReader(w, r.Body, multipartRequestLimit(ctrl.maxUploadSize))
+		// #nosec G120 -- the complete body is bounded by MaxBytesReader
+		// immediately above; maxMemory controls only RAM versus temp-file use.
+		err := r.ParseMultipartForm(megabytesToBytes(ctrl.maxUploadSize))
 		if err != nil {
 			recordCtrlSpanError(parseSpan, err)
 			parseSpan.End()
@@ -243,6 +246,8 @@ func (ctrl *V1Controller) handleEntityAttachmentsHandler(w http.ResponseWriter, 
 				return validate.NewRequestError(err, http.StatusUnprocessableEntity)
 			}
 
+			// #nosec G710 -- external-link attachments intentionally redirect;
+			// parseExternalHTTPURL has just enforced an absolute http(s) URL.
 			http.Redirect(w, r, parsed.String(), http.StatusFound)
 			return nil
 		}

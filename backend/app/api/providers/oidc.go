@@ -21,6 +21,11 @@ import (
 	"golang.org/x/oauth2"
 )
 
+const (
+	httpScheme  = "http"
+	httpsScheme = "https"
+)
+
 type OIDCProvider struct {
 	service      *services.UserService
 	config       *config.OIDCConf
@@ -58,7 +63,7 @@ func NewOIDCProvider(service *services.UserService, config *config.OIDCConf, opt
 	config.IssuerURL = strings.TrimSpace(config.IssuerURL)
 	issuerURL, err := url.ParseRequestURI(config.IssuerURL)
 	if err != nil || issuerURL.Host == "" ||
-		(issuerURL.Scheme != "http" && issuerURL.Scheme != "https") ||
+		(issuerURL.Scheme != httpScheme && issuerURL.Scheme != httpsScheme) ||
 		issuerURL.User != nil || issuerURL.RawQuery != "" || issuerURL.Fragment != "" {
 		return nil, fmt.Errorf("OIDC issuer URL must be an absolute http(s) URL without credentials, query, or fragment")
 	}
@@ -454,43 +459,15 @@ func (p *OIDCProvider) initiateOIDCFlow(w http.ResponseWriter, r *http.Request) 
 		return services.UserAuthTokenDetail{}, fmt.Errorf("invalid OIDC callback base URL: %w", err)
 	}
 
-	// Keep transient credentials host-only. Setting Domain broadens cookies to
-	// subdomains and needlessly exposes state, nonce, and the PKCE verifier to
-	// sibling applications.
-	http.SetCookie(w, &http.Cookie{
-		Name:     "oidc_state",
-		Value:    state,
-		Expires:  time.Now().Add(p.config.StateExpiry),
-		Secure:   p.isSecure(r),
-		HttpOnly: true,
-		Path:     "/",
-		SameSite: http.SameSiteLaxMode,
-	})
-
-	// Store nonce in session cookie for validation
-	http.SetCookie(w, &http.Cookie{
-		Name:     "oidc_nonce",
-		Value:    nonce,
-		Expires:  time.Now().Add(p.config.StateExpiry),
-		Secure:   p.isSecure(r),
-		HttpOnly: true,
-		Path:     "/",
-		SameSite: http.SameSiteLaxMode,
-	})
-
-	// Store PKCE verifier in session cookie for token exchange
-	http.SetCookie(w, &http.Cookie{
-		Name:     "oidc_pkce_verifier",
-		Value:    pkceVerifier,
-		Expires:  time.Now().Add(p.config.StateExpiry),
-		Secure:   p.isSecure(r),
-		HttpOnly: true,
-		Path:     "/",
-		SameSite: http.SameSiteLaxMode,
-	})
+	expires := time.Now().Add(p.config.StateExpiry)
+	p.setTransientCookie(w, r, "oidc_state", state, expires, 0)
+	p.setTransientCookie(w, r, "oidc_nonce", nonce, expires, 0)
+	p.setTransientCookie(w, r, "oidc_pkce_verifier", pkceVerifier, expires, 0)
 
 	// Generate auth URL and redirect
 	authURL := p.GetAuthURL(baseURL, state, nonce, pkceVerifier)
+	// #nosec G710 -- this is the intended OAuth redirect to the endpoint
+	// discovered from the operator-configured, validated OIDC issuer.
 	http.Redirect(w, r, authURL, http.StatusFound)
 
 	// Return empty token since this is a redirect response
@@ -501,36 +478,10 @@ func (p *OIDCProvider) initiateOIDCFlow(w http.ResponseWriter, r *http.Request) 
 func (p *OIDCProvider) handleCallback(w http.ResponseWriter, r *http.Request) (services.UserAuthTokenDetail, error) {
 	// Clear the host-only transient cookies set when the flow started.
 	clearCookies := func() {
-		http.SetCookie(w, &http.Cookie{
-			Name:     "oidc_state",
-			Value:    "",
-			Expires:  time.Unix(0, 0),
-			MaxAge:   -1,
-			Secure:   p.isSecure(r),
-			HttpOnly: true,
-			Path:     "/",
-			SameSite: http.SameSiteLaxMode,
-		})
-		http.SetCookie(w, &http.Cookie{
-			Name:     "oidc_nonce",
-			Value:    "",
-			Expires:  time.Unix(0, 0),
-			MaxAge:   -1,
-			Secure:   p.isSecure(r),
-			HttpOnly: true,
-			Path:     "/",
-			SameSite: http.SameSiteLaxMode,
-		})
-		http.SetCookie(w, &http.Cookie{
-			Name:     "oidc_pkce_verifier",
-			Value:    "",
-			Expires:  time.Unix(0, 0),
-			MaxAge:   -1,
-			Secure:   p.isSecure(r),
-			HttpOnly: true,
-			Path:     "/",
-			SameSite: http.SameSiteLaxMode,
-		})
+		expired := time.Unix(0, 0)
+		p.setTransientCookie(w, r, "oidc_state", "", expired, -1)
+		p.setTransientCookie(w, r, "oidc_nonce", "", expired, -1)
+		p.setTransientCookie(w, r, "oidc_pkce_verifier", "", expired, -1)
 	}
 	baseURL, err := p.getBaseURL(r)
 	if err != nil {
@@ -637,18 +588,18 @@ func validOIDCHost(host string) bool {
 
 func (p *OIDCProvider) requestScheme(r *http.Request) (string, error) {
 	if r.TLS != nil {
-		return "https", nil
+		return httpsScheme, nil
 	}
 	if !p.options.TrustProxy {
-		return "http", nil
+		return httpScheme, nil
 	}
 
 	forwarded := strings.ToLower(firstOIDCHeaderValue(r.Header.Get("X-Forwarded-Proto")))
 	switch forwarded {
-	case "", "http":
-		return "http", nil
-	case "https":
-		return "https", nil
+	case "", httpScheme:
+		return httpScheme, nil
+	case httpsScheme:
+		return httpsScheme, nil
 	default:
 		return "", fmt.Errorf("unsupported X-Forwarded-Proto %q", forwarded)
 	}
@@ -662,7 +613,7 @@ func (p *OIDCProvider) getBaseURL(r *http.Request) (string, error) {
 	if configured := strings.TrimSpace(p.options.Hostname); configured != "" {
 		if strings.Contains(configured, "://") {
 			parsed, err := url.Parse(configured)
-			if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+			if err != nil || (parsed.Scheme != httpScheme && parsed.Scheme != httpsScheme) || parsed.Host == "" || parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
 				return "", fmt.Errorf("HBOX_OPTIONS_HOSTNAME must be an http(s) origin without credentials, path, query, or fragment")
 			}
 			return strings.TrimSuffix(parsed.String(), "/"), nil
@@ -696,6 +647,31 @@ func (p *OIDCProvider) getBaseURL(r *http.Request) (string, error) {
 func (p *OIDCProvider) isSecure(r *http.Request) bool {
 	_ = r
 	return p.cookieSecure
+}
+
+func (p *OIDCProvider) setTransientCookie(
+	w http.ResponseWriter,
+	r *http.Request,
+	name, value string,
+	expires time.Time,
+	maxAge int,
+) {
+	// Keep transient credentials host-only. Setting Domain broadens them to
+	// sibling applications. SameSite=Lax is required for the provider's
+	// top-level callback. Secure follows the explicit deployment setting to
+	// preserve supported HTTP-only self-hosting.
+	// #nosec G124 -- HttpOnly and SameSite are fixed; conditional Secure is a
+	// deliberate compatibility setting controlled by the operator.
+	http.SetCookie(w, &http.Cookie{
+		Name:     name,
+		Value:    value,
+		Expires:  expires,
+		MaxAge:   maxAge,
+		Secure:   p.isSecure(r),
+		HttpOnly: true,
+		Path:     "/",
+		SameSite: http.SameSiteLaxMode,
+	})
 }
 
 // InitiateOIDCFlow starts the OIDC authentication flow by redirecting to the provider

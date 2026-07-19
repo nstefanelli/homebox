@@ -3,7 +3,7 @@ package repo
 import (
 	"bytes"
 	"context"
-	"crypto/md5"
+	"crypto/md5" // #nosec G501 -- gocloud ContentMD5 is required for transport integrity, not credential security.
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -152,7 +152,7 @@ func normalizePath(path string) string {
 // "\" as the path separator; fileblob escaped that to this token, so files were
 // stored as flat names at the bucket root. v0.22.1+ uses "/" so files now live
 // in real subdirectories.
-const legacyFlatPathToken = "__0x5c__"
+const legacyFlatPathToken = "__0x5c__" // #nosec G101 -- a legacy filename escape marker, not a credential.
 
 // bucketLocalDir returns the absolute on-disk directory backing the fileblob
 // bucket, or "" if the storage backend is not a file:// URL.
@@ -232,7 +232,7 @@ func (r *AttachmentRepo) MigrateLegacyFlatPaths() error {
 			continue
 		}
 
-		if err := os.MkdirAll(filepath.Dir(newPath), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(newPath), 0o750); err != nil {
 			log.Err(err).Str("dir", filepath.Dir(newPath)).Msg("legacy attachment migration: failed to create parent directory")
 			skipped++
 			continue
@@ -757,7 +757,7 @@ func (r *AttachmentRepo) Rename(ctx context.Context, gid uuid.UUID, id uuid.UUID
 }
 
 //nolint:gocyclo
-func (r *AttachmentRepo) CreateThumbnail(ctx context.Context, groupId, attachmentId uuid.UUID, title string, path string) error {
+func (r *AttachmentRepo) CreateThumbnail(ctx context.Context, groupId, attachmentId uuid.UUID, title string) error {
 	ctx, span := otel.Tracer("data").Start(ctx, "repo.AttachmentRepo.CreateThumbnail")
 	defer span.End()
 
@@ -790,7 +790,7 @@ func (r *AttachmentRepo) CreateThumbnail(ctx context.Context, groupId, attachmen
 	if source.Edges.Thumbnail != nil {
 		return nil
 	}
-	path = source.Path
+	path := source.Path
 	if title == "" {
 		title = source.Title
 	}
@@ -1127,6 +1127,8 @@ func (r *AttachmentRepo) UploadFile(ctx context.Context, itemGroup *ent.Group, d
 
 	// Create hash writers
 	blake3Hasher := blake3.New()
+	// #nosec G401 -- MD5 is supplied only to gocloud's ContentMD5 transport
+	// integrity field; BLAKE3 below provides the content-derived storage key.
 	md5Hasher := md5.New()
 
 	// Use MultiWriter to write to buffer and both hashers simultaneously

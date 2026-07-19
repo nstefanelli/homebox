@@ -37,6 +37,13 @@ var p = &params{
 	keyLength:   32,
 }
 
+const (
+	maxArgonMemoryKiB       = uint32(256 * 1024)
+	maxArgonIterations      = uint32(10)
+	maxArgonParallelism     = uint8(16)
+	maxArgonComponentLength = 1024
+)
+
 func init() { // nolint: gochecknoinits
 	disableHas := os.Getenv("UNSAFE_DISABLE_PASSWORD_PROJECTION") == "yes_i_am_sure"
 
@@ -342,17 +349,30 @@ func decodeHash(encodedHash string) (out *params, salt, hash []byte, err error) 
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("invalid params segment %q: %w", vals[3], err)
 	}
+	if out.memory == 0 || out.memory > maxArgonMemoryKiB ||
+		out.iterations == 0 || out.iterations > maxArgonIterations ||
+		out.parallelism == 0 || out.parallelism > maxArgonParallelism {
+		return nil, nil, nil, fmt.Errorf("argon2 parameters exceed verification limits")
+	}
 
 	salt, err = base64.RawStdEncoding.Strict().DecodeString(vals[4])
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("invalid salt: %w", err)
 	}
+	if len(salt) == 0 || len(salt) > maxArgonComponentLength {
+		return nil, nil, nil, fmt.Errorf("argon2 salt length %d is outside verification limits", len(salt))
+	}
+	// #nosec G115 -- len(salt) is proven nonzero and <= 1024 immediately above.
 	out.saltLength = uint32(len(salt))
 
 	hash, err = base64.RawStdEncoding.Strict().DecodeString(vals[5])
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("invalid key: %w", err)
 	}
+	if len(hash) == 0 || len(hash) > maxArgonComponentLength {
+		return nil, nil, nil, fmt.Errorf("argon2 key length %d is outside verification limits", len(hash))
+	}
+	// #nosec G115 -- len(hash) is proven nonzero and <= 1024 immediately above.
 	out.keyLength = uint32(len(hash))
 
 	return out, salt, hash, nil

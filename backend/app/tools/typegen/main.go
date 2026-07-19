@@ -3,8 +3,11 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 )
+
+const generatedTypesPath = "frontend/lib/api/types/data-contracts.ts"
 
 type ReReplace struct {
 	Regex *regexp.Regexp
@@ -31,17 +34,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	path := os.Args[1]
-
-	fmt.Printf("Processing %s\n", path)
-
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		fmt.Printf("File %s does not exist\n", path)
+	if filepath.Clean(os.Args[1]) != filepath.Clean(generatedTypesPath) {
+		fmt.Printf("Refusing to process unexpected path %q\n", os.Args[1])
 		os.Exit(1)
 	}
+	fmt.Printf("Processing %s\n", generatedTypesPath)
 
 	text := "/* post-processed by ./scripts/process-types.go */\n"
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(generatedTypesPath)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
@@ -71,7 +71,9 @@ func main() {
 		text = replace.Regex.ReplaceAllString(text, replace.Text)
 	}
 
-	err = os.WriteFile(path, []byte(text), 0644)
+	// #nosec G306,G703 -- the generated source is intentionally
+	// repository-readable and generatedTypesPath is a fixed compile-time path.
+	err = os.WriteFile(generatedTypesPath, []byte(text), 0o644)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)

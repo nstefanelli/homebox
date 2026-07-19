@@ -17,7 +17,7 @@ func TestShutdownHTTPServerCompletesGracefully(t *testing.T) {
 	server, _, serveDone := startShutdownTestServer(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 
 	require.NoError(t, shutdownHTTPServer(server, time.Second))
-	assert.ErrorIs(t, <-serveDone, http.ErrServerClosed)
+	require.ErrorIs(t, <-serveDone, http.ErrServerClosed)
 }
 
 func TestShutdownHTTPServerForcesCloseAfterDeadline(t *testing.T) {
@@ -53,7 +53,7 @@ func TestShutdownHTTPServerForcesCloseAfterDeadline(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.Less(t, elapsed, time.Second)
-	assert.ErrorIs(t, <-serveDone, http.ErrServerClosed)
+	require.ErrorIs(t, <-serveDone, http.ErrServerClosed)
 
 	select {
 	case <-handlerDone:

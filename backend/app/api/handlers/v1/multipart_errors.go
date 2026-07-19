@@ -2,6 +2,7 @@ package v1
 
 import (
 	"errors"
+	"math"
 	"mime/multipart"
 	"net/http"
 
@@ -9,6 +10,28 @@ import (
 
 	"github.com/sysadminsmedia/homebox/backend/internal/sys/validate"
 )
+
+const bytesPerMiB int64 = 1 << 20
+
+func megabytesToBytes(megabytes int64) int64 {
+	if megabytes <= 0 {
+		return 0
+	}
+	if megabytes > math.MaxInt64/bytesPerMiB {
+		return math.MaxInt64
+	}
+	return megabytes * bytesPerMiB
+}
+
+// multipartRequestLimit includes one MiB for multipart boundaries and
+// metadata, matching the global middleware while also making each handler
+// safe when mounted independently in tests or another server.
+func multipartRequestLimit(maxContentMB int64) int64 {
+	if maxContentMB == math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return megabytesToBytes(maxContentMB + 1)
+}
 
 // multipartParseRequestError classifies failures produced while parsing an
 // upload request. MaxBytesError can be wrapped by ParseMultipartForm, so use

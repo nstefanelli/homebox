@@ -17,7 +17,7 @@ const (
 	// production, overriding the hardcoded development default below.
 	// When set, the value is accepted verbatim regardless of length —
 	// PasswordMinLength is bypassed for demo seeding (see SetupDemo).
-	demoPasswordEnv = "HBOX_DEMO_PASSWORD"
+	demoPasswordEnv = "HBOX_DEMO_PASSWORD" // #nosec G101 -- an environment variable name, not a credential value.
 	// demoPasswordDefault is the password used when demoPasswordEnv is unset.
 	// Public knowledge — only safe to leave at the default in development.
 	demoPasswordDefault = "demodemo"

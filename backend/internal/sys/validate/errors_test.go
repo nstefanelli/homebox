@@ -15,7 +15,7 @@ func TestNewRequestErrorNeverStoresNilCause(t *testing.T) {
 	var requestErr *RequestError
 	require.ErrorAs(t, err, &requestErr)
 	assert.Equal(t, http.StatusForbidden, requestErr.Status)
-	assert.NotNil(t, requestErr.Err)
+	require.Error(t, requestErr.Err)
 	assert.NotPanics(t, func() { _ = requestErr.Error() })
 }
 

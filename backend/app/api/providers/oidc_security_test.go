@@ -28,7 +28,7 @@ func TestOIDCBaseURLUsesOnlyValidatedTrustedSources(t *testing.T) {
 		{name: "absolute configured origin", hostname: "https://app.example.com", requestHost: "internal:7745", want: "https://app.example.com"},
 		{name: "bare configured host uses TLS", hostname: "app.example.com:8443", requestHost: "internal:7745", tls: true, want: "https://app.example.com:8443"},
 		{name: "trusted first forwarded values", trustProxy: true, requestHost: "internal:7745", xfHost: "app.example.com, proxy.internal", xfProto: "https, http", want: "https://app.example.com"},
-		{name: "untrusted forwarded values ignored", requestHost: "app.example.com", xfHost: "evil.example", xfProto: "https", want: "http://app.example.com"},
+		{name: "untrusted forwarded values ignored", requestHost: "app.example.com", xfHost: "evil.example", xfProto: httpsScheme, want: "http://app.example.com"},
 		{name: "bracketed IPv6", requestHost: "[::1]:7745", want: "http://[::1]:7745"},
 		{name: "configured userinfo rejected", hostname: "https://user:secret@app.example.com", requestHost: "internal", wantErr: true},
 		{name: "configured path rejected", hostname: "https://app.example.com/homebox", requestHost: "internal", wantErr: true},

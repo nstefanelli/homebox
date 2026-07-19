@@ -1,9 +1,12 @@
 package mailer
 
 import (
+	"context"
 	"encoding/json"
+	"net"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -60,4 +63,56 @@ func Test_Mailer(t *testing.T) {
 	err = mailer.Send(msg)
 
 	require.NoError(t, err)
+}
+
+func TestMailerSendContextHonorsDeadline(t *testing.T) {
+	t.Parallel()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = listener.Close() }()
+
+	serverDone := make(chan struct{})
+	go func() {
+		defer close(serverDone)
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+
+		// Deliberately never send the SMTP greeting. SendContext must still
+		// return when its context expires.
+		var oneByte [1]byte
+		_, _ = conn.Read(oneByte[:])
+	}()
+
+	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
+	require.True(t, ok)
+	testMailer := &Mailer{
+		Host:     "127.0.0.1",
+		Port:     tcpAddr.Port,
+		Username: "user",
+		Password: "password",
+		From:     "from@example.com",
+	}
+	msg := NewMessageBuilder().
+		SetBody("test").
+		SetSubject("test").
+		SetTo("Recipient", "to@example.com").
+		SetFrom("Sender", testMailer.From).
+		Build()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err = testMailer.SendContext(ctx, msg)
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(started), time.Second)
+	select {
+	case <-serverDone:
+	case <-time.After(time.Second):
+		t.Fatal("stalled SMTP connection did not close after the deadline")
+	}
 }

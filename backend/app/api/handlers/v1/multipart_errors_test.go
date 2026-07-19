@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -37,6 +38,13 @@ func TestMultipartErrorClassification(t *testing.T) {
 		requestErrorStatus(t, multipartFileRequestError(errors.New("temporary file disappeared"), "csv")))
 	assert.Equal(t, http.StatusInternalServerError,
 		requestErrorStatus(t, multipartContentReadError(errors.New("disk read failed"), "csv")))
+}
+
+func TestMultipartRequestLimit(t *testing.T) {
+	assert.Equal(t, int64(0), megabytesToBytes(0))
+	assert.Equal(t, bytesPerMiB, megabytesToBytes(1))
+	assert.Equal(t, 2*bytesPerMiB, multipartRequestLimit(1))
+	assert.Equal(t, int64(math.MaxInt64), multipartRequestLimit(math.MaxInt64))
 }
 
 func TestHandleEntitiesImportClassifiesMultipartFailures(t *testing.T) {

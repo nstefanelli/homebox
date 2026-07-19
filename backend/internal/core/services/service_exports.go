@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/url"
 	"os"
 	"path"
@@ -38,10 +39,11 @@ import (
 // can no longer round-trip an older export.
 const ExportSchemaVersion = 1
 
-// entitiesTable is the on-disk name of the entities table. Hoisted out of
-// the exportTables literal so the same string isn't repeated across every
-// FK/scope reference that points back at it.
-const entitiesTable = "entities"
+// Frequently referenced on-disk table names.
+const (
+	entitiesTable        = "entities"
+	entityTemplatesTable = "entity_templates"
+)
 
 // Pubsub topic names used by the export and import workers.
 const (
@@ -118,10 +120,10 @@ var exportTables = []tableSpec{
 		scope:     "group_entity_types = ?",
 		pkCol:     "id",
 		groupCols: []string{"group_entity_types"},
-		deferCols: map[string]string{"entity_type_default_template": "entity_templates"},
+		deferCols: map[string]string{"entity_type_default_template": entityTemplatesTable},
 	},
 	{
-		name:      "entity_templates",
+		name:      entityTemplatesTable,
 		scope:     "group_entity_templates = ?",
 		pkCol:     "id",
 		groupCols: []string{"group_entity_templates"},
@@ -131,7 +133,7 @@ var exportTables = []tableSpec{
 		name:   "template_fields",
 		scope:  "entity_template_fields IN (SELECT id FROM entity_templates WHERE group_entity_templates = ?)",
 		pkCol:  "id",
-		fkCols: map[string]string{"entity_template_fields": "entity_templates"},
+		fkCols: map[string]string{"entity_template_fields": entityTemplatesTable},
 	},
 	{
 		name:      "tags",
@@ -735,6 +737,8 @@ func (s *ExportService) publishMutation(gid uuid.UUID) {
 // subqueries). Each placeholder is filled with the same gid — none of the
 // existing scopes need to vary by placeholder.
 func dumpTable(ctx context.Context, db *sql.DB, dialect string, spec tableSpec, gid uuid.UUID) ([]map[string]any, error) {
+	// #nosec G202 -- spec comes exclusively from the compile-time exportTables
+	// allowlist; values in the scope are still passed as query parameters.
 	q := "SELECT * FROM " + spec.name
 	var args []any
 	if spec.scope != "" {
@@ -1013,7 +1017,7 @@ func (s *ExportService) runImport(ctx context.Context, gid, userID, importID uui
 		}
 		return fmt.Errorf("restore attachments: %w", err)
 	}
-	if err := s.restoreTemplatePhotoBlobs(ctx, zr, idMap["entity_templates"]); err != nil {
+	if err := s.restoreTemplatePhotoBlobs(ctx, zr, idMap[entityTemplatesTable]); err != nil {
 		if werr := wipeGroup(ctx, s.db.Sql(), s.dialect, gid); werr != nil {
 			log.Err(werr).Stringer("gid", gid).Msg("import job: template photo restore failed and rollback wipe also failed")
 		}
@@ -1094,10 +1098,10 @@ func (s *ExportService) restoreAttachmentBlobs(ctx context.Context, zr *zip.Read
 			_ = zf.Close()
 			return err
 		}
-		if _, err := io.Copy(w, zf); err != nil {
+		if err := copyDeclaredZipEntry(w, zf, f.UncompressedSize64); err != nil {
 			_ = w.Close()
 			_ = zf.Close()
-			return err
+			return fmt.Errorf("restore attachment blob %q: %w", f.Name, err)
 		}
 		if err := w.Close(); err != nil {
 			_ = zf.Close()
@@ -1154,10 +1158,10 @@ func (s *ExportService) restoreTemplatePhotoBlobs(
 			_ = zf.Close()
 			return err
 		}
-		if _, err := io.Copy(w, zf); err != nil {
+		if err := copyDeclaredZipEntry(w, zf, f.UncompressedSize64); err != nil {
 			_ = w.Close()
 			_ = zf.Close()
-			return err
+			return fmt.Errorf("restore template photo %q: %w", f.Name, err)
 		}
 		if err := w.Close(); err != nil {
 			_ = zf.Close()
@@ -1314,6 +1318,9 @@ func readBoundedZipJSON(f *zip.File, maxBytes uint64, dst any) error {
 	if f.UncompressedSize64 > maxBytes {
 		return fmt.Errorf("zip entry %q exceeds JSON size limit %d", f.Name, maxBytes)
 	}
+	if maxBytes >= uint64(math.MaxInt64) {
+		return fmt.Errorf("zip entry %q has unsupported JSON size limit %d", f.Name, maxBytes)
+	}
 	r, err := f.Open()
 	if err != nil {
 		return err
@@ -1332,6 +1339,28 @@ func readBoundedZipJSON(f *zip.File, maxBytes uint64, dst any) error {
 		return fmt.Errorf("decode %s: %w", f.Name, err)
 	}
 	return nil
+}
+
+// copyDeclaredZipEntry streams exactly the size declared in the central
+// directory and probes one byte beyond it. The archive-wide preflight caps
+// declared sizes; this runtime check also fails closed if a malformed
+// decompressor produces more or fewer bytes than the declaration.
+func copyDeclaredZipEntry(dst io.Writer, src io.Reader, declared uint64) error {
+	if declared >= uint64(math.MaxInt64) {
+		return fmt.Errorf("declared zip entry size %d is unsupported", declared)
+	}
+	want := int64(declared)
+	n, err := io.CopyN(dst, src, want+1)
+	switch {
+	case err == nil:
+		return fmt.Errorf("zip entry exceeds declared size %d", declared)
+	case !errors.Is(err, io.EOF):
+		return err
+	case n != want:
+		return fmt.Errorf("zip entry size mismatch: declared %d, read %d", declared, n)
+	default:
+		return nil
+	}
 }
 
 // sqlExecer is the minimal interface used by the import path so the same
@@ -1433,19 +1462,6 @@ func joinQuoted(dialect string, cols []string) string {
 	return strings.Join(out, ", ")
 }
 
-// rewriteBlobPath swaps the leading "{srcGid}/" segment of an attachment's
-// blob key for "{dstGid}/". Anything else (including paths without that
-// prefix) is returned unchanged so we never mangle data that happens to
-// already point at the destination, or paths from a future scheme that
-// doesn't lead with the gid.
-func rewriteBlobPath(path string, srcGid, dstGid uuid.UUID) string {
-	prefix := srcGid.String() + "/"
-	if !strings.HasPrefix(path, prefix) {
-		return path
-	}
-	return dstGid.String() + "/" + strings.TrimPrefix(path, prefix)
-}
-
 // enforceZipUncompressedLimit rejects zip bombs before any member is opened.
 // The ratio limit handles small highly-compressible archives, while the
 // absolute limit keeps a permitted 1GB upload from declaring 100GB of output.
@@ -1544,7 +1560,7 @@ func (s *ExportService) replayImportRows(ctx context.Context, tx *sql.Tx, zr *zi
 			if err != nil {
 				return nil, err
 			}
-			if spec.name == "entity_templates" {
+			if spec.name == entityTemplatesTable {
 				oldTagIDs, err := decodeArchivedUUIDList(row["default_tag_ids"])
 				if err != nil {
 					return nil, fmt.Errorf("decode entity_templates.default_tag_ids: %w", err)
@@ -1595,6 +1611,8 @@ func (s *ExportService) replayImportRows(ctx context.Context, tx *sql.Tx, zr *zi
 		if err != nil {
 			return nil, fmt.Errorf("encode remapped %s.%s: %w", d.table, d.col, err)
 		}
+		// #nosec G201 -- table/column identifiers originate in the compile-time
+		// import schema and are dialect-quoted; all row values are parameterized.
 		q := fmt.Sprintf("UPDATE %s SET %s = %s WHERE id = %s",
 			quoteIdent(s.dialect, d.table),
 			quoteIdent(s.dialect, d.col),
@@ -1611,6 +1629,8 @@ func (s *ExportService) replayImportRows(ctx context.Context, tx *sql.Tx, zr *zi
 		if err != nil {
 			return nil, fmt.Errorf("deferred update %s.%s: %w", d.table, d.col, err)
 		}
+		// #nosec G201 -- table/column identifiers originate in the compile-time
+		// import schema and are dialect-quoted; all row values are parameterized.
 		q := fmt.Sprintf("UPDATE %s SET %s = %s WHERE id = %s",
 			quoteIdent(s.dialect, d.table),
 			quoteIdent(s.dialect, d.col),
@@ -1721,7 +1741,7 @@ func remapImportRow(
 			return "", err
 		}
 	}
-	if spec.name == "entity_templates" {
+	if spec.name == entityTemplatesTable {
 		if err := rewriteTemplatePhotoPath(row, srcGroupID, gid); err != nil {
 			return "", err
 		}

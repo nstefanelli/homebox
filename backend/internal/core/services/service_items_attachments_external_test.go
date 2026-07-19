@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -93,7 +92,7 @@ func TestEntityService_AttachmentAddExternalLinkRejectsUnsafeURL(t *testing.T) {
 		"Unsafe",
 		attachment.TypeAttachment,
 	)
-	require.True(t, errors.Is(err, ErrInvalidExternalAttachmentURL))
+	require.ErrorIs(t, err, ErrInvalidExternalAttachmentURL)
 
 	got, err := tRepos.Entities.GetOneByGroup(tCtx, tCtx.GID, entity.ID)
 	require.NoError(t, err)

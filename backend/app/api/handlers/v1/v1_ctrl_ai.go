@@ -108,7 +108,10 @@ func (ctrl *V1Controller) readPhotoUpload(w http.ResponseWriter, r *http.Request
 		log.Warn().Err(err).Msg("failed to extend response deadline for analyze-photo")
 	}
 
-	if err := r.ParseMultipartForm(ctrl.maxUploadSize << 20); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, multipartRequestLimit(ctrl.maxUploadSize))
+	// #nosec G120 -- the complete body is bounded by MaxBytesReader
+	// immediately above; maxMemory controls only RAM versus temp-file use.
+	if err := r.ParseMultipartForm(megabytesToBytes(ctrl.maxUploadSize)); err != nil {
 		return nil, "", multipartParseRequestError(err)
 	}
 	file, _, err := r.FormFile("file")
@@ -117,7 +120,7 @@ func (ctrl *V1Controller) readPhotoUpload(w http.ResponseWriter, r *http.Request
 	}
 	defer func() { _ = file.Close() }()
 
-	maxBytes := ctrl.maxUploadSize << 20
+	maxBytes := megabytesToBytes(ctrl.maxUploadSize)
 	imageBytes, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
 	if err != nil {
 		return nil, "", multipartContentReadError(err, "image")

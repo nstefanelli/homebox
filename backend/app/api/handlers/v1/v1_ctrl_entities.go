@@ -473,7 +473,10 @@ func (ctrl *V1Controller) HandleEntitiesImport() errchain.HandlerFunc {
 		defer span.End()
 
 		_, parseSpan := startEntityCtrlSpan(spanCtx, "controller.V1.HandleEntitiesImport.parseForm")
-		err := r.ParseMultipartForm(ctrl.maxUploadSize << 20)
+		r.Body = http.MaxBytesReader(w, r.Body, multipartRequestLimit(ctrl.maxUploadSize))
+		// #nosec G120 -- the complete body is bounded by MaxBytesReader
+		// immediately above; maxMemory controls only RAM versus temp-file use.
+		err := r.ParseMultipartForm(megabytesToBytes(ctrl.maxUploadSize))
 		if err != nil {
 			recordCtrlSpanError(parseSpan, err)
 			parseSpan.End()

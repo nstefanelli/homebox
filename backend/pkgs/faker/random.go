@@ -21,6 +21,7 @@ func (f *Faker) Time() time.Time {
 func (f *Faker) Str(length int) string {
 	b := make([]rune, length)
 	for i := range b {
+		// #nosec G404 -- Faker generates non-security test fixtures only.
 		b[i] = letters[rand.Intn(len(letters))]
 	}
 	return string(b)
@@ -35,9 +36,11 @@ func (f *Faker) Email() string {
 }
 
 func (f *Faker) Bool() bool {
+	// #nosec G404 -- Faker generates non-security test fixtures only.
 	return rand.Intn(2) == 1
 }
 
 func (f *Faker) Num(min, max int) int {
+	// #nosec G404 -- Faker generates non-security test fixtures only.
 	return rand.Intn(max-min) + min
 }
