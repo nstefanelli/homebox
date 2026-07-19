@@ -56,8 +56,8 @@ WORKDIR /go/src/app
 COPY --from=builder-dependencies /go/pkg/mod /go/pkg/mod
 COPY ./backend .
 
-# Clear old public files and copy new ones from frontend build
-RUN rm -rf ./app/api/public
+# Clear checked-in assets so removed frontend files cannot survive in the image.
+RUN rm -rf ./app/api/static/public && mkdir -p ./app/api/static/public
 COPY --from=frontend-builder /app/.output/public ./app/api/static/public
 
 # Use cache for Go build artifacts to build Homebox API
