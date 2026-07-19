@@ -479,7 +479,7 @@ func (ctrl *V1Controller) HandleEntitiesImport() errchain.HandlerFunc {
 			parseSpan.End()
 			recordCtrlSpanError(span, err)
 			log.Err(err).Msg("failed to parse multipart form")
-			return validate.NewRequestError(err, http.StatusInternalServerError)
+			return multipartParseRequestError(err)
 		}
 
 		file, _, err := r.FormFile("csv")
@@ -488,7 +488,7 @@ func (ctrl *V1Controller) HandleEntitiesImport() errchain.HandlerFunc {
 			parseSpan.End()
 			recordCtrlSpanError(span, err)
 			log.Err(err).Msg("failed to get file from form")
-			return validate.NewRequestError(err, http.StatusInternalServerError)
+			return multipartFileRequestError(err, "csv")
 		}
 		parseSpan.End()
 		defer func() { _ = file.Close() }()

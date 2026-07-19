@@ -62,6 +62,10 @@ func (err *RequestError) Error() string {
 	return err.Err.Error()
 }
 
+func (err *RequestError) Unwrap() error {
+	return err.Err
+}
+
 // IsRequestError checks if an error of type RequestError exists.
 func IsRequestError(err error) bool {
 	var re *RequestError

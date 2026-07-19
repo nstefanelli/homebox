@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -39,6 +40,26 @@ func TestRedactExternalURLForTrace(t *testing.T) {
 	assert.Empty(t, redactExternalURLForTrace("not-a-url"))
 }
 
+func TestCanonicalExternalHTTPURL(t *testing.T) {
+	got, err := canonicalExternalHTTPURL(" HTTPS://Example.com/doc?id=42#page ")
+	require.NoError(t, err)
+	assert.Equal(t, "https://Example.com/doc?id=42#page", got)
+
+	for _, raw := range []string{
+		"javascript:alert(1)",
+		"//example.com/path",
+		"https://user:secret@example.com/path",
+		"https:///missing-host",
+		"http://:8080/path",
+		"not a url",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			_, err := canonicalExternalHTTPURL(raw)
+			require.ErrorIs(t, err, ErrInvalidExternalAttachmentURL)
+		})
+	}
+}
+
 func TestEntityService_AttachmentAddExternalLink_DefaultType(t *testing.T) {
 	svc := &EntityService{repo: tRepos}
 	entity := newExternalLinkEntity(t)
@@ -57,6 +78,26 @@ func TestEntityService_AttachmentAddExternalLink_DefaultType(t *testing.T) {
 		}
 	}
 	assert.True(t, found)
+}
+
+func TestEntityService_AttachmentAddExternalLinkRejectsUnsafeURL(t *testing.T) {
+	svc := &EntityService{repo: tRepos}
+	entity := newExternalLinkEntity(t)
+
+	before := len(entity.Attachments)
+	_, err := svc.AttachmentAddExternalLink(
+		tCtx,
+		entity.ID,
+		"link",
+		"javascript:alert(document.domain)",
+		"Unsafe",
+		attachment.TypeAttachment,
+	)
+	require.True(t, errors.Is(err, ErrInvalidExternalAttachmentURL))
+
+	got, err := tRepos.Entities.GetOneByGroup(tCtx, tCtx.GID, entity.ID)
+	require.NoError(t, err)
+	assert.Len(t, got.Attachments, before)
 }
 
 func TestEntityService_AttachmentAddExternalLink_ManualType(t *testing.T) {

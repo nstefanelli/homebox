@@ -60,7 +60,7 @@ func (ctrl *V1Controller) HandleEntityAttachmentCreate() errchain.HandlerFunc {
 			parseSpan.End()
 			recordCtrlSpanError(span, err)
 			log.Err(err).Msg("failed to parse multipart form")
-			return validate.NewRequestError(errors.New("failed to parse multipart form"), http.StatusBadRequest)
+			return multipartParseRequestError(err)
 		}
 
 		errs := validate.NewFieldErrors()
@@ -76,7 +76,7 @@ func (ctrl *V1Controller) HandleEntityAttachmentCreate() errchain.HandlerFunc {
 				parseSpan.End()
 				recordCtrlSpanError(span, err)
 				log.Err(err).Msg("failed to get file from form")
-				return validate.NewRequestError(err, http.StatusInternalServerError)
+				return multipartFileRequestError(err, "file")
 			}
 		}
 
@@ -224,8 +224,12 @@ func (ctrl *V1Controller) handleEntityAttachmentsHandler(w http.ResponseWriter, 
 			log.Err(err).Msg("failed to get attachment path")
 			return validate.NewRequestError(err, http.StatusInternalServerError)
 		}
+		tracePath := doc.Path
+		if doc.MimeType == repo.MimeTypeLinkURL {
+			tracePath = redactExternalURLForTrace(doc.Path)
+		}
 		getSpan.SetAttributes(
-			attribute.String("attachment.path", doc.Path),
+			attribute.String("attachment.path", tracePath),
 			attribute.String("attachment.mime_type", doc.MimeType),
 			attribute.String("attachment.title", doc.Title),
 		)

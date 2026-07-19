@@ -33,6 +33,11 @@ func Errors(log zerolog.Logger) errchain.ErrorHandler {
 					Msg("ERROR occurred")
 
 				switch {
+				case errors.As(err, new(*http.MaxBytesError)):
+					code = http.StatusRequestEntityTooLarge
+					resp = ErrorResponse{
+						Error: "request body too large",
+					}
 				case validate.IsUnauthorizedError(err):
 					code = http.StatusUnauthorized
 					resp = ErrorResponse{

@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -15,6 +16,19 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
+
+var ErrInvalidExternalAttachmentURL = errors.New("external attachment URL must be an absolute http/https URL without credentials")
+
+func canonicalExternalHTTPURL(raw string) (string, error) {
+	u, err := url.ParseRequestURI(strings.TrimSpace(raw))
+	if err != nil ||
+		(!strings.EqualFold(u.Scheme, "http") && !strings.EqualFold(u.Scheme, "https")) ||
+		u.Host == "" || u.Hostname() == "" || u.User != nil {
+		return "", ErrInvalidExternalAttachmentURL
+	}
+	u.Scheme = strings.ToLower(u.Scheme)
+	return u.String(), nil
+}
 
 func redactExternalURLForTrace(raw string) string {
 	u, err := url.ParseRequestURI(strings.TrimSpace(raw))
@@ -128,6 +142,7 @@ func (svc *EntityService) AttachmentAdd(ctx Context, entityID uuid.UUID, filenam
 }
 
 func (svc *EntityService) AttachmentAddExternalLink(ctx Context, entityID uuid.UUID, sourceType, externalID, title string, attType attachment.Type) (repo.EntityOut, error) {
+	sourceType = strings.TrimSpace(sourceType)
 	spanCtx, span := entityServiceTracer().Start(ctx.Context, "service.EntityService.AttachmentAddExternalLink",
 		trace.WithAttributes(
 			attribute.String("group.id", ctx.GID.String()),
@@ -143,6 +158,14 @@ func (svc *EntityService) AttachmentAddExternalLink(ctx Context, entityID uuid.U
 		err := fmt.Errorf("unknown source_type %q", sourceType)
 		recordServiceSpanError(span, err)
 		return repo.EntityOut{}, err
+	}
+	if mimeType == repo.MimeTypeLinkURL {
+		canonicalID, err := canonicalExternalHTTPURL(externalID)
+		if err != nil {
+			recordServiceSpanError(span, err)
+			return repo.EntityOut{}, err
+		}
+		externalID = canonicalID
 	}
 
 	verifyCtx, verifySpan := entityServiceTracer().Start(spanCtx, "service.EntityService.AttachmentAddExternalLink.verifyEntity")
