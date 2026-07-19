@@ -16,6 +16,13 @@ import (
 	"gocloud.dev/pubsub"
 )
 
+const pubSubShutdownTimeout = 5 * time.Second
+
+func pubSubShutdownContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), pubSubShutdownTimeout)
+}
+
+//nolint:gocyclo // Registration is intentionally a flat catalog of independent background tasks.
 func registerRecurringTasks(app *app, cfg *config.Config, runner *graceful.Runner) {
 	runner.AddFunc("eventbus", app.bus.Run)
 
@@ -115,33 +122,40 @@ func registerRecurringTasks(app *app, cfg *config.Config, runner *graceful.Runne
 			if err != nil {
 				return err
 			}
-			defer func(topic *pubsub.Topic, ctx context.Context) {
-				err := topic.Shutdown(ctx)
+			defer func(topic *pubsub.Topic) {
+				shutdownCtx, cancel := pubSubShutdownContext(ctx)
+				defer cancel()
+				err := topic.Shutdown(shutdownCtx)
 				if err != nil {
 					log.Err(err).Msg("fail to shutdown pubsub topic")
 				}
-			}(topic, ctx)
+			}(topic)
 
 			subscription, err := pubsub.OpenSubscription(ctx, pubsubString)
 			if err != nil {
 				log.Err(err).Msg("failed to open pubsub topic")
 				return err
 			}
-			defer func(topic *pubsub.Subscription, ctx context.Context) {
-				err := topic.Shutdown(ctx)
+			defer func(topic *pubsub.Subscription) {
+				shutdownCtx, cancel := pubSubShutdownContext(ctx)
+				defer cancel()
+				err := topic.Shutdown(shutdownCtx)
 				if err != nil {
 					log.Err(err).Msg("fail to shutdown pubsub topic")
 				}
-			}(subscription, ctx)
+			}(subscription)
 
 			for {
 				select {
 				case <-ctx.Done():
-					return ctx.Err()
+					return nil
 				default:
 					msg, err := subscription.Receive(ctx)
 					log.Debug().Msg("received thumbnail generation request from pubsub topic")
 					if err != nil {
+						if ctx.Err() != nil {
+							return nil
+						}
 						log.Err(err).Msg("failed to receive message from pubsub topic")
 						continue
 					}
@@ -223,7 +237,9 @@ func runJobSubscription(ctx context.Context, cfg *config.Config, topicName strin
 		return err
 	}
 	defer func() {
-		if err := topic.Shutdown(ctx); err != nil {
+		shutdownCtx, cancel := pubSubShutdownContext(ctx)
+		defer cancel()
+		if err := topic.Shutdown(shutdownCtx); err != nil {
 			log.Err(err).Str("topic", topicName).Msg("failed to shutdown pubsub topic")
 		}
 	}()
@@ -234,7 +250,9 @@ func runJobSubscription(ctx context.Context, cfg *config.Config, topicName strin
 		return err
 	}
 	defer func() {
-		if err := sub.Shutdown(ctx); err != nil {
+		shutdownCtx, cancel := pubSubShutdownContext(ctx)
+		defer cancel()
+		if err := sub.Shutdown(shutdownCtx); err != nil {
 			log.Err(err).Str("topic", topicName).Msg("failed to shutdown pubsub subscription")
 		}
 	}()
@@ -242,10 +260,13 @@ func runJobSubscription(ctx context.Context, cfg *config.Config, topicName strin
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil
 		default:
 			msg, err := sub.Receive(ctx)
 			if err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
 				log.Err(err).Str("topic", topicName).Msg("failed to receive message from pubsub topic")
 				continue
 			}
