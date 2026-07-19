@@ -114,9 +114,6 @@
       soldPrice = item.value.soldPrice;
     }
 
-    console.log((item.value.purchasePrice ??= 0));
-    console.log((item.value.soldPrice ??= 0));
-
     const payload: EntityUpdate = {
       ...item.value,
       parentId: parent.value?.id || item.value.parent?.id || null,
@@ -165,6 +162,7 @@
     type: "number";
     label: string;
     ref: NonNullableNumberKeys<EntityOut> | NonNullableStringKeys<EntityOut>;
+    min?: number;
   };
 
   interface BoolFormField {
@@ -193,6 +191,7 @@
       type: "number",
       label: "items.quantity",
       ref: "quantity",
+      min: 0,
     },
     {
       type: "markdown",
@@ -407,10 +406,10 @@
       return;
     }
 
-    const { data, error } = await api.items.attachments.add(itemId.value, files[0], files[0].name, type);
+    const { data, error, status } = await api.items.attachments.add(itemId.value, files[0], files[0].name, type);
 
     if (error) {
-      toast.error(t("items.toast.failed_upload_attachment"));
+      toast.error(status === 413 ? t("items.toast.attachment_too_large") : t("items.toast.failed_upload_attachment"));
       return;
     }
 
@@ -564,6 +563,7 @@
       tagIds: item.value.tagIds,
       assetId: item.value.assetId,
       syncChildEntityLocations: item.value.syncChildEntityLocations,
+      entityTypeId: item.value.entityType!.id,
     };
 
     const { error } = await api.items.update(itemId.value, payload);
@@ -722,6 +722,7 @@
                   v-model.number="item[field.ref]"
                   type="number"
                   step="any"
+                  :min="field.min"
                   :label="$t(field.label)"
                   inline
                 />
@@ -909,6 +910,7 @@
                   v-model.number="item[field.ref]"
                   type="number"
                   step="any"
+                  :min="field.min"
                   :label="$t(field.label)"
                   inline
                 />
@@ -958,6 +960,7 @@
                   v-model.number="item[field.ref]"
                   type="number"
                   step="any"
+                  :min="field.min"
                   :label="$t(field.label)"
                   inline
                 />
@@ -1007,6 +1010,7 @@
                   v-model.number="item[field.ref]"
                   type="number"
                   step="any"
+                  :min="field.min"
                   :label="$t(field.label)"
                   inline
                 />

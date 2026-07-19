@@ -62,7 +62,7 @@
     items.forEach(item => window.open(`/item/${item}`, "_blank"));
   };
 
-  const downloadCsv = (items: Row<ItemSummary>[], columns: Column<ItemSummary>[]) => {
+  const downloadCsv = (items: Row<EntitySummary>[], columns: Column<EntitySummary>[]) => {
     // get enabled columns
     const enabledColumns = columns.filter(c => c.id !== undefined && c.getIsVisible() && c.getCanHide()).map(c => c.id);
 
@@ -71,7 +71,7 @@
 
     // map each item to a row matching enabled columns order, escaping each field
     const rows = items.map(item =>
-      enabledColumns.map(col => formatValueAsCsvField(item.original[col as keyof ItemSummary])).join(",")
+      enabledColumns.map(col => formatValueAsCsvField(item.original[col as keyof EntitySummary])).join(",")
     );
 
     const csv = [header, ...rows].join("\n");
@@ -124,11 +124,12 @@
     // Process deletions sequentially to avoid database locking issues with concurrent write transactions
     for (const id of ids) {
       try {
-        await api.items.delete(id);
-      } catch (err) {
-        toast.error(t("components.item.view.table.dropdown.error_deleting"));
-        console.error(err);
+        const { error } = await api.items.delete(id);
+        if (!error) continue;
+      } catch {
+        // Surface transport failures through the same user-facing feedback.
       }
+      toast.error(t("components.item.view.table.dropdown.error_deleting"));
     }
 
     resetSelection();
@@ -156,16 +157,17 @@
     // when multiple transactions try to write simultaneously
     for (const id of ids) {
       try {
-        await api.items.duplicate(id, {
+        const { error } = await api.items.duplicate(id, {
           copyMaintenance: preferences.value.duplicateSettings.copyMaintenance,
           copyAttachments: preferences.value.duplicateSettings.copyAttachments,
           copyCustomFields: preferences.value.duplicateSettings.copyCustomFields,
           copyPrefix: preferences.value.duplicateSettings.copyPrefixOverride ?? t("items.duplicate.prefix"),
         });
-      } catch (err) {
-        toast.error(t("components.item.view.table.dropdown.error_duplicating"));
-        console.error(err);
+        if (!error) continue;
+      } catch {
+        // Surface transport failures through the same user-facing feedback.
       }
+      toast.error(t("components.item.view.table.dropdown.error_duplicating"));
     }
 
     resetSelection();

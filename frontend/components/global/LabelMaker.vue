@@ -53,19 +53,19 @@
   }
 
   async function serverPrint() {
+    if (serverPrinting.value) return;
     serverPrinting.value = true;
     try {
-      await fetch(getLabelUrl(true));
-    } catch (err) {
-      console.error("Failed to print labels:", err);
-      serverPrinting.value = false;
-      toast.error(t("components.global.label_maker.toast.print_failed"));
-      return;
-    }
+      const response = await fetch(getLabelUrl(true));
+      if (!response.ok) throw new Error(`Label print failed with status ${response.status}`);
 
-    toast.success(t("components.global.label_maker.toast.print_success"));
-    closeDialog(DialogID.PrintLabel);
-    serverPrinting.value = false;
+      toast.success(t("components.global.label_maker.toast.print_success"));
+      closeDialog(DialogID.PrintLabel);
+    } catch {
+      toast.error(t("components.global.label_maker.toast.print_failed"));
+    } finally {
+      serverPrinting.value = false;
+    }
   }
 
   function downloadLabel() {
@@ -109,14 +109,14 @@
             {{ $t("components.global.label_maker.confirm_description") }}
           </DialogDescription>
         </DialogHeader>
-        <img :src="getLabelUrl(false)" />
+        <img :src="getLabelUrl(false)" :alt="$t('components.global.label_maker.preview_alt')" />
         <DialogFooter>
           <ButtonGroup>
-            <Button v-if="status?.labelPrinting || false" type="submit" :disabled="serverPrinting" @click="serverPrint">
+            <Button v-if="status?.labelPrinting || false" type="button" :disabled="serverPrinting" @click="serverPrint">
               <MdiLoading v-if="serverPrinting" class="animate-spin" />
               {{ $t("components.global.label_maker.server_print") }}
             </Button>
-            <Button type="submit" @click="browserPrint">
+            <Button type="button" @click="browserPrint">
               {{ $t("components.global.label_maker.browser_print") }}
             </Button>
           </ButtonGroup>

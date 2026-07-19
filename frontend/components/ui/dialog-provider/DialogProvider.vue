@@ -8,22 +8,28 @@
 
   const activeDialog = ref<DialogID | null>(null);
   const activeAlerts = reactive<string[]>([]);
-  const openDialogCallbacks = new Map<DialogID, (params: any) => void>();
+  type DialogCallback = (params?: unknown) => void;
+  type DialogOptions = {
+    params?: unknown;
+    onClose?: (result?: unknown) => void;
+  };
+
+  const openDialogCallbacks = new Map<DialogID, DialogCallback>();
 
   // onClose for the currently-open dialog (only one dialog can be active)
-  let activeOnCloseCallback: ((result?: any) => void) | undefined;
+  let activeOnCloseCallback: ((result?: unknown) => void) | undefined;
 
   const registerOpenDialogCallback = <T extends DialogID>(
     dialogId: T,
     callback: (params?: T extends keyof DialogParamsMap ? DialogParamsMap[T] : undefined) => void
   ) => {
-    openDialogCallbacks.set(dialogId, callback as (params: any) => void);
+    openDialogCallbacks.set(dialogId, callback as DialogCallback);
     return () => {
       openDialogCallbacks.delete(dialogId);
     };
   };
 
-  const openDialog = <T extends DialogID>(dialogId: T, options?: any) => {
+  const openDialog = <T extends DialogID>(dialogId: T, options?: DialogOptions) => {
     if (activeAlerts.length > 0) return;
 
     activeDialog.value = dialogId;
@@ -35,7 +41,7 @@
     }
   };
 
-  function closeDialog(dialogId?: DialogID, result?: any) {
+  function closeDialog(dialogId?: DialogID, result?: unknown) {
     // No dialogId passed -> close current active dialog without result
     if (!dialogId) {
       if (activeDialog.value) {

@@ -2,8 +2,10 @@ import { toast as internalToast } from "vue-sonner";
 
 // triggering too many toasts at once can cause the toaster to not render properly https://github.com/xiaoluoboding/vue-sonner/issues/98
 
-const wrapToast = <T extends (...args: any[]) => any>(fn: T): ((...args: Parameters<T>) => Promise<ReturnType<T>>) => {
-  return (...args: Parameters<T>) =>
+const wrapToast = <TArgs extends unknown[], TResult>(
+  fn: (...args: TArgs) => TResult
+): ((...args: TArgs) => Promise<TResult>) => {
+  return (...args: TArgs) =>
     new Promise(resolve => {
       setTimeout(() => resolve(fn(...args)), 0);
     });

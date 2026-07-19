@@ -19,10 +19,6 @@ export function defineObserver(key: string, observer: Observer): RemoveObserver 
   };
 }
 
-function logger(r: Response) {
-  console.log(`${r.status}   ${r.url}   ${r.statusText}`);
-}
-
 export function usePublicApi(): PublicApi {
   const requests = new Requests("", "", {});
   return new PublicApi(requests);
@@ -32,13 +28,14 @@ export function useUserApi(): UserClient {
   const authCtx = useAuthContext();
   const prefs = useViewPreferences();
 
-  const headers: Record<string, string> = {};
-  if (prefs?.value?.collectionId) {
-    headers["X-Tenant"] = prefs.value.collectionId;
-  }
-
-  const requests = new Requests("", "", headers);
-  requests.addResponseInterceptor(logger);
+  // The collection can change while long-lived clients (Pinia stores and the
+  // singleton create dialog) remain mounted. Resolve X-Tenant for every
+  // request so those clients cannot keep writing to the previously selected
+  // collection.
+  const requests = new Requests("", "", (): Record<string, string> => {
+    const collectionId = prefs?.value?.collectionId;
+    return collectionId ? { "X-Tenant": collectionId } : {};
+  });
   requests.addResponseInterceptor(async r => {
     if (r.status === 401) {
       console.error("unauthorized request, invalidating session");
@@ -55,21 +52,15 @@ export function useUserApi(): UserClient {
 
         const body = (await r.json().catch(() => null)) as { error?: string } | null;
 
-        if (body?.error === "user does not have access to the requested tenant") {
-          console.log("user does not have access to the requested tenant");
-          if (window.location.pathname == "/") {
-            // do nothing
-            console.log("at root path, ignoring collectionId to prevent infinite redirect loop");
-          } else if (!prefs?.value?.collectionId) {
-            console.log("no collectionId set, ignoring");
-          } else {
-            console.log("clearing collectionId");
-            prefs.value.collectionId = null;
-          }
+        if (
+          body?.error === "user does not have access to the requested tenant" &&
+          window.location.pathname !== "/" &&
+          prefs?.value?.collectionId
+        ) {
+          prefs.value.collectionId = null;
         }
       } catch {
         // ignore parsing errors to avoid breaking the interceptor chain
-        console.log("failed to parse 403 response body");
       }
     }
   });

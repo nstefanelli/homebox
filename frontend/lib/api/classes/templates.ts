@@ -1,21 +1,20 @@
 import { BaseAPI, route } from "../base";
 import type {
-  EntityTemplateCreate,
   EntityTemplateOut,
   EntityTemplateSummary,
-  EntityTemplateUpdate,
   EntityTemplateCreateItemRequest,
   EntityTemplateBatchCreateRequest,
   EntityOut,
 } from "../types/data-contracts";
+import type { EntityTemplateCreateInput, EntityTemplateUpdateInput } from "../types/non-generated";
 
 export class TemplatesApi extends BaseAPI {
   getAll() {
     return this.http.get<EntityTemplateSummary[]>({ url: route("/templates") });
   }
 
-  create(body: EntityTemplateCreate) {
-    return this.http.post<EntityTemplateCreate, EntityTemplateOut>({ url: route("/templates"), body });
+  create(body: EntityTemplateCreateInput) {
+    return this.http.post<EntityTemplateCreateInput, EntityTemplateOut>({ url: route("/templates"), body });
   }
 
   get(id: string) {
@@ -26,8 +25,8 @@ export class TemplatesApi extends BaseAPI {
     return this.http.delete<void>({ url: route(`/templates/${id}`) });
   }
 
-  update(id: string, body: EntityTemplateUpdate) {
-    return this.http.put<EntityTemplateUpdate, EntityTemplateOut>({ url: route(`/templates/${id}`), body });
+  update(id: string, body: EntityTemplateUpdateInput) {
+    return this.http.put<EntityTemplateUpdateInput, EntityTemplateOut>({ url: route(`/templates/${id}`), body });
   }
 
   createItem(templateId: string, body: EntityTemplateCreateItemRequest) {

@@ -26,7 +26,7 @@ export type RequestArgs<T> = {
 export class Requests {
   private baseUrl: string;
   private token: () => string;
-  private headers: Record<string, string> = {};
+  private headers: () => Record<string, string>;
   private responseInterceptors: ResponseInterceptor[] = [];
 
   addResponseInterceptor(interceptor: ResponseInterceptor) {
@@ -41,10 +41,14 @@ export class Requests {
     return this.baseUrl + rest;
   }
 
-  constructor(baseUrl: string, token: string | (() => string) = "", headers: Record<string, string> = {}) {
+  constructor(
+    baseUrl: string,
+    token: string | (() => string) = "",
+    headers: Record<string, string> | (() => Record<string, string>) = {}
+  ) {
     this.baseUrl = baseUrl;
     this.token = typeof token === "string" ? () => token : token;
-    this.headers = headers;
+    this.headers = typeof headers === "function" ? headers : () => headers;
   }
 
   public get<T>(args: RequestArgs<T>): Promise<TResponse<T>> {
@@ -75,8 +79,10 @@ export class Requests {
     const payload: RequestInit = {
       method,
       headers: {
+        ...this.headers(),
+        // Per-request headers are more specific and must be able to override
+        // defaults (for example GroupApi.get(groupId)'s explicit X-Tenant).
         ...rargs.headers,
-        ...this.headers,
       } as Record<string, string>,
       signal: rargs.signal,
     };

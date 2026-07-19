@@ -66,4 +66,21 @@ describe("calculateGrid", () => {
     expect(grid.rows).toBe(4);
     expect(grid.perPage).toBe(12);
   });
+
+  test("custom one-label grids use finite zero gaps", () => {
+    const grid = calculateGrid({
+      pageWidth: 4,
+      pageHeight: 4,
+      cardWidth: 3,
+      cardHeight: 3,
+      pagePaddingTop: 0,
+      pagePaddingBottom: 0,
+      pagePaddingLeft: 0,
+      pagePaddingRight: 0,
+    });
+
+    expect(grid).toMatchObject({ cols: 1, rows: 1, perPage: 1, gapX: 0, gapY: 0 });
+    expect(Number.isFinite(grid.gapX)).toBe(true);
+    expect(Number.isFinite(grid.gapY)).toBe(true);
+  });
 });

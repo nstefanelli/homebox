@@ -45,7 +45,6 @@
         props.currentItemId !== undefined
           ? await api.items.maintenance.getLog(props.currentItemId, { status: maintenanceFilterStatus.value })
           : await api.maintenance.getAll({ status: maintenanceFilterStatus.value });
-      console.log(data);
       return data;
     },
     {
@@ -54,7 +53,6 @@
   );
 
   const stats = computed(() => {
-    console.log(maintenanceDataList);
     if (!maintenanceDataList.value) return [];
 
     const count = maintenanceDataList.value ? maintenanceDataList.value.length || 0 : 0;

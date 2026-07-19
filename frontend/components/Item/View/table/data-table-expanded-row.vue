@@ -33,9 +33,12 @@
     </div>
     <div class="flex min-w-0 flex-1 flex-col gap-2">
       <h2 class="truncate text-xl font-bold">{{ item.name }}</h2>
-      <Badge class="w-min text-nowrap bg-secondary text-secondary-foreground hover:bg-secondary/70 hover:underline">
-        <NuxtLink v-if="item.location" :to="`/location/${item.location.id}`">
-          {{ item.location.name }}
+      <Badge
+        v-if="item.parent"
+        class="w-min text-nowrap bg-secondary text-secondary-foreground hover:bg-secondary/70 hover:underline"
+      >
+        <NuxtLink :to="`/${item.parent.entityType?.isLocation ? 'location' : 'item'}/${item.parent.id}`">
+          {{ item.parent.name }}
         </NuxtLink>
       </Badge>
       <div class="flex flex-wrap gap-2">

@@ -9,8 +9,8 @@
         :alt="$t('components.template.photo.title')"
       />
       <div class="flex flex-col gap-2">
-        <Input type="file" accept="image/*" @change="onFileChange" />
-        <Button v-if="hasPhoto" variant="destructive" size="sm" type="button" @click="removePhoto">
+        <Input type="file" accept="image/*" :disabled="busy" @change="onFileChange" />
+        <Button v-if="hasPhoto" variant="destructive" size="sm" type="button" :disabled="busy" @click="removePhoto">
           {{ $t("components.template.photo.remove") }}
         </Button>
       </div>
@@ -34,6 +34,7 @@
   const { t } = useI18n();
 
   const cacheBust = ref(0);
+  const busy = ref(false);
   const localHasPhoto = ref<boolean | null>(null);
   const hasPhoto = computed(() => localHasPhoto.value ?? !!props.photoPath);
   const photoSrc = computed(() => {
@@ -45,25 +46,42 @@
   async function onFileChange(e: Event) {
     const input = e.target as HTMLInputElement;
     const file = input.files?.[0];
-    if (!file) return;
-    const { error } = await api.templates.uploadPhoto(props.templateId, file);
-    if (error) {
+    if (!file || busy.value) return;
+
+    busy.value = true;
+    try {
+      const { error } = await api.templates.uploadPhoto(props.templateId, file);
+      if (error) {
+        toast.error(t("components.template.photo.upload_failed"));
+        return;
+      }
+      localHasPhoto.value = true;
+      cacheBust.value++;
+      emit("updated");
+    } catch {
       toast.error(t("components.template.photo.upload_failed"));
-      return;
+    } finally {
+      input.value = "";
+      busy.value = false;
     }
-    localHasPhoto.value = true;
-    cacheBust.value++;
-    input.value = "";
-    emit("updated");
   }
 
   async function removePhoto() {
-    const { error } = await api.templates.deletePhoto(props.templateId);
-    if (error) {
+    if (busy.value) return;
+
+    busy.value = true;
+    try {
+      const { error } = await api.templates.deletePhoto(props.templateId);
+      if (error) {
+        toast.error(t("components.template.photo.delete_failed"));
+        return;
+      }
+      localHasPhoto.value = false;
+      emit("updated");
+    } catch {
       toast.error(t("components.template.photo.delete_failed"));
-      return;
+    } finally {
+      busy.value = false;
     }
-    localHasPhoto.value = false;
-    emit("updated");
   }
 </script>

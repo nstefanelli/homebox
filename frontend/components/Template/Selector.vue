@@ -20,7 +20,7 @@
           :placeholder="$t('components.template.selector.search')"
           :display-value="_ => ''"
         />
-        <CommandEmpty>{{ $t("components.template.selector.not_found") }}</CommandEmpty>
+        <CommandEmpty>{{ pending ? $t("global.loading") : $t("components.template.selector.not_found") }}</CommandEmpty>
         <CommandList>
           <CommandGroup>
             <CommandItem
@@ -69,7 +69,9 @@
             :placeholder="$t('components.template.selector.search')"
             :display-value="_ => ''"
           />
-          <CommandEmpty>{{ $t("components.template.selector.not_found") }}</CommandEmpty>
+          <CommandEmpty>{{
+            pending ? $t("global.loading") : $t("components.template.selector.not_found")
+          }}</CommandEmpty>
           <CommandList>
             <CommandGroup>
               <CommandItem
@@ -136,12 +138,25 @@
 
   const api = useUserApi();
 
-  const { data: templates } = useAsyncData("templates-selector", async () => {
+  const {
+    data: templates,
+    pending,
+    refresh,
+  } = useAsyncData("templates-selector", async () => {
     const { data, error } = await api.templates.getAll();
     if (error) {
       return [];
     }
     return data;
+  });
+
+  // This selector lives inside singleton dialogs and may remain mounted across
+  // catalog imports, template edits, and collection changes. Refresh on open
+  // so the choices never depend on the first fetch for the lifetime of the app.
+  watch(open, isOpen => {
+    if (isOpen) {
+      void refresh();
+    }
   });
 
   function selectTemplate(template: EntityTemplateSummary) {

@@ -2,13 +2,8 @@ import { faker } from "@faker-js/faker";
 import { expect } from "vitest";
 import { overrideParts } from "../../base/urls";
 import { PublicApi } from "../../public";
-import type {
-  EntityFieldData,
-  EntityTemplateCreate,
-  TagCreate,
-  EntityCreate,
-  UserRegistration,
-} from "../../types/data-contracts";
+import type { EntityFieldData, UserRegistration } from "../../types/data-contracts";
+import type { EntityCreateInput, EntityTemplateCreateInput, TagCreateInput } from "../../types/non-generated";
 import * as config from "../../../../test/config";
 import { UserClient } from "../../user";
 import { Requests } from "../../../requests";
@@ -39,7 +34,7 @@ function user(): UserRegistration {
   };
 }
 
-function location(parentId: string | null = null): Partial<EntityCreate> & { name: string; description: string } {
+function location(parentId: string | null = null): EntityCreateInput {
   return {
     parentId,
     name: faker.location.city(),
@@ -47,7 +42,7 @@ function location(parentId: string | null = null): Partial<EntityCreate> & { nam
   };
 }
 
-function tag(): TagCreate {
+function tag(): TagCreateInput {
   return {
     name: faker.lorem.word(),
     description: faker.lorem.sentence(),
@@ -55,7 +50,7 @@ function tag(): TagCreate {
   };
 }
 
-function template(): EntityTemplateCreate {
+function template(): EntityTemplateCreateInput {
   return {
     name: faker.lorem.words(2),
     description: faker.lorem.sentence(),

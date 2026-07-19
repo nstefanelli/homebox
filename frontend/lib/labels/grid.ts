@@ -40,9 +40,9 @@ export function calculateGrid(input: GridInput): GridData {
   // with displayProperties.*/page.* references replaced by input.* fields.
   // Note the asymmetry is intentional/preserved: gapX derives from the *usable*
   // width, but gapY derives from the *full* page height (matches prior behavior).
-  const cols = Math.floor(usable.w / input.cardWidth);
-  const rows = Math.floor(usable.h / input.cardHeight);
-  const gapX = (usable.w - cols * input.cardWidth) / (cols - 1);
-  const gapY = (input.pageHeight - rows * input.cardHeight) / (rows - 1);
+  const cols = Math.max(1, Math.floor(usable.w / input.cardWidth));
+  const rows = Math.max(1, Math.floor(usable.h / input.cardHeight));
+  const gapX = cols > 1 ? (usable.w - cols * input.cardWidth) / (cols - 1) : 0;
+  const gapY = rows > 1 ? (input.pageHeight - rows * input.cardHeight) / (rows - 1) : 0;
   return { cols, rows, perPage: cols * rows, gapX, gapY };
 }

@@ -22,7 +22,11 @@ export const useLabelPrintQueue = defineStore("label-print-queue", {
     },
     add(entries: PrintQueueEntry[]) {
       const known = new Set(this.entries.map(e => e.id));
-      this.entries.push(...entries.filter(e => !known.has(e.id)));
+      for (const entry of entries) {
+        if (known.has(entry.id)) continue;
+        known.add(entry.id);
+        this.entries.push(entry);
+      }
     },
     clear() {
       this.entries = [];

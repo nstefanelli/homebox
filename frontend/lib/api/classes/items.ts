@@ -1,19 +1,17 @@
 import { BaseAPI, route } from "../base";
 import type {
-  EntityCreate,
   EntityListResult,
   EntityOut,
   EntityPatch,
   EntityPath,
   EntitySummary,
-  EntityUpdate,
   ItemAttachmentUpdate,
   MaintenanceEntry,
   MaintenanceEntryCreate,
   MaintenanceEntryWithDetails,
   TreeItem,
 } from "../types/data-contracts";
-import type { AttachmentTypes } from "../types/non-generated";
+import type { AttachmentTypes, EntityCreateInput, EntityUpdateInput } from "../types/non-generated";
 import type { MaintenanceFilters } from "./maintenance.ts";
 import type { Requests } from "~~/lib/requests";
 
@@ -126,8 +124,8 @@ export class ItemsApi extends BaseAPI {
     return payload;
   }
 
-  async create(item: EntityCreate) {
-    const payload = await this.http.post<EntityCreate, EntityOut>({ url: route("/entities"), body: item });
+  async create(item: EntityCreateInput) {
+    const payload = await this.http.post<EntityCreateInput, EntityOut>({ url: route("/entities"), body: item });
     return payload;
   }
 
@@ -139,8 +137,8 @@ export class ItemsApi extends BaseAPI {
     return this.http.delete<void>({ url: route(`/entities/${id}`) });
   }
 
-  async update(id: string, item: EntityUpdate) {
-    return this.http.put<EntityCreate, EntityOut>({
+  async update(id: string, item: EntityUpdateInput) {
+    return this.http.put<EntityUpdateInput, EntityOut>({
       url: route(`/entities/${id}`),
       body: this.dropFields(item),
     });
@@ -223,8 +221,8 @@ export class ItemsApi extends BaseAPI {
     return this.http.get<TreeItem[]>({ url: route("/entities/tree", tq) });
   }
 
-  createLocation(body: EntityCreate) {
-    return this.http.post<EntityCreate, EntityOut>({ url: route("/entities"), body });
+  createLocation(body: EntityCreateInput) {
+    return this.http.post<EntityCreateInput, EntityOut>({ url: route("/entities"), body });
   }
 
   getLocation(id: string) {
@@ -235,7 +233,7 @@ export class ItemsApi extends BaseAPI {
     return this.http.delete<void>({ url: route(`/entities/${id}`) });
   }
 
-  updateLocation(id: string, body: EntityUpdate) {
-    return this.http.put<EntityUpdate, EntityOut>({ url: route(`/entities/${id}`), body });
+  updateLocation(id: string, body: EntityUpdateInput) {
+    return this.http.put<EntityUpdateInput, EntityOut>({ url: route(`/entities/${id}`), body });
   }
 }
