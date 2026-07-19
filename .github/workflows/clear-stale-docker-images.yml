@@ -5,14 +5,19 @@ on:
     - cron: '00 0 * * *'
   workflow_dispatch:
 
+concurrency:
+  group: docker-cleanup-${{ github.repository }}
+  cancel-in-progress: false
+
 jobs:
   delete-old-images-main:
     name: Delete Old Images for Main Repo
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       packages: write
     steps:
-      - uses: dataaxiom/ghcr-cleanup-action@cd0cdb900b5dbf3a6f2cc869f0dbb0b8211f50c4
+      - uses: dataaxiom/ghcr-cleanup-action@d52806a0dc70b430571a37da1fde39733ffd640f
         with:
           dry-run: true
           delete-ghost-images: true
@@ -20,22 +25,25 @@ jobs:
           delete-orphaned-images: true
           delete-untagged: true
           validate: true
-          token: '${{ github.token }}'
+          token: ${{ github.token }}
+          owner: ${{ github.repository_owner }}
           package: homebox
-          use-regex: true
-          exclude-tags: latest,latest-rootless,main,main-rootless,nightly,nightly-rootless,*.*.*,0.*,0,*.*.*-rootless,0.*-rootless,0-rootless
+          use-regex: false
+          exclude-tags: "latest,latest-rootless,main,main-rootless,nightly,nightly-rootless,*.*.*,0.*,0,*.*.*-rootless,0.*-rootless,0-rootless"
           older-than: 180 days
 
   delete-old-images-devcache:
     name: Delete Old Devcache Images
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       packages: write
     steps:
-      - uses: dataaxiom/ghcr-cleanup-action@cd0cdb900b5dbf3a6f2cc869f0dbb0b8211f50c4
+      - uses: dataaxiom/ghcr-cleanup-action@d52806a0dc70b430571a37da1fde39733ffd640f
         with:
           dry-run: false
           delete-untagged: true
-          token: '${{ github.token }}'
+          token: ${{ github.token }}
+          owner: ${{ github.repository_owner }}
           package: homebox-devcache
           older-than: 90 days
