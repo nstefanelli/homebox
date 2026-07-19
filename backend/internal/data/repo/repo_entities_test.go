@@ -8,10 +8,18 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/attachment"
+	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/entity"
+	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/group"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/types"
+)
+
+const (
+	testFieldTypeNumber  = "number"
+	testFieldTypeBoolean = "boolean"
 )
 
 func containerFactory() EntityCreate {
@@ -324,6 +332,107 @@ func TestEntityRepository_Update_RollsBackEntityAndTagsWhenFieldWriteFails(t *te
 	require.Len(t, got.Tags, 1)
 	assert.Equal(t, tags[0].ID, got.Tags[0].ID)
 	assert.Empty(t, got.Fields)
+}
+
+func TestEntityRepository_Duplicate_PreservesTypedCustomFields(t *testing.T) {
+	ctx := context.Background()
+	itemType := useItemEntityType(t)
+	source, err := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+		Name:         "typed-duplicate-source",
+		Quantity:     1,
+		EntityTypeID: itemType.ID,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tRepos.Entities.Delete(ctx, source.ID) })
+
+	timeValue := time.Date(2026, time.June, 7, 8, 9, 10, 0, time.UTC)
+	source, err = tRepos.Entities.UpdateByGroup(ctx, tGroup.ID, EntityUpdate{
+		ID:           source.ID,
+		Name:         source.Name,
+		Quantity:     1,
+		EntityTypeID: itemType.ID,
+		Fields: []EntityFieldData{
+			{Type: "text", Name: "text", TextValue: "duplicate-me"},
+			{Type: testFieldTypeNumber, Name: "number", NumberValue: 91},
+			{Type: testFieldTypeBoolean, Name: "boolean", BooleanValue: true},
+			{Type: "time", Name: "time", TimeValue: timeValue},
+		},
+	})
+	require.NoError(t, err)
+
+	duplicate, err := tRepos.Entities.Duplicate(ctx, tGroup.ID, source.ID, DuplicateOptions{
+		CopyCustomFields: true,
+		CopyPrefix:       "typed-copy-",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tRepos.Entities.Delete(ctx, duplicate.ID) })
+	require.Len(t, duplicate.Fields, 4)
+
+	byName := lo.SliceToMap(duplicate.Fields, func(field EntityFieldData) (string, EntityFieldData) {
+		return field.Name, field
+	})
+	assert.Equal(t, "duplicate-me", byName["text"].TextValue)
+	assert.Equal(t, 91, byName["number"].NumberValue)
+	assert.True(t, byName["boolean"].BooleanValue)
+	assert.WithinDuration(t, timeValue, byName["time"].TimeValue, time.Second)
+}
+
+func TestEntityRepository_Duplicate_RollsBackWhenRequestedCopyFails(t *testing.T) {
+	ctx := context.Background()
+	itemType := useItemEntityType(t)
+	source, err := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+		Name:         "duplicate-rollback-source",
+		Quantity:     1,
+		EntityTypeID: itemType.ID,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tRepos.Entities.Delete(ctx, source.ID) })
+
+	_, err = tRepos.Entities.UpdateByGroup(ctx, tGroup.ID, EntityUpdate{
+		ID:           source.ID,
+		Name:         source.Name,
+		Quantity:     1,
+		EntityTypeID: itemType.ID,
+		Fields: []EntityFieldData{{
+			Type:      "text",
+			Name:      "duplicate-rollback-sentinel",
+			TextValue: "source survives",
+		}},
+	})
+	require.NoError(t, err)
+
+	_, err = tClient.Sql().ExecContext(ctx, `
+		CREATE TRIGGER duplicate_field_failure
+		BEFORE INSERT ON entity_fields
+		WHEN NEW.name = 'duplicate-rollback-sentinel'
+		BEGIN
+			SELECT RAISE(ABORT, 'forced duplicate field failure');
+		END`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = tClient.Sql().ExecContext(context.Background(), `DROP TRIGGER IF EXISTS duplicate_field_failure`)
+	})
+
+	copyPrefix := "duplicate-must-not-persist-" + uuid.NewString()
+	_, err = tRepos.Entities.Duplicate(ctx, tGroup.ID, source.ID, DuplicateOptions{
+		CopyCustomFields: true,
+		CopyPrefix:       copyPrefix,
+	})
+	require.Error(t, err)
+
+	count, err := tClient.Entity.Query().
+		Where(
+			entity.HasGroupWith(group.ID(tGroup.ID)),
+			entity.NameHasPrefix(copyPrefix),
+		).
+		Count(ctx)
+	require.NoError(t, err)
+	assert.Zero(t, count, "the duplicate entity must roll back when a requested child copy fails")
+
+	got, err := tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, source.ID)
+	require.NoError(t, err)
+	require.Len(t, got.Fields, 1)
+	assert.Equal(t, "source survives", got.Fields[0].TextValue)
 }
 
 func TestEntityRepository_RejectsHierarchyCycles(t *testing.T) {

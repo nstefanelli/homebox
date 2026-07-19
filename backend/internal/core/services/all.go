@@ -2,6 +2,8 @@
 package services
 
 import (
+	"net/http"
+
 	"github.com/sysadminsmedia/homebox/backend/internal/core/currencies"
 	"github.com/sysadminsmedia/homebox/backend/internal/core/services/reporting/eventbus"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent"
@@ -129,6 +131,8 @@ func New(repos *repo.AllRepos, opts ...OptionsFunc) *AllServices {
 			repos:          repos,
 			latest:         Latest{},
 			notifierConfig: options.notifierConfig,
+			releaseURL:     defaultGithubReleaseURL,
+			httpClient:     &http.Client{Timeout: releaseCheckTimeout},
 		},
 		Exports: &ExportService{
 			db:         options.db,

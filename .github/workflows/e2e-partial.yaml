@@ -33,7 +33,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c
         with:
-          go-version: "1.26"
+          go-version: "1.26.5"
           cache-dependency-path: backend/go.mod
 
       - uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f
@@ -42,10 +42,10 @@ jobs:
 
       - uses: pnpm/action-setup@41ff72655975bd51cab0327fa583b6e92b6d3061
         with:
-          version: 10
+          version: 10.28.0
 
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
         working-directory: frontend
 
       - name: Install Go Dependencies
@@ -76,9 +76,9 @@ jobs:
           node-version: lts/*
       - uses: pnpm/action-setup@41ff72655975bd51cab0327fa583b6e92b6d3061
         with:
-          version: 10
+          version: 10.28.0
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
         working-directory: frontend
 
       - name: Download blob reports from GitHub Actions Artifacts

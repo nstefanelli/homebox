@@ -76,7 +76,7 @@ type Options struct {
 	AllowRegistration    bool   `yaml:"disable_registration"    conf:"default:true"`
 	AutoIncrementAssetID bool   `yaml:"auto_increment_asset_id" conf:"default:true"`
 	CurrencyConfig       string `yaml:"currencies"`
-	GithubReleaseCheck   bool   `yaml:"check_github_release"    conf:"default:true"`
+	GithubReleaseCheck   bool   `yaml:"check_github_release"    conf:"default:false"`
 	AllowAnalytics       bool   `yaml:"allow_analytics"         conf:"default:false"`
 	AllowLocalLogin      bool   `yaml:"allow_local_login"       conf:"default:true"`
 	TrustProxy           bool   `yaml:"trust_proxy"             conf:"default:false"`

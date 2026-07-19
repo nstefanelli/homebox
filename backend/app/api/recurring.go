@@ -59,8 +59,8 @@ func registerRecurringTasks(app *app, cfg *config.Config, runner *graceful.Runne
 	runner.AddPlugin(NewTask("send-notifications", time.Hour, func(ctx context.Context) {
 		now := time.Now()
 		if now.Hour() == 8 {
-			fmt.Println("run notifiers")
-			err := app.services.BackgroundService.SendNotifiersToday(context.Background())
+			log.Debug().Msg("running scheduled notifiers")
+			err := app.services.BackgroundService.SendNotifiersToday(ctx)
 			if err != nil {
 				log.Error().Err(err).Msg("failed to send notifiers")
 			}
@@ -170,7 +170,7 @@ func registerRecurringTasks(app *app, cfg *config.Config, runner *graceful.Runne
 	if cfg.Options.GithubReleaseCheck {
 		runner.AddPlugin(NewTask("get-latest-github-release", time.Hour, func(ctx context.Context) {
 			log.Debug().Msg("running get latest github release")
-			err := app.services.BackgroundService.GetLatestGithubRelease(context.Background())
+			err := app.services.BackgroundService.GetLatestGithubRelease(ctx)
 			if err != nil {
 				log.Error().Err(err).Msg("failed to get latest github release")
 			}
@@ -195,7 +195,9 @@ func registerRecurringTasks(app *app, cfg *config.Config, runner *graceful.Runne
 
 			go func() {
 				<-ctx.Done()
-				_ = debugserver.Shutdown(context.Background())
+				if err := shutdownHTTPServer(&debugserver, httpServerShutdownTimeout); err != nil {
+					log.Warn().Err(err).Msg("debug server exceeded graceful shutdown deadline; active connections were closed")
+				}
 			}()
 
 			log.Info().Msgf("Debug server is running on %s (loopback only)", addr)

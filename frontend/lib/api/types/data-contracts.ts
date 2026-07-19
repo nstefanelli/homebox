@@ -779,6 +779,7 @@ export interface EntityFieldData {
   name: string;
   numberValue: number;
   textValue: string;
+  timeValue: string | null;
   type: string;
 }
 
@@ -809,6 +810,8 @@ export interface EntityOut {
   itemCount: number;
   /** Warranty */
   lifetimeWarranty: boolean;
+  /** Nearest ancestor whose entity type is a location */
+  location?: EntitySummary | null;
   manufacturer: string;
   modelNumber: string;
   name: string;

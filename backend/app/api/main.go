@@ -53,6 +53,8 @@ var (
 	buildTime = "now"
 )
 
+const httpServerShutdownTimeout = 10 * time.Second
+
 func build() string {
 	short := commit
 	if len(commit) > 7 {
@@ -60,6 +62,24 @@ func build() string {
 	}
 
 	return fmt.Sprintf("%s, commit %s, built at %s", version, short, buildTime)
+}
+
+// shutdownHTTPServer gives active requests a bounded window to finish, then
+// force-closes any connections that remain. Using context.Background here is
+// intentional: the runner context has already been canceled when shutdown
+// starts, so deriving from it would skip the grace period entirely.
+func shutdownHTTPServer(server *http.Server, timeout time.Duration) error {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		closeErr := server.Close()
+		if closeErr != nil && !errors.Is(closeErr, http.ErrServerClosed) {
+			return errors.Join(err, closeErr)
+		}
+		return err
+	}
+	return nil
 }
 
 // validateAIProviderEnvConfig warns (does not abort) when HBOX_AI_PROVIDER is
@@ -268,7 +288,9 @@ func run(cfg *config.Config) error {
 
 		go func() {
 			<-ctx.Done()
-			_ = httpserver.Shutdown(context.Background())
+			if err := shutdownHTTPServer(&httpserver, httpServerShutdownTimeout); err != nil {
+				log.Warn().Err(err).Msg("HTTP server exceeded graceful shutdown deadline; active connections were closed")
+			}
 		}()
 
 		listener, addrType, addrCfg, err := anyhttp.GetListener(cfg.Web.Host)

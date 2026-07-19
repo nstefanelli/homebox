@@ -218,6 +218,69 @@ func TestEntityRepository_CreateFromTemplate_CopiesPhoto(t *testing.T) {
 	assert.True(t, out.Attachments[0].Primary)
 }
 
+func TestEntityRepository_CreateFromTemplate_PreservesTypedFields(t *testing.T) {
+	ctx := context.Background()
+	containerType := useContainerEntityType(t)
+	itemType := useItemEntityType(t)
+	container, err := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+		Name:         "typed-field-parent",
+		EntityTypeID: containerType.ID,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tRepos.Entities.Delete(ctx, container.ID) })
+
+	timeValue := time.Date(2026, time.May, 6, 7, 8, 9, 0, time.UTC)
+	fields := []EntityFieldData{
+		{Type: "text", Name: "text", TextValue: "kept"},
+		{Type: testFieldTypeNumber, Name: "number", NumberValue: 73},
+		{Type: testFieldTypeBoolean, Name: "boolean", BooleanValue: true},
+		{Type: "time", Name: "time", TimeValue: timeValue},
+	}
+	assertFields := func(out EntityOut) {
+		t.Helper()
+		require.Len(t, out.Fields, 4)
+		byName := lo.SliceToMap(out.Fields, func(field EntityFieldData) (string, EntityFieldData) {
+			return field.Name, field
+		})
+		assert.Equal(t, "kept", byName["text"].TextValue)
+		assert.Equal(t, 73, byName["number"].NumberValue)
+		assert.True(t, byName["boolean"].BooleanValue)
+		assert.WithinDuration(t, timeValue, byName["time"].TimeValue, time.Second)
+	}
+
+	single, err := tRepos.Entities.CreateFromTemplate(ctx, tGroup.ID, EntityCreateFromTemplate{
+		Name:         "typed-field-single",
+		Quantity:     1,
+		ParentID:     container.ID,
+		EntityTypeID: itemType.ID,
+		Fields:       fields,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tRepos.Entities.Delete(ctx, single.ID) })
+	assertFields(single)
+
+	batch, err := tRepos.Entities.CreateFromTemplateBatch(ctx, tGroup.ID, EntityBatchCreateFromTemplate{
+		Template: EntityCreateFromTemplate{
+			Quantity:     1,
+			ParentID:     container.ID,
+			EntityTypeID: itemType.ID,
+			Fields:       fields,
+		},
+		Count:      2,
+		NamePrefix: "typed-field-batch",
+	})
+	require.NoError(t, err)
+	require.Len(t, batch, 2)
+	t.Cleanup(func() {
+		for _, out := range batch {
+			_ = tRepos.Entities.Delete(ctx, out.ID)
+		}
+	})
+	for _, out := range batch {
+		assertFields(out)
+	}
+}
+
 func TestEntityRepository_CreateFromTemplateBatch(t *testing.T) {
 	tote := useToteEntityType(t)
 

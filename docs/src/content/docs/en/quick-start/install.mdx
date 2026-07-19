@@ -2,204 +2,174 @@
 title: Install
 ---
 
-
 import {TabItem, Tabs} from '@astrojs/starlight/components';
 
-There are two main ways to run Homebox.
+This fork does not currently publish verified prebuilt images or binaries.
+Build from `nstefanelli/homebox` so the fork's container, AI, icon, cataloging,
+and integrations features are present. Images and binaries published by
+`sysadminsmedia/homebox` are upstream builds and do not contain those features.
 
-1. As a Docker container
-2. Using the correct executable for your platform by downloading it from the [releases page](https://github.com/sysadminsmedia/homebox/releases)
+There are two supported local-build paths:
 
-> [!NOTE]
-> The application can be configured using environment variables. You can find a list of all the available options in the [configuration](/en/quick-start/configure/) section.
+1. A Docker image built from this repository (recommended)
+2. A native binary built from this repository
 
-> [!TIP]
-> We highly recommend using Docker for production deployments. It's easy to set up, and it's secure by default. We also
-> provide a couple of images with additional security. Additionally, it's the primary way we run Homebox demos and testing.
-
-----
+The application can be configured with environment variables. See the
+[configuration reference](/en/quick-start/configure/) for the complete list.
 
 ## Docker
-The following instructions assume you have Docker installed on your machine.
 
-The official image is `ghcr.io/sysadminsmedia/homebox:latest`. For each image there are three tags, respectively the regular
-tag, the `$tag-rootless` and `$tag-hardened`. The rootless tag is a regular image but with the user `homebox` created.
-The hardened tag is a distroless image and contains no shells or utilities.
+Install Docker, then clone this fork:
 
-> [!WARNING]
-> If you want to use MQTT, you must use the regular or rootless image. The hardened image does not contain the MQTT
-> client.
+```bash
+git clone https://github.com/nstefanelli/homebox.git
+cd homebox
+```
+
+Build the image variant you want:
+
+<Tabs>
+    <TabItem label="Regular">
+        ```bash
+        docker build --pull --file Dockerfile --tag homebox-fork:local .
+        ```
+    </TabItem>
+    <TabItem label="Rootless">
+        ```bash
+        docker build --pull --file Dockerfile.rootless --tag homebox-fork:local-rootless .
+        ```
+    </TabItem>
+    <TabItem label="Hardened">
+        ```bash
+        docker build --pull --file Dockerfile.hardened --tag homebox-fork:local-hardened .
+        ```
+    </TabItem>
+</Tabs>
+
+The rootless and hardened images run as UID/GID `65532`. The hardened image is
+distroless and does not contain a shell, utilities, or the MQTT client.
+
+### Required API-key pepper
+
+Generate the pepper once, store it with restrictive permissions, and reuse the
+same file after every restart:
+
+```bash
+printf 'HBOX_AUTH_API_KEY_PEPPER=%s\n' "$(openssl rand -base64 48)" > .env
+chmod 600 .env
+```
+
+The value must be at least 32 bytes. Rotating or losing it invalidates every
+issued API key.
 
 ### Docker Run
-Great for testing the application, but not recommended for production deployments. Check out the docker compose example below for a production deployment.
 
 <Tabs>
     <TabItem label="Regular">
         ```bash
-        # Run the container
         docker run -d --name homebox --restart unless-stopped \
-        --publish 3100:7745 --env HBOX_OPTIONS_ALLOW_ANALYTICS=false \
-        --env HBOX_AUTH_API_KEY_PEPPER=some_random_string \
-        --volume /path/to/data/folder:/data \
-        ghcr.io/sysadminsmedia/homebox:latest
+          --publish 3100:7745 \
+          --env-file .env \
+          --env HBOX_OPTIONS_ALLOW_ANALYTICS=false \
+          --volume homebox-data:/data \
+          homebox-fork:local
         ```
     </TabItem>
     <TabItem label="Rootless">
         ```bash
-        # When using rootless you must ensure the data folder has the correct permissions
-        mkdir -p /path/to/data/folder
-        chown 65532:65532 -R /path/to/data/folder
-        # --------
-        # Run the container
         docker run -d --name homebox --restart unless-stopped \
-        --publish 3100:7745 --env HBOX_OPTIONS_ALLOW_ANALYTICS=false \
-        --env HBOX_AUTH_API_KEY_PEPPER=some_random_string \
-        --volume /path/to/data/folder:/data \
-        ghcr.io/sysadminsmedia/homebox:latest-rootless
+          --publish 3100:7745 \
+          --env-file .env \
+          --env HBOX_OPTIONS_ALLOW_ANALYTICS=false \
+          --volume homebox-data:/data \
+          homebox-fork:local-rootless
         ```
     </TabItem>
     <TabItem label="Hardened">
         ```bash
-        # When using hardened you must ensure the data folder has the correct permissions
-        mkdir -p /path/to/data/folder
-        chown 65532:65532 -R /path/to/data/folder
-        # --------
-        # Run the container
         docker run -d --name homebox --restart unless-stopped \
-        --publish 3100:7745 --env HBOX_OPTIONS_ALLOW_ANALYTICS=false \
-        --env HBOX_AUTH_API_KEY_PEPPER=some_random_string \
-        --volume /path/to/data/folder:/data \
-        ghcr.io/sysadminsmedia/homebox:latest-hardened
+          --publish 3100:7745 \
+          --env-file .env \
+          --env HBOX_OPTIONS_ALLOW_ANALYTICS=false \
+          --volume homebox-data:/data \
+          homebox-fork:local-hardened
         ```
     </TabItem>
 </Tabs>
+
+For a bind mount instead of the named volume, create the directory first. For
+the rootless or hardened image, make it writable by the runtime user:
+
+```bash
+mkdir -p /path/to/homebox-data
+chown -R 65532:65532 /path/to/homebox-data
+```
+
+Then replace `--volume homebox-data:/data` with
+`--volume /path/to/homebox-data:/data`.
 
 ### Docker Compose
-1. Create a `compose.yml` file with the following contents:
 
-<Tabs>
-    <TabItem label="Regular">
-        ```yaml title="compose.yml"
-        services:
-            homebox:
-                image: ghcr.io/sysadminsmedia/homebox:latest
-                restart: always
-                environment:
-                    - HBOX_LOG_LEVEL=info
-                    - HBOX_LOG_FORMAT=text
-                    - HBOX_WEB_MAX_UPLOAD_SIZE=10
-                    # Please consider allowing analytics to help us improve Homebox (basic computer information, no personal data)
-                    - HBOX_OPTIONS_ALLOW_ANALYTICS=false
-                    # Use a strong random string for the pepper in production, it will be used to hash API keys and make them more secure
-                    - HBOX_AUTH_API_KEY_PEPPER=some_random_string
-                volumes:
-                    - homebox-data:/data/
-                ports:
-                    - 3100:7745
+Create `.env` as shown above, build the chosen image, then create `compose.yml`:
 
-        volumes:
-            homebox-data:
-                driver: local
-        ```
-    </TabItem>
-    <TabItem label="Rootless">
-        ```yaml title="compose.yml"
-        services:
-            homebox:
-                image: ghcr.io/sysadminsmedia/homebox:latest-rootless
-                restart: always
-                environment:
-                    - HBOX_LOG_LEVEL=info
-                    - HBOX_LOG_FORMAT=text
-                    - HBOX_WEB_MAX_UPLOAD_SIZE=10
-                    # Please consider allowing analytics to help us improve Homebox (basic computer information, no personal data)
-                    - HBOX_OPTIONS_ALLOW_ANALYTICS=false
-                    # Use a strong random string for the pepper in production, it will be used to hash API keys and make them more secure
-                    - HBOX_AUTH_API_KEY_PEPPER=some_random_string
-                volumes:
-                    - homebox-data:/data/
-                ports:
-                    - 3100:7745
+```yaml title="compose.yml"
+services:
+  homebox:
+    # Use homebox-fork:local-rootless or homebox-fork:local-hardened
+    # when you built that variant.
+    image: homebox-fork:local
+    pull_policy: never
+    restart: unless-stopped
+    environment:
+      HBOX_LOG_LEVEL: info
+      HBOX_LOG_FORMAT: text
+      HBOX_WEB_MAX_UPLOAD_SIZE: 10
+      HBOX_OPTIONS_ALLOW_ANALYTICS: "false"
+      HBOX_AUTH_API_KEY_PEPPER: ${HBOX_AUTH_API_KEY_PEPPER:?set HBOX_AUTH_API_KEY_PEPPER in .env}
+    volumes:
+      - homebox-data:/data
+    ports:
+      - "3100:7745"
 
-        volumes:
-            homebox-data:
-                driver: local
-        ```
+volumes:
+  homebox-data:
+```
 
-        > [!NOTE]
-        > If you want to use a bind mount instead of a volume, you will need to `chown` the chosen directory in advance to
-        > the `65532` user (as shown in the Docker run example above)
-    </TabItem>
-    <TabItem label="Hardened">
-        ```yaml title="compose.yml"
-        services:
-            homebox:
-                image: ghcr.io/sysadminsmedia/homebox:latest-hardened
-                restart: always
-                environment:
-                    - HBOX_LOG_LEVEL=info
-                    - HBOX_LOG_FORMAT=text
-                    - HBOX_WEB_MAX_UPLOAD_SIZE=10
-                    # Please consider allowing analytics to help us improve Homebox (basic computer information, no personal data)
-                    - HBOX_OPTIONS_ALLOW_ANALYTICS=false
-                    # Use a strong random string for the pepper in production, it will be used to hash API keys and make them more secure
-                    - HBOX_AUTH_API_KEY_PEPPER=some_random_string
-                volumes:
-                    - homebox-data:/data/
-                ports:
-                    - 3100:7745
+Start the service from the directory containing both files:
 
-        volumes:
-            homebox-data:
-                driver: local
-        ```
+```bash
+docker compose up -d
+docker compose ps
+```
 
-        > [!CAUTION]
-        > The hardened image does not contain the MQTT client.
+Open `http://server.local.ip.address:3100`.
 
-        > [!NOTE]
-        > If you want to use a bind mount instead of a volume, you will need to `chown` the chosen directory in advance to
-        > the `65532` user (as shown in the Docker run example above)
-    </TabItem>
-</Tabs>
+## Native binary
 
-> [!WARNING]
-> If you previously set up docker compose with the `HBOX_WEB_READ_TIMEOUT`, `HBOX_WEB_WRITE_TIMEOUT` or `HBOX_WEB_IDLE_TIMEOUT` environment variables,
-> with the hay-kot image, please note that you will need to add an `s` for seconds or `m` for minutes to the end of the integers.
-> A dependency update removed the default sections, and it now requires them to be explicitly set.
+Native builds require Go `1.26.5`, Node.js `22` or newer, and pnpm `10.28.0`.
+From a clone of this repository:
 
-2. While in the same directory as the `compose.yml` file, run `docker compose up -d` to start the container.
-3. Navigate to `http://server.local.ip.address:3100` to access the Homebox web interface. (Replace with the correct IP address)
+```bash
+pnpm --dir frontend install --frozen-lockfile
+pnpm --dir frontend build
+cp -R frontend/.output/public/. backend/app/api/static/public/
 
-## Binaries
-We supply a wide range of binaries for different platforms and CPU architectures.
+mkdir -p build
+(cd backend && go build -o ../build/homebox ./app/api)
+```
+
+Generate `.env` as described above, export it, and start the binary:
+
+```bash
+set -a
+. ./.env
+set +a
+./build/homebox
+```
+
+Open `http://server.local.ip.address:7745`.
 
 > [!NOTE]
-> While we build and provide the binaries, we do not have the resources to test them on all platforms and architectures.
-> We highly recommend using the Docker images for production deployments, as they are tested and secure by default.
->
-> Currently Linux is the primary platform we validate and test with. Because MacOS is extremely similar to Linux, we expect the binaries to work without issues, but we do not have Mac devices.
-> Windows is not a primary platform for us, but we do provide binaries for it as well. There have been known issues with Windows binaries due to the way Windows handles file permissions and other system features, so we **heavily recommend** using Docker on Windows.
-
-### Windows
-1. Download the latest version from the [releases page](https://github.com/sysadminsmedia/homebox/releases).
-2. Extract the archive and run `homebox.exe`.
-3. The web interface will be available at `http://localhost:7745` by default. Access the page by navigating to
-`http://server.local.ip.address:7745/` (replace with the right ip address)
-
-### macOS
-1. Download the latest version from the [releases page](https://github.com/sysadminsmedia/homebox/releases). (Use
-`homebox_Darwin_x86_64.tar.gz` for Intel-based Macs and `homebox_Darwin_arm64.tar.gz` for Apple Silicon)
-2. Extract the archive and run `./homebox` from a terminal.
-3. The web interface will be available at `http://localhost:7745` by default. Access the page by navigating to
-`http://server.local.ip.address:7745/` (replace with the right ip address)
-
-### Linux
-1. Download the latest version from the [releases page](https://github.com/sysadminsmedia/homebox/releases).
-2. Extract the archive and run `./homebox` from a terminal.
-3. The web interface will be available at `http://localhost:7745` by default. Access the page by navigating to
-`http://server.local.ip.address:7745/` (replace with the right ip address)
-
-> [!NOTE]
-> RISC-V binaries are experimental and not recommended for production deployments. Use at your own risk. Please provide feedback
-> on the [discussions page](https://github.com/sysadminsmedia/homebox/discussions) if you encounter any issues.
+> Docker is the validated production path for this fork. A native build uses
+> the operating system and architecture of the machine on which `go build`
+> runs.

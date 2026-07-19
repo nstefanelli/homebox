@@ -95,6 +95,7 @@ type (
 		TextValue    string    `json:"textValue"`
 		NumberValue  int       `json:"numberValue"`
 		BooleanValue bool      `json:"booleanValue"`
+		TimeValue    time.Time `json:"timeValue"`
 	}
 
 	EntityCreate struct {
@@ -315,6 +316,7 @@ func mapEntityFields(fields []*ent.EntityField) []EntityFieldData {
 			TextValue:    f.TextValue,
 			NumberValue:  f.NumberValue,
 			BooleanValue: f.BooleanValue,
+			TimeValue:    f.TimeValue,
 		}
 	})
 }
@@ -1531,12 +1533,17 @@ func (r *EntityRepository) createFromTemplateTx(ctx context.Context, tx *ent.Tx,
 		fieldsCtx, fieldsSpan := entityTracer().Start(ctx, "repo.EntityRepository.createFromTemplateTx.fields",
 			trace.WithAttributes(attribute.Int("fields.count", len(data.Fields))))
 		for _, field := range data.Fields {
-			_, err = tx.EntityField.Create().
+			fieldBuilder := tx.EntityField.Create().
 				SetEntityID(newEntityID).
 				SetType(entityfield.Type(field.Type)).
 				SetName(field.Name).
 				SetTextValue(field.TextValue).
-				Save(fieldsCtx)
+				SetNumberValue(field.NumberValue).
+				SetBooleanValue(field.BooleanValue)
+			if !field.TimeValue.IsZero() {
+				fieldBuilder.SetTimeValue(field.TimeValue)
+			}
+			_, err = fieldBuilder.Save(fieldsCtx)
 			if err != nil {
 				wrapped := fmt.Errorf("failed to create field %s: %w", field.Name, err)
 				recordSpanError(fieldsSpan, wrapped)
@@ -1931,6 +1938,26 @@ func assertValidEntityParent(
 	return fmt.Errorf("entity hierarchy exceeds maximum depth of %d", maxHierarchyDepth)
 }
 
+func applyEntityUpdateDates(q *ent.EntityUpdate, data EntityUpdate) {
+	// Date fields are nullable. Writing types.Date{}.Time() would persist the
+	// 0001-01-01 sentinel instead of the intended NULL.
+	if value := data.PurchaseDate.Time(); value.IsZero() {
+		q.ClearPurchaseDate()
+	} else {
+		q.SetPurchaseDate(value)
+	}
+	if value := data.SoldDate.Time(); value.IsZero() {
+		q.ClearSoldDate()
+	} else {
+		q.SetSoldDate(value)
+	}
+	if value := data.WarrantyExpires.Time(); value.IsZero() {
+		q.ClearWarrantyExpires()
+	} else {
+		q.SetWarrantyExpires(value)
+	}
+}
+
 func (r *EntityRepository) UpdateByGroup(ctx context.Context, gid uuid.UUID, data EntityUpdate) (EntityOut, error) {
 	ctx, span := entityTracer().Start(ctx, "repo.EntityRepository.UpdateByGroup",
 		trace.WithAttributes(
@@ -2016,24 +2043,7 @@ func (r *EntityRepository) UpdateByGroup(ctx context.Context, gid uuid.UUID, dat
 		SetAssetID(int64(data.AssetID)).
 		SetSyncChildEntityLocations(data.SyncChildEntityLocations)
 
-	// Date fields are nullable. Writing types.Date{}.Time() would persist
-	// the 0001-01-01 sentinel that ZeroOutTimeFields then has to chase —
-	// clear the column instead so absent dates round-trip as NULL/"".
-	if t := data.PurchaseDate.Time(); t.IsZero() {
-		q.ClearPurchaseDate()
-	} else {
-		q.SetPurchaseDate(t)
-	}
-	if t := data.SoldDate.Time(); t.IsZero() {
-		q.ClearSoldDate()
-	} else {
-		q.SetSoldDate(t)
-	}
-	if t := data.WarrantyExpires.Time(); t.IsZero() {
-		q.ClearWarrantyExpires()
-	} else {
-		q.SetWarrantyExpires(t)
-	}
+	applyEntityUpdateDates(q, data)
 
 	if data.EntityTypeID != uuid.Nil {
 		q.SetEntityTypeID(data.EntityTypeID)
@@ -2116,14 +2126,17 @@ func (r *EntityRepository) UpdateByGroup(ctx context.Context, gid uuid.UUID, dat
 	// Update Existing Fields
 	for _, f := range data.Fields {
 		if f.ID == uuid.Nil {
-			_, err = tx.EntityField.Create().
+			fieldBuilder := tx.EntityField.Create().
 				SetEntityID(data.ID).
 				SetType(entityfield.Type(f.Type)).
 				SetName(f.Name).
 				SetTextValue(f.TextValue).
 				SetNumberValue(f.NumberValue).
-				SetBooleanValue(f.BooleanValue).
-				Save(fieldsCtx)
+				SetBooleanValue(f.BooleanValue)
+			if !f.TimeValue.IsZero() {
+				fieldBuilder.SetTimeValue(f.TimeValue)
+			}
+			_, err = fieldBuilder.Save(fieldsCtx)
 			if err != nil {
 				recordSpanError(fieldsSpan, err)
 				fieldsSpan.End()
@@ -2147,6 +2160,9 @@ func (r *EntityRepository) UpdateByGroup(ctx context.Context, gid uuid.UUID, dat
 			SetTextValue(f.TextValue).
 			SetNumberValue(f.NumberValue).
 			SetBooleanValue(f.BooleanValue)
+		if !f.TimeValue.IsZero() {
+			opt.SetTimeValue(f.TimeValue)
+		}
 
 		var updated int
 		updated, err = opt.Save(fieldsCtx)
@@ -2758,18 +2774,22 @@ func (r *EntityRepository) Duplicate(ctx context.Context, gid, id uuid.UUID, opt
 			trace.WithAttributes(attribute.Int("fields.count", len(originalEntity.Fields))))
 		copied := 0
 		for _, field := range originalEntity.Fields {
-			_, err = tx.EntityField.Create().
+			fieldBuilder := tx.EntityField.Create().
 				SetEntityID(newEntityID).
 				SetType(entityfield.Type(field.Type)).
 				SetName(field.Name).
 				SetTextValue(field.TextValue).
 				SetNumberValue(field.NumberValue).
-				SetBooleanValue(field.BooleanValue).
-				Save(fieldsCtx)
+				SetBooleanValue(field.BooleanValue)
+			if !field.TimeValue.IsZero() {
+				fieldBuilder.SetTimeValue(field.TimeValue)
+			}
+			_, err = fieldBuilder.Save(fieldsCtx)
 			if err != nil {
 				recordSpanError(fieldsSpan, err)
-				log.Warn().Err(err).Str("field_name", field.Name).Msg("failed to copy custom field during duplication")
-				continue
+				fieldsSpan.End()
+				recordSpanError(span, err)
+				return EntityOut{}, fmt.Errorf("copy custom field %q: %w", field.Name, err)
 			}
 			copied++
 		}
@@ -2788,8 +2808,9 @@ func (r *EntityRepository) Duplicate(ctx context.Context, gid, id uuid.UUID, opt
 				Only(attCtx)
 			if err != nil {
 				recordSpanError(attSpan, err)
-				log.Warn().Err(err).Str("attachment_id", att.ID.String()).Msg("failed to find attachment during duplication")
-				continue
+				attSpan.End()
+				recordSpanError(span, err)
+				return EntityOut{}, fmt.Errorf("load attachment %s for duplication: %w", att.ID, err)
 			}
 
 			_, err = tx.Attachment.Create().
@@ -2802,8 +2823,9 @@ func (r *EntityRepository) Duplicate(ctx context.Context, gid, id uuid.UUID, opt
 				Save(attCtx)
 			if err != nil {
 				recordSpanError(attSpan, err)
-				log.Warn().Err(err).Str("original_attachment_id", att.ID.String()).Msg("failed to copy attachment during duplication")
-				continue
+				attSpan.End()
+				recordSpanError(span, err)
+				return EntityOut{}, fmt.Errorf("copy attachment %s: %w", att.ID, err)
 			}
 			copied++
 		}
@@ -2819,27 +2841,30 @@ func (r *EntityRepository) Duplicate(ctx context.Context, gid, id uuid.UUID, opt
 			All(maintCtx)
 		if err != nil {
 			recordSpanError(maintSpan, err)
-		} else {
-			maintSpan.SetAttributes(attribute.Int("maintenance.count", len(maintenanceEntries)))
-			copied := 0
-			for _, entry := range maintenanceEntries {
-				_, err = tx.MaintenanceEntry.Create().
-					SetEntityID(newEntityID).
-					SetDate(entry.Date).
-					SetScheduledDate(entry.ScheduledDate).
-					SetName(entry.Name).
-					SetDescription(entry.Description).
-					SetCost(entry.Cost).
-					Save(maintCtx)
-				if err != nil {
-					recordSpanError(maintSpan, err)
-					log.Warn().Err(err).Str("maintenance_entry_id", entry.ID.String()).Msg("failed to copy maintenance entry during duplication")
-					continue
-				}
-				copied++
-			}
-			maintSpan.SetAttributes(attribute.Int("maintenance.copied.count", copied))
+			maintSpan.End()
+			recordSpanError(span, err)
+			return EntityOut{}, fmt.Errorf("load maintenance entries for duplication: %w", err)
 		}
+		maintSpan.SetAttributes(attribute.Int("maintenance.count", len(maintenanceEntries)))
+		copied := 0
+		for _, entry := range maintenanceEntries {
+			_, err = tx.MaintenanceEntry.Create().
+				SetEntityID(newEntityID).
+				SetDate(entry.Date).
+				SetScheduledDate(entry.ScheduledDate).
+				SetName(entry.Name).
+				SetDescription(entry.Description).
+				SetCost(entry.Cost).
+				Save(maintCtx)
+			if err != nil {
+				recordSpanError(maintSpan, err)
+				maintSpan.End()
+				recordSpanError(span, err)
+				return EntityOut{}, fmt.Errorf("copy maintenance entry %s: %w", entry.ID, err)
+			}
+			copied++
+		}
+		maintSpan.SetAttributes(attribute.Int("maintenance.copied.count", copied))
 		maintSpan.End()
 	}
 

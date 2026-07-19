@@ -11,9 +11,8 @@
    <a href="https://discord.gg/aY4DCkpNA9">Discord</a>
 </p>
 <p align="center" style="width: 100%;">
-    <img src="https://img.shields.io/github/check-runs/sysadminsmedia/homebox/main" alt="Github Checks"/>
-    <img src="https://img.shields.io/github/license/sysadminsmedia/homebox"/>
-    <img src="https://img.shields.io/github/v/release/sysadminsmedia/homebox?sort=semver&display_name=release"/>
+    <img src="https://img.shields.io/github/check-runs/nstefanelli/homebox/main" alt="Github Checks"/>
+    <img src="https://img.shields.io/github/license/nstefanelli/homebox"/>
     <img src="https://img.shields.io/weblate/progress/homebox?server=https%3A%2F%2Ftranslate.sysadminsmedia.com"/>
 </p>
 <p align="center" style="width: 100%;">
@@ -66,23 +65,40 @@ You can also try the demo instances of Homebox:
 
 ## Quick Start
 
-[Configuration & Docker Compose](https://homebox.software/en/quick-start/)
+This fork does not currently publish a verified prebuilt container image. Build it
+from this repository so the custom container, AI, icon, cataloging, and integration
+features are present:
 
 ```bash
-# If using the rootless or hardened image, ensure data 
-# folder has correct permissions
+git clone https://github.com/nstefanelli/homebox.git
+cd homebox
+
+docker build --pull --tag homebox-fork:local .
+
 mkdir -p /path/to/data/folder
-chown 65532:65532 -R /path/to/data/folder
+printf 'HBOX_AUTH_API_KEY_PEPPER=%s\n' "$(openssl rand -base64 48)" > .env
+chmod 600 .env
+
 docker run -d \
   --name homebox \
   --restart unless-stopped \
   --publish 3100:7745 \
   --env TZ=Europe/Bucharest \
+  --env-file .env \
   --volume /path/to/data/folder/:/data \
-  ghcr.io/sysadminsmedia/homebox:latest
-# ghcr.io/sysadminsmedia/homebox:latest-rootless
-# ghcr.io/sysadminsmedia/homebox:latest-hardened
+  homebox-fork:local
 ```
+
+Keep the generated `.env` file private and backed up. The API-key pepper is
+required, must be at least 32 bytes, and must remain unchanged across restarts;
+rotating it invalidates issued API keys.
+
+To build the non-root or distroless variants, use `Dockerfile.rootless` or
+`Dockerfile.hardened` and ensure a bind-mounted data directory is owned by
+UID/GID `65532`. The upstream `sysadminsmedia/homebox` images do not contain this
+fork's custom features.
+
+[Full configuration reference](docs/src/content/docs/en/quick-start/configure/index.mdx)
 
 <!-- CONTRIBUTING -->
 

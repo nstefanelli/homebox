@@ -2,8 +2,8 @@
 FROM public.ecr.aws/docker/library/node:22-alpine AS frontend-dependencies
 WORKDIR /app
 
-# Install pnpm 10 (latest stable, works reliably in Alpine)
-RUN npm install -g pnpm@10
+# Keep the package manager identical to frontend/package.json.
+RUN npm install -g pnpm@10.28.0
 
 # Copy package.json and lockfile to leverage caching
 COPY frontend/package.json frontend/pnpm-lock.yaml ./
@@ -13,8 +13,8 @@ RUN pnpm install --frozen-lockfile
 FROM public.ecr.aws/docker/library/node:22-alpine AS frontend-builder
 WORKDIR /app
 
-# Install pnpm 10 (latest stable)
-RUN npm install -g pnpm@10
+# Keep the package manager identical to frontend/package.json.
+RUN npm install -g pnpm@10.28.0
 
 # Copy over source files and node_modules from dependencies stage
 COPY frontend . 
@@ -22,7 +22,7 @@ COPY --from=frontend-dependencies /app/node_modules ./node_modules
 RUN pnpm build
 
 # Go dependencies stage
-FROM public.ecr.aws/docker/library/golang:alpine AS builder-dependencies
+FROM public.ecr.aws/docker/library/golang:1.26.5-alpine AS builder-dependencies
 WORKDIR /go/src/app
 
 # Copy go.mod and go.sum for better caching
@@ -30,7 +30,7 @@ COPY ./backend/go.mod ./backend/go.sum ./
 RUN go mod download
 
 # Build API stage
-FROM public.ecr.aws/docker/library/golang:alpine AS builder
+FROM public.ecr.aws/docker/library/golang:1.26.5-alpine AS builder
 ARG TARGETOS
 ARG TARGETARCH
 ARG BUILD_TIME
@@ -41,7 +41,7 @@ ARG VERSION
 RUN apk update && \
     apk upgrade && \
     apk add --no-cache git build-base gcc g++ && \
-    if [ "$TARGETARCH" != "arm" ] || [ "$TARGETARCH" != "riscv64" ]; then apk --no-cache add libwebp libavif libheif libjxl; fi
+    if [ "$TARGETARCH" != "arm" ] && [ "$TARGETARCH" != "riscv64" ]; then apk --no-cache add libwebp libavif libheif libjxl; fi
 
 WORKDIR /go/src/app
 
@@ -67,6 +67,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 
 # Production stage
 FROM public.ecr.aws/docker/library/alpine:latest
+ARG TARGETARCH
 ENV HBOX_MODE=production
 ENV HBOX_STORAGE_CONN_STRING=file:///?no_tmp_dir=true
 ENV HBOX_STORAGE_PREFIX_PATH=data
@@ -74,7 +75,7 @@ ENV HBOX_DATABASE_SQLITE_PATH=/data/homebox.db?_pragma=busy_timeout=2000&_pragma
 
 # Install necessary runtime dependencies
 RUN apk --no-cache add ca-certificates wget mosquitto-clients && \
-    if [ "$TARGETARCH" != "arm" ] || [ "$TARGETARCH" != "riscv64" ]; then apk --no-cache add libwebp libavif libheif libjxl; fi
+    if [ "$TARGETARCH" != "arm" ] && [ "$TARGETARCH" != "riscv64" ]; then apk --no-cache add libwebp libavif libheif libjxl; fi
 
 # Create application directory and copy over built Go binary
 RUN mkdir /app
@@ -83,7 +84,7 @@ RUN chmod +x /app/api
 
 # Labels and configuration for the final image
 LABEL Name=homebox Version=0.0.1
-LABEL org.opencontainers.image.source="https://github.com/sysadminsmedia/homebox"
+LABEL org.opencontainers.image.source="https://github.com/nstefanelli/homebox"
 
 # Expose necessary ports for Homebox
 EXPOSE 7745

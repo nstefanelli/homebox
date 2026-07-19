@@ -37,5 +37,5 @@ jobs:
           dry-run: false
           delete-untagged: true
           token: '${{ github.token }}'
-          package: devcache
+          package: homebox-devcache
           older-than: 90 days

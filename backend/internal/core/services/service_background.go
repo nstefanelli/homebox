@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/containrrr/shoutrrr"
@@ -21,10 +23,20 @@ type Latest struct {
 	Version string `json:"version"`
 	Date    string `json:"date"`
 }
+
+const (
+	defaultGithubReleaseURL = "https://api.github.com/repos/nstefanelli/homebox/releases/latest"
+	releaseCheckTimeout     = 10 * time.Second
+	maxReleaseResponseSize  = 1 << 20
+)
+
 type BackgroundService struct {
 	repos          *repo.AllRepos
+	latestMu       sync.RWMutex
 	latest         Latest
 	notifierConfig *config.NotifierConf
+	releaseURL     string
+	httpClient     *http.Client
 }
 
 func (svc *BackgroundService) SendNotifiersToday(ctx context.Context) error {
@@ -107,16 +119,23 @@ func (svc *BackgroundService) SendNotifiersToday(ctx context.Context) error {
 }
 
 func (svc *BackgroundService) GetLatestGithubRelease(ctx context.Context) error {
-	url := "https://api.github.com/repos/sysadminsmedia/homebox/releases/latest"
+	releaseURL := svc.releaseURL
+	if releaseURL == "" {
+		releaseURL = defaultGithubReleaseURL
+	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, releaseURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create latest version request: %w", err)
 	}
 
-	req.Header.Set("User-Agent", "Homebox-Version-Checker")
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "Homebox-Fork-Version-Checker")
 
-	client := &http.Client{}
+	client := svc.httpClient
+	if client == nil {
+		client = &http.Client{Timeout: releaseCheckTimeout}
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to make latest version request: %w", err)
@@ -127,6 +146,14 @@ func (svc *BackgroundService) GetLatestGithubRelease(ctx context.Context) error 
 			log.Printf("error closing latest version response body: %v", err)
 		}
 	}()
+
+	// This fork does not currently publish GitHub releases. Treat a missing
+	// latest release as an expected empty state so opting into the checker
+	// does not produce an hourly error until the first fork release exists.
+	if resp.StatusCode == http.StatusNotFound {
+		svc.setLatestVersion(Latest{})
+		return nil
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("latest version unexpected status code: %d", resp.StatusCode)
@@ -139,18 +166,26 @@ func (svc *BackgroundService) GetLatestGithubRelease(ctx context.Context) error 
 	}
 
 	var release Release
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxReleaseResponseSize)).Decode(&release); err != nil {
 		return fmt.Errorf("failed to decode latest version response: %w", err)
 	}
 
-	svc.latest = Latest{
+	svc.setLatestVersion(Latest{
 		Version: release.ReleaseVersion,
 		Date:    release.PublishedAt.String(),
-	}
+	})
 
 	return nil
 }
 
 func (svc *BackgroundService) GetLatestVersion() Latest {
+	svc.latestMu.RLock()
+	defer svc.latestMu.RUnlock()
 	return svc.latest
+}
+
+func (svc *BackgroundService) setLatestVersion(latest Latest) {
+	svc.latestMu.Lock()
+	defer svc.latestMu.Unlock()
+	svc.latest = latest
 }

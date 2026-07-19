@@ -185,6 +185,7 @@ func (ctrl *V1Controller) HandleEntityTemplatesCreateItem() errchain.HandlerFunc
 				TextValue:    f.TextValue,
 				NumberValue:  f.NumberValue,
 				BooleanValue: f.BooleanValue,
+				TimeValue:    f.TimeValue,
 			}
 		})
 
@@ -255,6 +256,7 @@ func (ctrl *V1Controller) HandleEntityTemplatesBatchCreate() errchain.HandlerFun
 				TextValue:    f.TextValue,
 				NumberValue:  f.NumberValue,
 				BooleanValue: f.BooleanValue,
+				TimeValue:    f.TimeValue,
 			}
 		})
 

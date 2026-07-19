@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/samber/lo"
@@ -110,6 +111,66 @@ func TestEntityTemplatesRepository_Update(t *testing.T) {
 	// Cleanup
 	err = tRepos.EntityTemplates.Delete(context.Background(), tGroup.ID, created.ID)
 	require.NoError(t, err)
+}
+
+func TestEntityTemplatesRepository_TypedFieldValuesRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	firstTime := time.Date(2025, time.March, 4, 5, 6, 7, 0, time.UTC)
+	data := templateFactory()
+	data.Fields = []TemplateField{
+		{Type: "text", Name: "text", TextValue: "alpha"},
+		{Type: testFieldTypeNumber, Name: "number", NumberValue: 42},
+		{Type: testFieldTypeBoolean, Name: "boolean", BooleanValue: true},
+		{Type: "time", Name: "time", TimeValue: firstTime},
+	}
+
+	created, err := tRepos.EntityTemplates.Create(ctx, tGroup.ID, data)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = tRepos.EntityTemplates.Delete(context.Background(), tGroup.ID, created.ID)
+	})
+	require.Len(t, created.Fields, 4)
+
+	byName := lo.SliceToMap(created.Fields, func(field TemplateField) (string, TemplateField) {
+		return field.Name, field
+	})
+	assert.Equal(t, "alpha", byName["text"].TextValue)
+	assert.Equal(t, 42, byName["number"].NumberValue)
+	assert.True(t, byName["boolean"].BooleanValue)
+	assert.WithinDuration(t, firstTime, byName["time"].TimeValue, time.Second)
+
+	secondTime := time.Date(2026, time.April, 8, 9, 10, 11, 0, time.UTC)
+	fields := created.Fields
+	for i := range fields {
+		switch fields[i].Name {
+		case "text":
+			fields[i].TextValue = "omega"
+		case "number":
+			fields[i].NumberValue = 84
+		case "boolean":
+			fields[i].BooleanValue = false
+		case "time":
+			fields[i].TimeValue = secondTime
+		}
+	}
+
+	updated, err := tRepos.EntityTemplates.Update(ctx, tGroup.ID, EntityTemplateUpdate{
+		ID:          created.ID,
+		Name:        data.Name,
+		Description: data.Description,
+		Notes:       data.Notes,
+		Fields:      fields,
+	})
+	require.NoError(t, err)
+	require.Len(t, updated.Fields, 4)
+
+	byName = lo.SliceToMap(updated.Fields, func(field TemplateField) (string, TemplateField) {
+		return field.Name, field
+	})
+	assert.Equal(t, "omega", byName["text"].TextValue)
+	assert.Equal(t, 84, byName["number"].NumberValue)
+	assert.False(t, byName["boolean"].BooleanValue)
+	assert.WithinDuration(t, secondTime, byName["time"].TimeValue, time.Second)
 }
 
 func TestEntityTemplatesRepository_Create_RollsBackOnFieldFailure(t *testing.T) {

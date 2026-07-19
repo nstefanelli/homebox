@@ -328,12 +328,17 @@ func (r *EntityTemplatesRepository) Create(ctx context.Context, gid uuid.UUID, d
 
 	// Create template fields
 	for _, field := range data.Fields {
-		_, err = tx.TemplateField.Create().
+		fieldBuilder := tx.TemplateField.Create().
 			SetEntityTemplateID(template.ID).
 			SetType(templatefield.Type(field.Type)).
 			SetName(field.Name).
 			SetTextValue(field.TextValue).
-			Save(ctx)
+			SetNumberValue(field.NumberValue).
+			SetBooleanValue(field.BooleanValue)
+		if !field.TimeValue.IsZero() {
+			fieldBuilder.SetTimeValue(field.TimeValue)
+		}
+		_, err = fieldBuilder.Save(ctx)
 
 		if err != nil {
 			log.Err(err).Msg("failed to create template field")
@@ -438,12 +443,17 @@ func (r *EntityTemplatesRepository) Update(ctx context.Context, gid uuid.UUID, d
 	for _, field := range data.Fields {
 		if field.ID == nil || *field.ID == uuid.Nil {
 			// Create new field
-			_, err = tx.TemplateField.Create().
+			fieldBuilder := tx.TemplateField.Create().
 				SetEntityTemplateID(data.ID).
 				SetType(templatefield.Type(field.Type)).
 				SetName(field.Name).
 				SetTextValue(field.TextValue).
-				Save(ctx)
+				SetNumberValue(field.NumberValue).
+				SetBooleanValue(field.BooleanValue)
+			if !field.TimeValue.IsZero() {
+				fieldBuilder.SetTimeValue(field.TimeValue)
+			}
+			_, err = fieldBuilder.Save(ctx)
 
 			if err != nil {
 				log.Err(err).Msg("failed to create template field")
@@ -453,7 +463,7 @@ func (r *EntityTemplatesRepository) Update(ctx context.Context, gid uuid.UUID, d
 			// Update existing field
 			updatedFieldIDs[*field.ID] = true
 			var updated int
-			updated, err = tx.TemplateField.Update().
+			fieldUpdate := tx.TemplateField.Update().
 				Where(
 					templatefield.ID(*field.ID),
 					templatefield.HasEntityTemplateWith(entitytemplate.ID(data.ID)),
@@ -461,7 +471,12 @@ func (r *EntityTemplatesRepository) Update(ctx context.Context, gid uuid.UUID, d
 				SetType(templatefield.Type(field.Type)).
 				SetName(field.Name).
 				SetTextValue(field.TextValue).
-				Save(ctx)
+				SetNumberValue(field.NumberValue).
+				SetBooleanValue(field.BooleanValue)
+			if !field.TimeValue.IsZero() {
+				fieldUpdate.SetTimeValue(field.TimeValue)
+			}
+			updated, err = fieldUpdate.Save(ctx)
 
 			if err != nil {
 				log.Err(err).Msg("failed to update template field")

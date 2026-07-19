@@ -50,7 +50,7 @@ export default defineConfig({
                 src: './src/assets/lilbox.svg',
             },
             editLink: {
-                baseUrl: 'https://github.com/sysadminsmedia/homebox/edit/main/docs/',
+                baseUrl: 'https://github.com/nstefanelli/homebox/edit/main/docs/',
             },
             lastUpdated: true,
             plugins: [
