@@ -3,6 +3,35 @@ title: General
 ---
 import {Tabs, TabItem} from "@astrojs/starlight/components";
 
+## Configuration sources
+
+Homebox applies configuration in this order: built-in defaults, an optional
+YAML file, `HBOX_` environment variables, then command-line flags. Later
+sources override earlier ones.
+
+Pass the YAML path as a positional argument:
+
+```bash
+homebox /path/to/config.yml
+```
+
+The container images already pass `/data/config.yml`. That specific path is
+optional so a new data volume can start without a file; when present, it is
+loaded. An explicitly supplied path elsewhere must exist and contain valid
+YAML. For example:
+
+```yaml title="config.yml"
+logger:
+  level: info
+  format: text
+web:
+  max_file_upload: 25
+```
+
+Keep secrets in a protected `.env` or secret store where possible. In
+particular, `HBOX_AUTH_API_KEY_PEPPER` should remain stable across container
+replacements and overrides any value in the YAML file.
+
 ## Env Variables & Configuration
 
 <Tabs>

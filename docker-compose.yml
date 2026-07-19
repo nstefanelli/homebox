@@ -1,18 +1,27 @@
 services:
   homebox:
     image: homebox
+    pull_policy: never
     build:
       context: .
       dockerfile: ./Dockerfile
       args:
-        - COMMIT=head
-        - BUILD_TIME=0001-01-01T00:00:00Z
+        VERSION: ${HBOX_BUILD_VERSION:-local}
+        COMMIT: ${HBOX_BUILD_COMMIT:-unknown}
+        BUILD_TIME: ${HBOX_BUILD_TIME:-1970-01-01T00:00:00Z}
       x-bake:
         platforms:
-            - linux/amd64
-            - linux/arm64
-            - linux/arm
+          - linux/amd64
+          - linux/arm64
+          - linux/arm
+    restart: unless-stopped
     environment:
-      - HBOX_LOGGER_LEVEL=-1
+      HBOX_LOG_LEVEL: info
+      HBOX_AUTH_API_KEY_PEPPER: ${HBOX_AUTH_API_KEY_PEPPER:?set HBOX_AUTH_API_KEY_PEPPER in .env}
+    volumes:
+      - homebox-data:/data
     ports:
-      - 3100:7745
+      - "3100:7745"
+
+volumes:
+  homebox-data:

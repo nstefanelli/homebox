@@ -110,7 +110,19 @@ Then replace `--volume homebox-data:/data` with
 
 ### Docker Compose
 
-Create `.env` as shown above, build the chosen image, then create `compose.yml`:
+The checked-in `docker-compose.yml` builds the regular image, requires the
+pepper from `.env`, and persists `/data` in a named volume. From the repository
+checkout, start it with explicit build provenance:
+
+```bash
+HBOX_BUILD_COMMIT="$(git rev-parse HEAD)" \
+HBOX_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+docker compose up -d --build
+docker compose ps
+```
+
+For a separately built rootless or hardened image, create `compose.yml` with
+the same secret and persistence contract:
 
 ```yaml title="compose.yml"
 services:

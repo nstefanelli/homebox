@@ -93,6 +93,15 @@ Keep the generated `.env` file private and backed up. The API-key pepper is
 required, must be at least 32 bytes, and must remain unchanged across restarts;
 rotating it invalidates issued API keys.
 
+The checked-in Compose file builds the regular image, reads that `.env` file,
+and persists `/data` in the `homebox-data` named volume:
+
+```bash
+HBOX_BUILD_COMMIT="$(git rev-parse HEAD)" \
+HBOX_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+docker compose up -d --build
+```
+
 To build the non-root or distroless variants, use `Dockerfile.rootless` or
 `Dockerfile.hardened` and ensure a bind-mounted data directory is owned by
 UID/GID `65532`. The upstream `sysadminsmedia/homebox` images do not contain this
