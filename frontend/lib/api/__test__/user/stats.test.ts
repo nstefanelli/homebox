@@ -40,8 +40,9 @@ function importFileGenerator(entries: number): ImportObj[] {
 
   const pick = (arr: string[]) => arr[Math.floor(Math.random() * arr.length)];
 
-  const tags = faker.word.words(5).split(" ").join(";");
-  const locations = faker.word.words(3).split(" ");
+  const namespace = faker.string.alphanumeric(12);
+  const tags = Array.from({ length: 5 }, (_, index) => `tag-${namespace}-${index}`).join(";");
+  const locations = Array.from({ length: 3 }, (_, index) => `location-${namespace}-${index}`);
 
   const half = Math.floor(entries / 2);
 

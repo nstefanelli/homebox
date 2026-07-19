@@ -10,6 +10,7 @@ on:
       - 'Dockerfile'
       - '.github/workflows/upgrade-test.yaml'
       - '.github/scripts/upgrade-test/**'
+      - 'frontend/test/playwright.upgrade.config.ts'
       - 'frontend/test/upgrade/**'
   push:
     branches: [ "main" ]
@@ -19,6 +20,7 @@ on:
       - 'Dockerfile'
       - '.github/workflows/upgrade-test.yaml'
       - '.github/scripts/upgrade-test/**'
+      - 'frontend/test/playwright.upgrade.config.ts'
       - 'frontend/test/upgrade/**'
 
 jobs:
@@ -153,9 +155,8 @@ jobs:
           TEST_DATA_FILE=/tmp/test-users.json \
           E2E_BASE_URL=http://localhost:7745 \
           pnpm exec playwright test \
-            -c ./test/playwright.config.ts \
-            --project=chromium \
-            test/upgrade/upgrade-verification.spec.ts
+            -c ./test/playwright.upgrade.config.ts \
+            --project=chromium
         env:
           HOMEBOX_URL: http://localhost:7745
       

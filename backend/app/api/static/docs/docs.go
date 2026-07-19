@@ -5220,6 +5220,9 @@ const docTemplate = `{
                 "textValue": {
                     "type": "string"
                 },
+                "timeValue": {
+                    "type": "string"
+                },
                 "type": {
                     "type": "string"
                 }
@@ -5313,6 +5316,16 @@ const docTemplate = `{
                 "lifetimeWarranty": {
                     "description": "Warranty",
                     "type": "boolean"
+                },
+                "location": {
+                    "description": "Location is the nearest ancestor whose entity type is a location.\nIt can differ from Parent when an item is nested in other entities.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/repo.EntitySummary"
+                        }
+                    ],
+                    "x-nullable": true,
+                    "x-omitempty": true
                 },
                 "manufacturer": {
                     "type": "string"
@@ -6111,12 +6124,20 @@ const docTemplate = `{
         },
         "repo.GroupUpdate": {
             "type": "object",
+            "required": [
+                "currency",
+                "name"
+            ],
             "properties": {
                 "currency": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 16,
+                    "minLength": 1
                 },
                 "name": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 255,
+                    "minLength": 1
                 }
             }
         },
@@ -6915,7 +6936,9 @@ const docTemplate = `{
             ],
             "properties": {
                 "name": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 255,
+                    "minLength": 1
                 }
             }
         },

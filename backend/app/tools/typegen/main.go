@@ -55,6 +55,7 @@ func main() {
 		NewReReplace(` V1`, " "),
 		NewReReplace(`\?:`, ":"),
 		NewReReplace(`(\w+):\s(.*null.*)`, "$1?: $2"), // make null union types optional
+		NewReReplace(`(?m)^(\s*)timeValue: string;$`, "${1}timeValue: string | null;"),
 		NewReDate("createdAt"),
 		NewReDate("updatedAt"),
 		NewReDate("soldDate"),

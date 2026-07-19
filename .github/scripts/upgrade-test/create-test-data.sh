@@ -1,413 +1,400 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Script to create test data in HomeBox for upgrade testing
-# This script creates users, items, attachments, notifiers, locations, and tags
+# Create a compact, deterministic fixture in the pre-upgrade Homebox instance.
+# The API calls in this script are compatible with both v0.26.2 and current
+# Homebox. Authentication tokens remain in memory and are never written out.
 
-set -e
+set -Eeuo pipefail
+umask 077
 
 HOMEBOX_URL="${HOMEBOX_URL:-http://localhost:7745}"
 API_URL="${HOMEBOX_URL}/api/v1"
 TEST_DATA_FILE="${TEST_DATA_FILE:-/tmp/test-users.json}"
+TEST_PASSWORD="TestPassword123!"
 
-echo "Creating test data in HomeBox at $HOMEBOX_URL"
+GROUP1_OWNER_EMAIL="upgrade-owner@homebox.test"
+GROUP1_MEMBER_EMAIL="upgrade-member@homebox.test"
+GROUP2_OWNER_EMAIL="upgrade-isolated@homebox.test"
 
-# Function to make API calls with error handling
-api_call() {
-    local method=$1
-    local endpoint=$2
-    local data=$3
-    local token=$4
-    
-    if [ -n "$token" ]; then
-        if [ -n "$data" ]; then
-            curl -s -X "$method" \
-                -H "Authorization: Bearer $token" \
-                -H "Content-Type: application/json" \
-                -d "$data" \
-                "$API_URL$endpoint"
-        else
-            curl -s -X "$method" \
-                -H "Authorization: Bearer $token" \
-                -H "Content-Type: application/json" \
-                "$API_URL$endpoint"
-        fi
-    else
-        if [ -n "$data" ]; then
-            curl -s -X "$method" \
-                -H "Content-Type: application/json" \
-                -d "$data" \
-                "$API_URL$endpoint"
-        else
-            curl -s -X "$method" \
-                -H "Content-Type: application/json" \
-                "$API_URL$endpoint"
-        fi
-    fi
+GROUP1_LOCATION_NAME="UPGRADE G1 Location"
+GROUP1_LOCATION_DESCRIPTION="Location created before the upgrade"
+GROUP1_TAG_NAME="UPGRADE G1 Tag"
+GROUP1_TAG_DESCRIPTION="Tag created before the upgrade"
+GROUP1_TAG_COLOR="#3366CC"
+GROUP1_ITEM_NAME="UPGRADE G1 Laptop"
+GROUP1_ITEM_DESCRIPTION="Entity created before the upgrade"
+GROUP1_NOTIFIER_NAME="UPGRADE G1 Notifier"
+GROUP1_NOTIFIER_URL="discord://homeboxupgradetest"
+GROUP1_ATTACHMENT_TITLE="upgrade-laptop-receipt.txt"
+GROUP2_ITEM_NAME="UPGRADE G2 Monitor"
+GROUP2_ITEM_DESCRIPTION="Isolated entity created before the upgrade"
+
+attachment_file=""
+
+cleanup() {
+  if [[ -n "$attachment_file" && -f "$attachment_file" ]]; then
+    rm -f -- "$attachment_file"
+  fi
+}
+trap cleanup EXIT
+
+print_error_body() {
+  local response_file=$1
+
+  if jq -e . "$response_file" >/dev/null 2>&1; then
+    jq -c 'del(.token, .attachmentToken, .password)' "$response_file" >&2
+  else
+    head -c 1000 "$response_file" >&2
+    echo >&2
+  fi
 }
 
-# Function to register a user and get token
+api_request() {
+  local method=$1
+  local endpoint=$2
+  local expected_status=$3
+  local data=${4:-}
+  local token=${5:-}
+  local response_file headers_file status content_type
+  local -a curl_args
+
+  response_file=$(mktemp)
+  headers_file=$(mktemp)
+  curl_args=(
+    --silent
+    --show-error
+    --output "$response_file"
+    --dump-header "$headers_file"
+    --write-out "%{http_code}"
+    --request "$method"
+  )
+
+  if [[ -n "$data" ]]; then
+    curl_args+=(--header "Content-Type: application/json" --data "$data")
+  fi
+  if [[ -n "$token" ]]; then
+    curl_args+=(--header "Authorization: $token")
+  fi
+
+  if ! status=$(curl "${curl_args[@]}" "${API_URL}${endpoint}"); then
+    echo "API request failed: ${method} ${endpoint}" >&2
+    print_error_body "$response_file"
+    rm -f -- "$response_file" "$headers_file"
+    return 1
+  fi
+
+  if [[ "$status" != "$expected_status" ]]; then
+    echo "API request returned HTTP ${status}; expected ${expected_status}: ${method} ${endpoint}" >&2
+    print_error_body "$response_file"
+    rm -f -- "$response_file" "$headers_file"
+    return 1
+  fi
+
+  if [[ "$expected_status" != "204" ]]; then
+    content_type=$(
+      awk 'tolower($1) == "content-type:" { print tolower($2) }' "$headers_file" |
+        tail -n 1 |
+        tr -d '\r'
+    )
+    if [[ "$content_type" != application/json* ]]; then
+      echo "API request returned non-JSON content type '${content_type}': ${method} ${endpoint}" >&2
+      rm -f -- "$response_file" "$headers_file"
+      return 1
+    fi
+    if ! jq -e . "$response_file" >/dev/null; then
+      echo "API request returned invalid JSON: ${method} ${endpoint}" >&2
+      rm -f -- "$response_file" "$headers_file"
+      return 1
+    fi
+    cat "$response_file"
+  fi
+
+  rm -f -- "$response_file" "$headers_file"
+}
+
+require_json_value() {
+  local json=$1
+  local filter=$2
+  local description=$3
+  local value
+
+  if ! value=$(jq -er "$filter | select(type == \"string\" and length > 0)" <<<"$json"); then
+    echo "Missing ${description} in API response" >&2
+    return 1
+  fi
+  printf '%s\n' "$value"
+}
+
 register_user() {
-    local email=$1
-    local name=$2
-    local password=$3
-    local group_token=$4
-    
-    echo "Registering user: $email"
-    
-    local payload="{\"email\":\"$email\",\"name\":\"$name\",\"password\":\"$password\""
-    
-    if [ -n "$group_token" ]; then
-        payload="$payload,\"groupToken\":\"$group_token\""
-    fi
-    
-    payload="$payload}"
-    
-    local response=$(curl -s -X POST \
-        -H "Content-Type: application/json" \
-        -d "$payload" \
-        "$API_URL/users/register")
-    
-    echo "$response"
+  local email=$1
+  local name=$2
+  local invitation_token=${3:-}
+  local payload
+
+  payload=$(
+    jq -n \
+      --arg email "$email" \
+      --arg name "$name" \
+      --arg password "$TEST_PASSWORD" \
+      --arg token "$invitation_token" \
+      '{email: $email, name: $name, password: $password}
+       + if $token == "" then {} else {token: $token} end'
+  )
+
+  api_request POST "/users/register" 204 "$payload" >/dev/null
+  echo "Registered ${email}"
 }
 
-# Function to login and get token
 login_user() {
-    local email=$1
-    local password=$2
-    
-    echo "Logging in user: $email" >&2
-    
-    local response=$(curl -s -X POST \
-        -H "Content-Type: application/json" \
-        -d "{\"username\":\"$email\",\"password\":\"$password\"}" \
-        "$API_URL/users/login")
-    
-    echo "$response" | jq -r '.token // empty'
+  local email=$1
+  local payload response token
+
+  payload=$(
+    jq -n \
+      --arg username "$email" \
+      --arg password "$TEST_PASSWORD" \
+      '{username: $username, password: $password, stayLoggedIn: false}'
+  )
+  response=$(api_request POST "/users/login" 200 "$payload")
+  token=$(require_json_value "$response" '.token' "login token")
+  if [[ "$token" != "Bearer "* ]]; then
+    echo "Login token for ${email} did not include the expected Bearer prefix" >&2
+    return 1
+  fi
+  printf '%s\n' "$token"
 }
 
-# Function to create an item
-create_item() {
-    local token=$1
-    local name=$2
-    local description=$3
-    local location_id=$4
-    
-    echo "Creating item: $name" >&2
-    
-    local payload="{\"name\":\"$name\",\"description\":\"$description\""
-    
-    if [ -n "$location_id" ]; then
-        payload="$payload,\"locationId\":\"$location_id\""
-    fi
-    
-    payload="$payload}"
-    
-    local response=$(curl -s -X POST \
-        -H "Authorization: Bearer $token" \
-        -H "Content-Type: application/json" \
-        -d "$payload" \
-        "$API_URL/items")
-    
-    echo "$response"
+sha256_file() {
+  local path=$1
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$path" | awk '{print $1}'
+  else
+    shasum -a 256 "$path" | awk '{print $1}'
+  fi
 }
 
-# Function to create a location
-create_location() {
-    local token=$1
-    local name=$2
-    local description=$3
-    
-    echo "Creating location: $name" >&2
-    
-    local response=$(curl -s -X POST \
-        -H "Authorization: Bearer $token" \
-        -H "Content-Type: application/json" \
-        -d "{\"name\":\"$name\",\"description\":\"$description\"}" \
-        "$API_URL/locations")
-    
-    echo "$response"
-}
+echo "Creating pre-upgrade fixture at ${HOMEBOX_URL}"
 
-# Function to create a tag
-create_tag() {
-    local token=$1
-    local name=$2
-    local description=$3
-    
-    echo "Creating tag: $name" >&2
-    
-    local response=$(curl -s -X POST \
-        -H "Authorization: Bearer $token" \
-        -H "Content-Type: application/json" \
-        -d "{\"name\":\"$name\",\"description\":\"$description\"}" \
-        "$API_URL/tags")
-    
-    echo "$response"
-}
+register_user "$GROUP1_OWNER_EMAIL" "Upgrade Owner"
+group1_owner_token=$(login_user "$GROUP1_OWNER_EMAIL")
 
-# Function to create a notifier
-create_notifier() {
-    local token=$1
-    local name=$2
-    local url=$3
-    
-    echo "Creating notifier: $name" >&2
-    
-    local response=$(curl -s -X POST \
-        -H "Authorization: Bearer $token" \
-        -H "Content-Type: application/json" \
-        -d "{\"name\":\"$name\",\"url\":\"$url\",\"isActive\":true}" \
-        "$API_URL/groups/notifiers")
-    
-    echo "$response"
-}
+invitation_payload=$(jq -n '{uses: 1}')
+invitation_response=$(api_request POST "/groups/invitations" 201 "$invitation_payload" "$group1_owner_token")
+invitation_token=$(require_json_value "$invitation_response" '.token' "group invitation token")
 
-# Function to attach a file to an item (creates a dummy attachment)
-attach_file_to_item() {
-    local token=$1
-    local item_id=$2
-    local filename=$3
-    
-    echo "Creating attachment for item: $item_id" >&2
-    
-    # Create a temporary file with some content
-    local temp_file=$(mktemp)
-    echo "This is a test attachment for $filename" > "$temp_file"
-    
-    local response=$(curl -s -X POST \
-        -H "Authorization: Bearer $token" \
-        -F "file=@$temp_file" \
-        -F "type=attachment" \
-        -F "name=$filename" \
-        "$API_URL/items/$item_id/attachments")
-    
-    rm -f "$temp_file"
-    
-    echo "$response"
-}
+register_user "$GROUP1_MEMBER_EMAIL" "Upgrade Member" "$invitation_token"
+group1_member_token=$(login_user "$GROUP1_MEMBER_EMAIL")
 
-# Initialize test data storage
-echo "{\"users\":[]}" > "$TEST_DATA_FILE"
+register_user "$GROUP2_OWNER_EMAIL" "Upgrade Isolated Owner"
+group2_owner_token=$(login_user "$GROUP2_OWNER_EMAIL")
 
-echo "=== Step 1: Create first group with 5 users ==="
+# Confirm every account has a working authenticated session before creating data.
+api_request GET "/users/self" 200 "" "$group1_owner_token" >/dev/null
+api_request GET "/users/self" 200 "" "$group1_member_token" >/dev/null
+api_request GET "/users/self" 200 "" "$group2_owner_token" >/dev/null
 
-# Register first user (creates a new group)
-user1_response=$(register_user "user1@homebox.test" "User One" "TestPassword123!")
-user1_token=$(echo "$user1_response" | jq -r '.token // empty')
-group_token=$(echo "$user1_response" | jq -r '.group.inviteToken // empty')
+entity_types=$(api_request GET "/entity-types" 200 "" "$group1_owner_token")
+group1_location_type_id=$(
+  require_json_value "$entity_types" '[.[] | select(.isLocation == true)][0].id' "group 1 location entity type"
+)
 
-if [ -z "$user1_token" ]; then
-    echo "Failed to register first user"
-    echo "Response: $user1_response"
-    exit 1
+location_payload=$(
+  jq -n \
+    --arg name "$GROUP1_LOCATION_NAME" \
+    --arg description "$GROUP1_LOCATION_DESCRIPTION" \
+    --arg entity_type_id "$group1_location_type_id" \
+    '{
+      name: $name,
+      description: $description,
+      quantity: 1,
+      entityTypeId: $entity_type_id,
+      tagIds: []
+    }'
+)
+location_response=$(api_request POST "/entities" 201 "$location_payload" "$group1_owner_token")
+group1_location_id=$(require_json_value "$location_response" '.id' "group 1 location ID")
+
+tag_payload=$(
+  jq -n \
+    --arg name "$GROUP1_TAG_NAME" \
+    --arg description "$GROUP1_TAG_DESCRIPTION" \
+    --arg color "$GROUP1_TAG_COLOR" \
+    '{name: $name, description: $description, color: $color, icon: ""}'
+)
+tag_response=$(api_request POST "/tags" 201 "$tag_payload" "$group1_owner_token")
+group1_tag_id=$(require_json_value "$tag_response" '.id' "group 1 tag ID")
+
+# Omitting entityTypeId lets both v0.26.2 and current Homebox resolve the
+# group's default Item type, including groups where it has not yet been used.
+group1_item_payload=$(
+  jq -n \
+    --arg name "$GROUP1_ITEM_NAME" \
+    --arg description "$GROUP1_ITEM_DESCRIPTION" \
+    --arg parent_id "$group1_location_id" \
+    --arg tag_id "$group1_tag_id" \
+    '{
+      name: $name,
+      description: $description,
+      quantity: 2,
+      parentId: $parent_id,
+      tagIds: [$tag_id]
+    }'
+)
+group1_item_response=$(api_request POST "/entities" 201 "$group1_item_payload" "$group1_owner_token")
+group1_item_id=$(require_json_value "$group1_item_response" '.id' "group 1 item ID")
+
+notifier_payload=$(
+  jq -n \
+    --arg name "$GROUP1_NOTIFIER_NAME" \
+    --arg url "$GROUP1_NOTIFIER_URL" \
+    '{name: $name, url: $url, isActive: true}'
+)
+notifier_response=$(api_request POST "/notifiers" 201 "$notifier_payload" "$group1_owner_token")
+group1_notifier_id=$(require_json_value "$notifier_response" '.id' "group 1 notifier ID")
+
+attachment_file=$(mktemp)
+printf '%s\n' "homebox-upgrade-attachment-marker-v1" >"$attachment_file"
+attachment_sha256=$(sha256_file "$attachment_file")
+attachment_response_file=$(mktemp)
+attachment_headers_file=$(mktemp)
+attachment_status=$(
+  curl \
+    --silent \
+    --show-error \
+    --output "$attachment_response_file" \
+    --dump-header "$attachment_headers_file" \
+    --write-out "%{http_code}" \
+    --request POST \
+    --header "Authorization: ${group1_owner_token}" \
+    --form "file=@${attachment_file};type=text/plain" \
+    --form "name=${GROUP1_ATTACHMENT_TITLE}" \
+    --form "type=attachment" \
+    --form "primary=false" \
+    "${API_URL}/entities/${group1_item_id}/attachments"
+)
+if [[ "$attachment_status" != "201" ]]; then
+  echo "Attachment upload returned HTTP ${attachment_status}; expected 201" >&2
+  print_error_body "$attachment_response_file"
+  rm -f -- "$attachment_response_file" "$attachment_headers_file"
+  exit 1
 fi
+attachment_response=$(<"$attachment_response_file")
+rm -f -- "$attachment_response_file" "$attachment_headers_file"
+group1_attachment_id=$(
+  require_json_value \
+    "$attachment_response" \
+    ".attachments[] | select(.title == \"${GROUP1_ATTACHMENT_TITLE}\") | .id" \
+    "group 1 attachment ID"
+)
 
-echo "First user registered with token. Group token: $group_token"
+group2_item_payload=$(
+  jq -n \
+    --arg name "$GROUP2_ITEM_NAME" \
+    --arg description "$GROUP2_ITEM_DESCRIPTION" \
+    '{name: $name, description: $description, quantity: 1, tagIds: []}'
+)
+group2_item_response=$(api_request POST "/entities" 201 "$group2_item_payload" "$group2_owner_token")
+group2_item_id=$(require_json_value "$group2_item_response" '.id' "group 2 item ID")
 
-# Store user1 data
-jq --arg email "user1@homebox.test" \
-   --arg password "TestPassword123!" \
-   --arg token "$user1_token" \
-   --arg group "1" \
-   '.users += [{"email":$email,"password":$password,"token":$token,"group":$group}]' \
-   "$TEST_DATA_FILE" > "$TEST_DATA_FILE.tmp" && mv "$TEST_DATA_FILE.tmp" "$TEST_DATA_FILE"
+mkdir -p -- "$(dirname "$TEST_DATA_FILE")"
+test_data_temp=$(mktemp "${TEST_DATA_FILE}.XXXXXX")
+jq -n \
+  --arg password "$TEST_PASSWORD" \
+  --arg group1_owner_email "$GROUP1_OWNER_EMAIL" \
+  --arg group1_member_email "$GROUP1_MEMBER_EMAIL" \
+  --arg group2_owner_email "$GROUP2_OWNER_EMAIL" \
+  --arg group1_location_id "$group1_location_id" \
+  --arg group1_location_name "$GROUP1_LOCATION_NAME" \
+  --arg group1_location_description "$GROUP1_LOCATION_DESCRIPTION" \
+  --arg group1_tag_id "$group1_tag_id" \
+  --arg group1_tag_name "$GROUP1_TAG_NAME" \
+  --arg group1_tag_description "$GROUP1_TAG_DESCRIPTION" \
+  --arg group1_tag_color "$GROUP1_TAG_COLOR" \
+  --arg group1_item_id "$group1_item_id" \
+  --arg group1_item_name "$GROUP1_ITEM_NAME" \
+  --arg group1_item_description "$GROUP1_ITEM_DESCRIPTION" \
+  --arg group1_notifier_id "$group1_notifier_id" \
+  --arg group1_notifier_name "$GROUP1_NOTIFIER_NAME" \
+  --arg group1_notifier_url "$GROUP1_NOTIFIER_URL" \
+  --arg group1_attachment_id "$group1_attachment_id" \
+  --arg group1_attachment_title "$GROUP1_ATTACHMENT_TITLE" \
+  --arg group1_attachment_sha256 "$attachment_sha256" \
+  --arg group2_item_id "$group2_item_id" \
+  --arg group2_item_name "$GROUP2_ITEM_NAME" \
+  --arg group2_item_description "$GROUP2_ITEM_DESCRIPTION" \
+  '{
+    users: [
+      {
+        key: "group1Owner",
+        email: $group1_owner_email,
+        password: $password,
+        group: "group1",
+        role: "owner"
+      },
+      {
+        key: "group1Member",
+        email: $group1_member_email,
+        password: $password,
+        group: "group1",
+        role: "member"
+      },
+      {
+        key: "group2Owner",
+        email: $group2_owner_email,
+        password: $password,
+        group: "group2",
+        role: "owner"
+      }
+    ],
+    groups: {
+      group1: {
+        location: {
+          id: $group1_location_id,
+          name: $group1_location_name,
+          description: $group1_location_description
+        },
+        tag: {
+          id: $group1_tag_id,
+          name: $group1_tag_name,
+          description: $group1_tag_description,
+          color: $group1_tag_color
+        },
+        item: {
+          id: $group1_item_id,
+          name: $group1_item_name,
+          description: $group1_item_description,
+          quantity: 2,
+          locationId: $group1_location_id,
+          tagId: $group1_tag_id
+        },
+        notifier: {
+          id: $group1_notifier_id,
+          name: $group1_notifier_name,
+          url: $group1_notifier_url
+        },
+        attachment: {
+          id: $group1_attachment_id,
+          entityId: $group1_item_id,
+          title: $group1_attachment_title,
+          type: "attachment",
+          sha256: $group1_attachment_sha256
+        }
+      },
+      group2: {
+        item: {
+          id: $group2_item_id,
+          name: $group2_item_name,
+          description: $group2_item_description,
+          quantity: 1
+        }
+      }
+    }
+  }' >"$test_data_temp"
+mv -- "$test_data_temp" "$TEST_DATA_FILE"
 
-# Register 4 more users in the same group
-for i in {2..5}; do
-    echo "Registering user$i in group 1..."
-    user_response=$(register_user "user${i}@homebox.test" "User $i" "TestPassword123!" "$group_token")
-    user_token=$(echo "$user_response" | jq -r '.token // empty')
-    
-    if [ -z "$user_token" ]; then
-        echo "Failed to register user$i"
-        echo "Response: $user_response"
-    else
-        echo "user$i registered successfully"
-        # Store user data
-        jq --arg email "user${i}@homebox.test" \
-           --arg password "TestPassword123!" \
-           --arg token "$user_token" \
-           --arg group "1" \
-           '.users += [{"email":$email,"password":$password,"token":$token,"group":$group}]' \
-           "$TEST_DATA_FILE" > "$TEST_DATA_FILE.tmp" && mv "$TEST_DATA_FILE.tmp" "$TEST_DATA_FILE"
-    fi
-done
-
-echo "=== Step 2: Create second group with 2 users ==="
-
-# Register first user of second group
-user6_response=$(register_user "user6@homebox.test" "User Six" "TestPassword123!")
-user6_token=$(echo "$user6_response" | jq -r '.token // empty')
-group2_token=$(echo "$user6_response" | jq -r '.group.inviteToken // empty')
-
-if [ -z "$user6_token" ]; then
-    echo "Failed to register user6"
-    echo "Response: $user6_response"
-    exit 1
-fi
-
-echo "user6 registered with token. Group 2 token: $group2_token"
-
-# Store user6 data
-jq --arg email "user6@homebox.test" \
-   --arg password "TestPassword123!" \
-   --arg token "$user6_token" \
-   --arg group "2" \
-   '.users += [{"email":$email,"password":$password,"token":$token,"group":$group}]' \
-   "$TEST_DATA_FILE" > "$TEST_DATA_FILE.tmp" && mv "$TEST_DATA_FILE.tmp" "$TEST_DATA_FILE"
-
-# Register second user in group 2
-user7_response=$(register_user "user7@homebox.test" "User Seven" "TestPassword123!" "$group2_token")
-user7_token=$(echo "$user7_response" | jq -r '.token // empty')
-
-if [ -z "$user7_token" ]; then
-    echo "Failed to register user7"
-    echo "Response: $user7_response"
-else
-    echo "user7 registered successfully"
-    # Store user7 data
-    jq --arg email "user7@homebox.test" \
-       --arg password "TestPassword123!" \
-       --arg token "$user7_token" \
-       --arg group "2" \
-       '.users += [{"email":$email,"password":$password,"token":$token,"group":$group}]' \
-       "$TEST_DATA_FILE" > "$TEST_DATA_FILE.tmp" && mv "$TEST_DATA_FILE.tmp" "$TEST_DATA_FILE"
-fi
-
-echo "=== Step 3: Create locations for each group ==="
-
-# Create locations for group 1 (using user1's token)
-location1=$(create_location "$user1_token" "Living Room" "Main living area")
-location1_id=$(echo "$location1" | jq -r '.id // empty')
-echo "Created location: Living Room (ID: $location1_id)"
-
-location2=$(create_location "$user1_token" "Garage" "Storage and tools")
-location2_id=$(echo "$location2" | jq -r '.id // empty')
-echo "Created location: Garage (ID: $location2_id)"
-
-# Create location for group 2 (using user6's token)
-location3=$(create_location "$user6_token" "Home Office" "Work from home space")
-location3_id=$(echo "$location3" | jq -r '.id // empty')
-echo "Created location: Home Office (ID: $location3_id)"
-
-# Store locations
-jq --arg loc1 "$location1_id" \
-   --arg loc2 "$location2_id" \
-   --arg loc3 "$location3_id" \
-   '.locations = {"group1":[$loc1,$loc2],"group2":[$loc3]}' \
-   "$TEST_DATA_FILE" > "$TEST_DATA_FILE.tmp" && mv "$TEST_DATA_FILE.tmp" "$TEST_DATA_FILE"
-
-echo "=== Step 4: Create tags for each group ==="
-
-# Create tags for group 1
-tag1=$(create_tag "$user1_token" "Electronics" "Electronic devices")
-tag1_id=$(echo "$tag1" | jq -r '.id // empty')
-echo "Created tag: Electronics (ID: $tag1_id)"
-
-tag2=$(create_tag "$user1_token" "Important" "High priority items")
-tag2_id=$(echo "$tag2" | jq -r '.id // empty')
-echo "Created tag: Important (ID: $tag2_id)"
-
-# Create tag for group 2
-tag3=$(create_tag "$user6_token" "Work Equipment" "Items for work")
-tag3_id=$(echo "$tag3" | jq -r '.id // empty')
-echo "Created tag: Work Equipment (ID: $tag3_id)"
-
-# Store tags
-jq --arg tag1 "$tag1_id" \
-   --arg tag2 "$tag2_id" \
-   --arg tag3 "$tag3_id" \
-   '.tags = {"group1":[$tag1,$tag2],"group2":[$tag3]}' \
-   "$TEST_DATA_FILE" > "$TEST_DATA_FILE.tmp" && mv "$TEST_DATA_FILE.tmp" "$TEST_DATA_FILE"
-
-echo "=== Step 5: Create test notifier ==="
-
-# Create notifier for group 1
-notifier1=$(create_notifier "$user1_token" "TESTING" "https://example.com/webhook")
-notifier1_id=$(echo "$notifier1" | jq -r '.id // empty')
-echo "Created notifier: TESTING (ID: $notifier1_id)"
-
-# Store notifier
-jq --arg not1 "$notifier1_id" \
-   '.notifiers = {"group1":[$not1]}' \
-   "$TEST_DATA_FILE" > "$TEST_DATA_FILE.tmp" && mv "$TEST_DATA_FILE.tmp" "$TEST_DATA_FILE"
-
-echo "=== Step 6: Create items for all users ==="
-
-# Create items for users in group 1
-declare -A user_tokens
-user_tokens[1]=$user1_token
-user_tokens[2]=$(echo "$user1_token") # Users in same group share data, but we'll use user1 token
-user_tokens[3]=$(echo "$user1_token")
-user_tokens[4]=$(echo "$user1_token")
-user_tokens[5]=$(echo "$user1_token")
-
-# Items for group 1 users
-echo "Creating items for group 1..."
-item1=$(create_item "$user1_token" "Laptop Computer" "Dell XPS 15 for work" "$location1_id")
-item1_id=$(echo "$item1" | jq -r '.id // empty')
-echo "Created item: Laptop Computer (ID: $item1_id)"
-
-item2=$(create_item "$user1_token" "Power Drill" "DeWalt 20V cordless drill" "$location2_id")
-item2_id=$(echo "$item2" | jq -r '.id // empty')
-echo "Created item: Power Drill (ID: $item2_id)"
-
-item3=$(create_item "$user1_token" "TV Remote" "Samsung TV remote control" "$location1_id")
-item3_id=$(echo "$item3" | jq -r '.id // empty')
-echo "Created item: TV Remote (ID: $item3_id)"
-
-item4=$(create_item "$user1_token" "Tool Box" "Red metal tool box with tools" "$location2_id")
-item4_id=$(echo "$item4" | jq -r '.id // empty')
-echo "Created item: Tool Box (ID: $item4_id)"
-
-item5=$(create_item "$user1_token" "Coffee Maker" "Breville espresso machine" "$location1_id")
-item5_id=$(echo "$item5" | jq -r '.id // empty')
-echo "Created item: Coffee Maker (ID: $item5_id)"
-
-# Items for group 2 users
-echo "Creating items for group 2..."
-item6=$(create_item "$user6_token" "Monitor" "27 inch 4K monitor" "$location3_id")
-item6_id=$(echo "$item6" | jq -r '.id // empty')
-echo "Created item: Monitor (ID: $item6_id)"
-
-item7=$(create_item "$user6_token" "Keyboard" "Mechanical keyboard" "$location3_id")
-item7_id=$(echo "$item7" | jq -r '.id // empty')
-echo "Created item: Keyboard (ID: $item7_id)"
-
-# Store items
-jq --argjson group1_items "[\"$item1_id\",\"$item2_id\",\"$item3_id\",\"$item4_id\",\"$item5_id\"]" \
-   --argjson group2_items "[\"$item6_id\",\"$item7_id\"]" \
-   '.items = {"group1":$group1_items,"group2":$group2_items}' \
-   "$TEST_DATA_FILE" > "$TEST_DATA_FILE.tmp" && mv "$TEST_DATA_FILE.tmp" "$TEST_DATA_FILE"
-
-echo "=== Step 7: Add attachments to items ==="
-
-# Add attachments for group 1 items
-echo "Adding attachments to group 1 items..."
-attach_file_to_item "$user1_token" "$item1_id" "laptop-receipt.pdf"
-attach_file_to_item "$user1_token" "$item1_id" "laptop-warranty.pdf"
-attach_file_to_item "$user1_token" "$item2_id" "drill-manual.pdf"
-attach_file_to_item "$user1_token" "$item3_id" "remote-guide.pdf"
-attach_file_to_item "$user1_token" "$item4_id" "toolbox-inventory.txt"
-
-# Add attachments for group 2 items
-echo "Adding attachments to group 2 items..."
-attach_file_to_item "$user6_token" "$item6_id" "monitor-receipt.pdf"
-attach_file_to_item "$user6_token" "$item7_id" "keyboard-manual.pdf"
-
-echo "=== Test Data Creation Complete ==="
-echo "Test data file saved to: $TEST_DATA_FILE"
-echo "Summary:"
-echo "  - Users created: 7 (5 in group 1, 2 in group 2)"
-echo "  - Locations created: 3"
-echo "  - Tags created: 3"
-echo "  - Notifiers created: 1"
-echo "  - Items created: 7"
-echo "  - Attachments created: 7"
-
-# Display the test data file for verification
-echo ""
-echo "Test data:"
-cat "$TEST_DATA_FILE" | jq '.'
-
-exit 0
+echo "Pre-upgrade fixture created successfully"
+echo "  users: 3 across 2 isolated groups"
+echo "  group 1: 1 location, 1 tag, 1 item, 1 notifier, 1 attachment"
+echo "  group 2: 1 isolated item"
+echo "  verification metadata: ${TEST_DATA_FILE} (credentials and IDs only; no tokens)"
