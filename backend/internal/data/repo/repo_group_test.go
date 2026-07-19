@@ -179,24 +179,22 @@ func Test_Group_RemoveMemberAndReassignDefault(t *testing.T) {
 	assert.Equal(t, replacement.ID, *got.DefaultGroupID)
 }
 
-func Test_Group_RemoveMemberAndReassignDefault_RollsBackWithoutReplacement(t *testing.T) {
+func Test_Group_RemoveMemberAndReassignDefault_ClearsDefaultWithoutReplacement(t *testing.T) {
 	ctx := context.Background()
 	data := userFactory()
 	data.DefaultGroupID = tGroup.ID
 	member, err := tRepos.Users.Create(ctx, data)
 	require.NoError(t, err)
 
-	err = tRepos.Groups.RemoveMemberAndReassignDefault(ctx, member.ID, tGroup.ID)
-	require.Error(t, err)
+	require.NoError(t, tRepos.Groups.RemoveMemberAndReassignDefault(ctx, member.ID, tGroup.ID))
 
 	isMember, memberErr := tRepos.Groups.IsMember(ctx, tGroup.ID, member.ID)
 	require.NoError(t, memberErr)
-	assert.True(t, isMember, "membership deletion must roll back when default reassignment fails")
+	assert.False(t, isMember)
 
 	got, getErr := tClient.User.Get(ctx, member.ID)
 	require.NoError(t, getErr)
-	require.NotNil(t, got.DefaultGroupID)
-	assert.Equal(t, tGroup.ID, *got.DefaultGroupID)
+	assert.Nil(t, got.DefaultGroupID)
 }
 
 func Test_Group_Integrations_RoundTrip(t *testing.T) {

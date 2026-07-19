@@ -563,14 +563,16 @@ func (r *GroupRepository) RemoveMemberAndReassignDefault(ctx context.Context, us
 				ent.Asc(group.FieldID),
 			).
 			First(ctx)
-		if err != nil {
-			if ent.IsNotFound(err) {
-				return fmt.Errorf("cannot remove membership: user has no remaining group")
+		switch {
+		case err == nil:
+			if err := tx.User.UpdateOneID(userID).SetDefaultGroupID(replacement.ID).Exec(ctx); err != nil {
+				return err
 			}
-			return err
-		}
-
-		if err := tx.User.UpdateOneID(userID).SetDefaultGroupID(replacement.ID).Exec(ctx); err != nil {
+		case ent.IsNotFound(err):
+			if err := tx.User.UpdateOneID(userID).ClearDefaultGroupID().Exec(ctx); err != nil {
+				return err
+			}
+		default:
 			return err
 		}
 	}
