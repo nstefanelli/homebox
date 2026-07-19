@@ -17,6 +17,7 @@ func (tsk *BackgroundTask) Name() string {
 
 func NewTask(name string, interval time.Duration, fn func(context.Context)) *BackgroundTask {
 	return &BackgroundTask{
+		name:     name,
 		Interval: interval,
 		Fn:       fn,
 	}

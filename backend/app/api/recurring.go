@@ -49,28 +49,24 @@ func registerRecurringTasks(app *app, cfg *config.Config, runner *graceful.Runne
 		return nil
 	})
 
-	runner.AddPlugin(NewTask("purge-tokens", 24*time.Hour, func(ctx context.Context) {
+	// SQLite permits one writer at a time. Keep the startup sweep and its daily
+	// repeats in one task so independent cleanup deletes cannot race each other.
+	runner.AddPlugin(NewTask("daily-cleanup", 24*time.Hour, func(ctx context.Context) {
 		_, err := app.repos.AuthTokens.PurgeExpiredTokens(ctx)
 		if err != nil {
 			log.Error().Err(err).Msg("failed to purge expired tokens")
 		}
-	}))
 
-	runner.AddPlugin(NewTask("purge-password-reset-tokens", 24*time.Hour, func(ctx context.Context) {
-		_, err := app.repos.PasswordResetTokens.PurgeExpired(ctx)
+		_, err = app.repos.PasswordResetTokens.PurgeExpired(ctx)
 		if err != nil {
 			log.Error().Err(err).Msg("failed to purge expired password reset tokens")
 		}
-	}))
 
-	runner.AddPlugin(NewTask("purge-invitations", 24*time.Hour, func(ctx context.Context) {
-		_, err := app.repos.Groups.InvitationPurge(ctx)
+		_, err = app.repos.Groups.InvitationPurge(ctx)
 		if err != nil {
 			log.Error().Err(err).Msg("failed to purge expired invitations")
 		}
-	}))
 
-	runner.AddPlugin(NewTask("purge-stale-exports", 24*time.Hour, func(ctx context.Context) {
 		purgeStaleExports(ctx, app)
 	}))
 
