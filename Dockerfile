@@ -1,5 +1,5 @@
 # Node dependencies stage
-FROM public.ecr.aws/docker/library/node:22-alpine AS frontend-dependencies
+FROM public.ecr.aws/docker/library/node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2 AS frontend-dependencies
 WORKDIR /app
 
 # Keep the package manager identical to frontend/package.json.
@@ -10,7 +10,7 @@ COPY frontend/package.json frontend/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 
 # Build Nuxt (frontend) stage
-FROM public.ecr.aws/docker/library/node:22-alpine AS frontend-builder
+FROM public.ecr.aws/docker/library/node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2 AS frontend-builder
 WORKDIR /app
 
 # Keep the package manager identical to frontend/package.json.
@@ -22,7 +22,7 @@ COPY --from=frontend-dependencies /app/node_modules ./node_modules
 RUN pnpm build
 
 # Go dependencies stage
-FROM public.ecr.aws/docker/library/golang:1.26.5-alpine AS builder-dependencies
+FROM public.ecr.aws/docker/library/golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS builder-dependencies
 WORKDIR /go/src/app
 
 # Copy go.mod and go.sum for better caching
@@ -30,7 +30,7 @@ COPY ./backend/go.mod ./backend/go.sum ./
 RUN go mod download
 
 # Build API stage
-FROM public.ecr.aws/docker/library/golang:1.26.5-alpine AS builder
+FROM public.ecr.aws/docker/library/golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 ARG BUILD_TIME
@@ -66,7 +66,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     fi
 
 # Production stage
-FROM public.ecr.aws/docker/library/alpine:latest
+FROM public.ecr.aws/docker/library/alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 ARG TARGETARCH
 ENV HBOX_MODE=production
 ENV HBOX_STORAGE_CONN_STRING=file:///?no_tmp_dir=true
