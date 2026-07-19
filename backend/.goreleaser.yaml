@@ -1,11 +1,7 @@
 version: 2
 
-# This is an example .goreleaser.yml file with some sensible defaults.
-# Make sure to check the documentation at https://goreleaser.com
-before:
-  hooks:
-    # you may remove this if you don't need go generate
-    - go generate ./...
+# Generated Ent and API sources are reviewed and committed before release.
+# Release builds consume that exact tree instead of mutating it in a hook.
 builds:
   - main: ./app/api
     env:
@@ -25,7 +21,7 @@ builds:
       - -s -w
       - -X main.version={{.Version}}
       - -X main.commit={{.Commit}}
-      - -X main.date={{.Date}}
+      - -X main.buildTime={{.Date}}
     tags:
       - >-
         {{- if eq .Arch "riscv64" }}nodynamic

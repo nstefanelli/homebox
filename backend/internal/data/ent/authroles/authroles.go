@@ -24,9 +24,9 @@ const (
 	TokenTable = "auth_roles"
 	// TokenInverseTable is the table name for the AuthTokens entity.
 	// It exists in this package in order to avoid circular dependency with the "authtokens" package.
-	TokenInverseTable = "auth_tokens" // #nosec G101 -- generated Ent table identifier, not a credential.
+	TokenInverseTable = "auth_tokens"
 	// TokenColumn is the table column denoting the token relation/edge.
-	TokenColumn = "auth_tokens_roles" // #nosec G101 -- generated Ent column identifier, not a credential.
+	TokenColumn = "auth_tokens_roles"
 )
 
 // Columns holds all SQL columns for authroles fields.

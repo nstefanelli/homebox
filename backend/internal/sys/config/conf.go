@@ -245,7 +245,7 @@ func New(buildstr string, description string) (*Config, error) {
 	cfg := newConfig()
 	help, err := conf.Parse(prefix, &cfg)
 	if err != nil {
-		if errors.Is(err, conf.ErrHelpWanted) {
+		if errors.Is(err, conf.ErrHelpWanted) || errors.Is(err, conf.ErrVersionWanted) {
 			fmt.Println(help)
 			os.Exit(0)
 		}
@@ -274,7 +274,7 @@ func New(buildstr string, description string) (*Config, error) {
 	cfg = newConfig()
 	help, err = conf.Parse(prefix, &cfg, strictYAML{data: configData})
 	if err != nil {
-		if errors.Is(err, conf.ErrHelpWanted) {
+		if errors.Is(err, conf.ErrHelpWanted) || errors.Is(err, conf.ErrVersionWanted) {
 			fmt.Println(help)
 			os.Exit(0)
 		}

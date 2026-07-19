@@ -4,9 +4,6 @@ project_name: homebox
 
 # Architecture-specific config for amd64
 # Make sure to check the documentation at https://goreleaser.com
-before:
-  hooks:
-    - go generate ./...
 builds:
   - main: ./app/api
     env:
@@ -24,7 +21,7 @@ builds:
       - -s -w
       - -X main.version={{.Version}}
       - -X main.commit={{.Commit}}
-      - -X main.date={{.Date}}
+      - -X main.buildTime={{.Date}}
     tags:
       - >-
         {{- if eq .Arch "riscv64" }}nodynamic

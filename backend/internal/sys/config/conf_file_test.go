@@ -2,10 +2,34 @@ package config
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestNewPrintsVersionAndExitsSuccessfully(t *testing.T) {
+	const helperEnv = "HBOX_TEST_VERSION_HELPER"
+	if os.Getenv(helperEnv) == "1" {
+		os.Args = []string{"homebox-test", "--version"}
+		if _, err := New("test-build", "test description"); err != nil {
+			panic(err)
+		}
+		panic("New returned after --version")
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestNewPrintsVersionAndExitsSuccessfully$")
+	cmd.Env = append(os.Environ(), helperEnv+"=1")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("version subprocess error = %v, output = %q", err, output)
+	}
+
+	versionOutput := string(output)
+	if !strings.Contains(versionOutput, "Version: test-build") || !strings.Contains(versionOutput, "test description") {
+		t.Fatalf("version output = %q, want build and description", versionOutput)
+	}
+}
 
 func TestNewLoadsPositionalYAMLConfig(t *testing.T) {
 	configPath := writeConfigFile(t, `

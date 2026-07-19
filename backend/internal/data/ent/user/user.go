@@ -42,7 +42,7 @@ const (
 	// EdgeGroups holds the string denoting the groups edge name in mutations.
 	EdgeGroups = "groups"
 	// EdgeAuthTokens holds the string denoting the auth_tokens edge name in mutations.
-	EdgeAuthTokens = "auth_tokens" // #nosec G101 -- generated Ent edge identifier, not a credential.
+	EdgeAuthTokens = "auth_tokens"
 	// EdgePasswordResetTokens holds the string denoting the password_reset_tokens edge name in mutations.
 	EdgePasswordResetTokens = "password_reset_tokens"
 	// EdgeAPIKeys holds the string denoting the api_keys edge name in mutations.
@@ -59,12 +59,12 @@ const (
 	// It exists in this package in order to avoid circular dependency with the "group" package.
 	GroupsInverseTable = "groups"
 	// AuthTokensTable is the table that holds the auth_tokens relation/edge.
-	AuthTokensTable = "auth_tokens" // #nosec G101 -- generated Ent table identifier, not a credential.
+	AuthTokensTable = "auth_tokens"
 	// AuthTokensInverseTable is the table name for the AuthTokens entity.
 	// It exists in this package in order to avoid circular dependency with the "authtokens" package.
-	AuthTokensInverseTable = "auth_tokens" // #nosec G101 -- generated Ent table identifier, not a credential.
+	AuthTokensInverseTable = "auth_tokens"
 	// AuthTokensColumn is the table column denoting the auth_tokens relation/edge.
-	AuthTokensColumn = "user_auth_tokens" // #nosec G101 -- generated Ent column identifier, not a credential.
+	AuthTokensColumn = "user_auth_tokens"
 	// PasswordResetTokensTable is the table that holds the password_reset_tokens relation/edge.
 	PasswordResetTokensTable = "password_reset_tokens"
 	// PasswordResetTokensInverseTable is the table name for the PasswordResetTokens entity.
