@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -11,6 +12,8 @@ import (
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/entitytype"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/group"
 )
+
+var ErrContainerRequiresLocation = errors.New("container entity types must also be locations")
 
 type EntityTypeRepository struct {
 	db  *ent.Client
@@ -102,6 +105,9 @@ func (r *EntityTypeRepository) GetAll(ctx context.Context, gid uuid.UUID) ([]Ent
 
 // Create creates a new entity type for a group.
 func (r *EntityTypeRepository) Create(ctx context.Context, gid uuid.UUID, data EntityTypeCreate) (EntityTypeSummary, error) {
+	if data.IsContainer && !data.IsLocation {
+		return EntityTypeSummary{}, ErrContainerRequiresLocation
+	}
 	if data.DefaultTemplateID != nil {
 		if err := assertEntityTemplateInGroup(ctx, r.db.EntityTemplate, gid, *data.DefaultTemplateID); err != nil {
 			return EntityTypeSummary{}, err
@@ -130,6 +136,9 @@ func (r *EntityTypeRepository) Create(ctx context.Context, gid uuid.UUID, data E
 
 // Update updates an existing entity type.
 func (r *EntityTypeRepository) Update(ctx context.Context, gid uuid.UUID, data EntityTypeUpdate) (EntityTypeSummary, error) {
+	if data.IsContainer && !data.IsLocation {
+		return EntityTypeSummary{}, ErrContainerRequiresLocation
+	}
 	if err := assertEntityTypeInGroup(ctx, r.db.EntityType, gid, data.ID); err != nil {
 		return EntityTypeSummary{}, err
 	}

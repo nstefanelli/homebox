@@ -16,7 +16,11 @@ import (
 	_ "github.com/sysadminsmedia/homebox/backend/pkgs/cgofreesqlite"
 )
 
-const tenantIndexMigration = "20260718000000_add_tenant_query_indexes.sql"
+const (
+	tenantIndexMigration                = "20260718000000_add_tenant_query_indexes.sql"
+	tenantIndexPreviousMigrationVersion = int64(20260705130000)
+	tenantIndexTestGroupID              = "group-a"
+)
 
 var tenantQueryIndexes = []string{
 	"idx_entities_group_archived_name",
@@ -35,7 +39,6 @@ func TestTenantQueryIndexMigrationsStayInDialectParity(t *testing.T) {
 	t.Parallel()
 
 	for _, dialect := range []string{config.DriverSqlite3, config.DriverPostgres} {
-		dialect := dialect
 		t.Run(dialect, func(t *testing.T) {
 			t.Parallel()
 
@@ -80,43 +83,43 @@ func TestSQLiteTenantQueryIndexesImproveDominantPlans(t *testing.T) {
 		{
 			name:          "default entity list and tenant-scoped search candidate set",
 			query:         "SELECT id, name FROM entities WHERE group_entities = ? AND archived = 0 ORDER BY name LIMIT 100",
-			args:          []any{"group-a"},
+			args:          []any{tenantIndexTestGroupID},
 			expectedIndex: "idx_entities_group_archived_name",
 		},
 		{
 			name:          "entity hierarchy traversal",
 			query:         "SELECT id FROM entities WHERE group_entities = ? AND entity_children = ?",
-			args:          []any{"group-a", "parent-a"},
+			args:          []any{tenantIndexTestGroupID, "parent-a"},
 			expectedIndex: "idx_entities_group_parent",
 		},
 		{
 			name:          "tag list",
 			query:         "SELECT id, name FROM tags WHERE group_tags = ? ORDER BY name",
-			args:          []any{"group-a"},
+			args:          []any{tenantIndexTestGroupID},
 			expectedIndex: "idx_tags_group_name",
 		},
 		{
 			name:          "tag hierarchy traversal",
 			query:         "SELECT id FROM tags WHERE group_tags = ? AND tag_children = ?",
-			args:          []any{"group-a", "parent-a"},
+			args:          []any{tenantIndexTestGroupID, "parent-a"},
 			expectedIndex: "idx_tags_group_parent",
 		},
 		{
 			name:          "entity type list",
 			query:         "SELECT id, name FROM entity_types WHERE group_entity_types = ? ORDER BY name",
-			args:          []any{"group-a"},
+			args:          []any{tenantIndexTestGroupID},
 			expectedIndex: "idx_entity_types_group_name",
 		},
 		{
 			name:          "entity template list",
 			query:         "SELECT id, name FROM entity_templates WHERE group_entity_templates = ? ORDER BY name",
-			args:          []any{"group-a"},
+			args:          []any{tenantIndexTestGroupID},
 			expectedIndex: "idx_entity_templates_group_name",
 		},
 		{
 			name:          "group member traversal",
 			query:         "SELECT user_id FROM user_groups WHERE group_id = ?",
-			args:          []any{"group-a"},
+			args:          []any{tenantIndexTestGroupID},
 			expectedIndex: "idx_user_groups_group_user",
 		},
 		{
@@ -154,7 +157,11 @@ func TestSQLiteTenantQueryIndexesImproveDominantPlans(t *testing.T) {
 		assert.NotEqual(t, before[tc.name], after)
 	}
 
-	require.NoError(t, goose.Down(db, config.DriverSqlite3))
+	require.NoError(t, goose.DownTo(
+		db,
+		config.DriverSqlite3,
+		tenantIndexPreviousMigrationVersion,
+	))
 	for _, indexName := range tenantQueryIndexes {
 		assert.False(t, sqliteIndexExists(t, db, indexName), "down migration must drop %s", indexName)
 	}

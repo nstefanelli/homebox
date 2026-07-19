@@ -698,6 +698,10 @@ func init() {
 	EntityTemplatesTable.ForeignKeys[1].RefTable = GroupsTable
 	EntityTypesTable.ForeignKeys[0].RefTable = EntityTemplatesTable
 	EntityTypesTable.ForeignKeys[1].RefTable = GroupsTable
+	EntityTypesTable.Annotation = &entsql.Annotation{}
+	EntityTypesTable.Annotation.Checks = map[string]string{
+		"entity_types_container_requires_location": "NOT is_container OR is_location",
+	}
 	ExportsTable.ForeignKeys[0].RefTable = GroupsTable
 	GroupInvitationTokensTable.ForeignKeys[0].RefTable = GroupsTable
 	MaintenanceEntriesTable.ForeignKeys[0].RefTable = EntitiesTable

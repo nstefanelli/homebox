@@ -3,6 +3,7 @@ package schema
 import (
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/entsql"
+	entschema "entgo.io/ent/schema"
 	"entgo.io/ent/schema/edge"
 	"entgo.io/ent/schema/field"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/schema/mixins"
@@ -18,6 +19,14 @@ func (EntityType) Mixin() []ent.Mixin {
 		mixins.BaseMixin{},
 		mixins.DetailsMixin{},
 		GroupMixin{ref: "entity_types"},
+	}
+}
+
+func (EntityType) Annotations() []entschema.Annotation {
+	return []entschema.Annotation{
+		entsql.Checks(map[string]string{
+			"entity_types_container_requires_location": "NOT is_container OR is_location",
+		}),
 	}
 }
 
