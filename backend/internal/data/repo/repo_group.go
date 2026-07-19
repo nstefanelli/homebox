@@ -127,7 +127,7 @@ func (r *GroupRepository) GetAllGroups(ctx context.Context, userID uuid.UUID) ([
 }
 
 func (r *GroupRepository) StatsLocationsByPurchasePrice(ctx context.Context, gid uuid.UUID) ([]TotalsByOrganizer, error) {
-	var v []TotalsByOrganizer
+	v := make([]TotalsByOrganizer, 0)
 
 	// Attribute every qualifying descendant item to each location in its
 	// ancestor chain. DISTINCT makes legacy cycles non-inflating and the depth
@@ -193,7 +193,7 @@ func (r *GroupRepository) StatsLocationsByPurchasePrice(ctx context.Context, gid
 }
 
 func (r *GroupRepository) StatsTagsByPurchasePrice(ctx context.Context, gid uuid.UUID) ([]TotalsByOrganizer, error) {
-	var v []TotalsByOrganizer
+	v := make([]TotalsByOrganizer, 0)
 
 	q := `
 		SELECT t.id, t.name,

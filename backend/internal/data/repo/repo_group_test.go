@@ -117,6 +117,16 @@ func Test_Group_InventoryValuationSemantics(t *testing.T) {
 	require.NoError(t, err)
 	itemType, err := tRepos.EntityTypes.GetDefault(ctx, inventoryGroup.ID, false)
 	require.NoError(t, err)
+
+	emptyLocations, err := tRepos.Groups.StatsLocationsByPurchasePrice(ctx, inventoryGroup.ID)
+	require.NoError(t, err)
+	assert.NotNil(t, emptyLocations, "empty location statistics must serialize as [] rather than null")
+	assert.Empty(t, emptyLocations)
+	emptyTags, err := tRepos.Groups.StatsTagsByPurchasePrice(ctx, inventoryGroup.ID)
+	require.NoError(t, err)
+	assert.NotNil(t, emptyTags, "empty tag statistics must serialize as [] rather than null")
+	assert.Empty(t, emptyTags)
+
 	inventoryTag, err := tRepos.Tags.Create(ctx, inventoryGroup.ID, TagCreate{Name: "valued"})
 	require.NoError(t, err)
 
