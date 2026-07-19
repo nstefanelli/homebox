@@ -101,6 +101,52 @@ func TestNewRejectsInvalidYAML(t *testing.T) {
 	}
 }
 
+func TestNewRejectsUnknownTopLevelYAMLField(t *testing.T) {
+	configPath := writeConfigFile(t, "unknown_setting: true\n")
+	setArgs(t, configPath)
+
+	_, err := New("test-build", "test description")
+	if err == nil {
+		t.Fatal("New() error = nil, want unknown top-level field error")
+	}
+	if !strings.Contains(err.Error(), "field unknown_setting not found") {
+		t.Fatalf("New() error = %q, want unknown top-level field detail", err)
+	}
+}
+
+func TestNewRejectsUnknownNestedYAMLField(t *testing.T) {
+	configPath := writeConfigFile(t, `
+web:
+  unknown_setting: true
+`)
+	setArgs(t, configPath)
+
+	_, err := New("test-build", "test description")
+	if err == nil {
+		t.Fatal("New() error = nil, want unknown nested field error")
+	}
+	if !strings.Contains(err.Error(), "field unknown_setting not found") {
+		t.Fatalf("New() error = %q, want unknown nested field detail", err)
+	}
+}
+
+func TestNewRejectsMultipleYAMLDocuments(t *testing.T) {
+	configPath := writeConfigFile(t, `
+mode: production
+---
+mode: development
+`)
+	setArgs(t, configPath)
+
+	_, err := New("test-build", "test description")
+	if err == nil {
+		t.Fatal("New() error = nil, want multiple-document error")
+	}
+	if !strings.Contains(err.Error(), "multiple YAML documents are not supported") {
+		t.Fatalf("New() error = %q, want multiple-document detail", err)
+	}
+}
+
 func writeConfigFile(t *testing.T, contents string) string {
 	t.Helper()
 

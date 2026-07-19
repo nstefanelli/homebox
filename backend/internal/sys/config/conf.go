@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/ardanlabs/conf/v3"
-	confyaml "github.com/ardanlabs/conf/v3/yaml"
 )
 
 // redactedValue is the sentinel substituted for any sensitive field when the
@@ -271,7 +270,7 @@ func New(buildstr string, description string) (*Config, error) {
 	// Rebuild the config so YAML is applied before defaults, environment, and
 	// command-line flags. This preserves conf's documented override order.
 	cfg = newConfig()
-	help, err = conf.Parse(prefix, &cfg, confyaml.WithData(configData))
+	help, err = conf.Parse(prefix, &cfg, strictYAML{data: configData})
 	if err != nil {
 		if errors.Is(err, conf.ErrHelpWanted) {
 			fmt.Println(help)
