@@ -1,9 +1,11 @@
 {
     "collection": {
+        "actions": "Actions",
         "copy_invite": "Copy Invite Link",
         "create_invite": "Create Invite",
         "delete_collection": "Delete Collection",
         "delete_confirm": "Are you sure you want to delete this collection? This action cannot be undone.",
+        "delete_invite": "Delete invite",
         "deleted_collection": "Collection deleted.",
         "expires_at": "Expires",
         "invite_token": "Token",
@@ -22,6 +24,7 @@
             "member": "Member",
             "name": "Name",
             "owner": "Owner",
+            "remove": "Remove member",
             "remove_confirm": "Are you sure you want to remove this member?",
             "removed": "Member removed",
             "role": "Role"
@@ -33,6 +36,8 @@
             "title": "No Collections Found"
         },
         "no_invites": "No invites",
+        "owner_only": "Only the collection owner can access this section.",
+        "permissions_load_failed": "Couldn't verify collection permissions. Refresh and try again.",
         "remaining_uses": "Remaining uses",
         "tabs": {
             "entity_types": "Entity Types",
@@ -893,6 +898,7 @@
             "provider_inherit": "Inherit server default",
             "provider_label": "Provider",
             "provider_openai_compatible": "OpenAI-compatible",
+            "retry": "Retry",
             "save": "Save Integrations",
             "secret_saved_placeholder": "•••••••• saved — type to replace",
             "subtitle": "Configure AI photo analysis and barcode lookup for this collection.",

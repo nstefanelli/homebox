@@ -11,6 +11,7 @@
   import { DialogID } from "@/components/ui/dialog-provider/utils";
   import CopyText from "@/components/global/CopyText.vue";
   import type { Group, GroupInvitation } from "~~/lib/api/types/data-contracts";
+  import { useIntegrationsStore } from "~~/stores/integrations";
 
   definePageMeta({
     middleware: ["auth"],
@@ -26,9 +27,11 @@
   const api = useUserApi();
   const { openDialog } = useDialog();
   const confirm = useConfirm();
+  const integrationsStore = useIntegrationsStore();
   const localInvites = ref<Invitation[]>([]);
   const baseUrl = `${window.location.protocol}//${window.location.host}`;
   const loading = ref(true);
+  const ownershipLoadFailed = ref(false);
   const invites = ref<Invitation[]>([]);
   const error = ref<string | null>(null);
   const removing = ref<Record<string, boolean>>({});
@@ -60,7 +63,6 @@
         toast.error(msg);
       } else {
         invites.value = (res.data || []) as Invitation[];
-        console.log("Loaded invites:", invites.value);
       }
     } catch (e) {
       const msg = (e as Error).message ?? String(e);
@@ -73,11 +75,11 @@
   };
 
   const handleOpenCreate = () => {
+    if (!integrationsStore.isOwner) return;
+
     openDialog(DialogID.CreateGroupInvite, {
       onClose: (result?: InvitationResult) => {
         if (!result) return;
-
-        console.log("Created invite:", result);
 
         const localInvite: Invitation = {
           ...(result as InvitationResult),
@@ -89,7 +91,7 @@
   };
 
   const handleDelete = async (inv: Invitation) => {
-    if (!inv?.id) return;
+    if (!integrationsStore.isOwner || !inv?.id) return;
 
     const result = await confirm.open(t("collection.invites_delete_confirm"));
     if (result.isCanceled) {
@@ -116,14 +118,35 @@
     }
   };
 
+  const initializeInvites = async () => {
+    loading.value = true;
+    ownershipLoadFailed.value = false;
+
+    try {
+      await integrationsStore.ensureFetched();
+    } catch {
+      ownershipLoadFailed.value = true;
+      loading.value = false;
+      toast.error(t("collection.permissions_load_failed"));
+      return;
+    }
+
+    if (!integrationsStore.isOwner) {
+      loading.value = false;
+      return;
+    }
+
+    await loadInvites();
+  };
+
   onMounted(() => {
-    loadInvites();
+    void initializeInvites();
   });
 </script>
 
 <template>
   <div class="space-y-4">
-    <Teleport to="#collection-header-actions" defer>
+    <Teleport v-if="integrationsStore.isOwner" to="#collection-header-actions" defer>
       <TooltipProvider :delay-duration="0">
         <Tooltip>
           <TooltipTrigger as-child>
@@ -149,6 +172,17 @@
       {{ $t("global.loading") }}
     </div>
 
+    <div v-else-if="ownershipLoadFailed" class="flex items-center gap-2 rounded-md border bg-card p-4 text-sm">
+      <span class="text-destructive">{{ $t("collection.permissions_load_failed") }}</span>
+      <Button variant="outline" size="sm" @click="initializeInvites">
+        {{ $t("profile.integrations.retry") }}
+      </Button>
+    </div>
+
+    <div v-else-if="!integrationsStore.isOwner" class="rounded-md border bg-card p-4 text-sm text-muted-foreground">
+      {{ $t("collection.owner_only") }}
+    </div>
+
     <div v-else class="space-y-3">
       <div v-if="localInvites.length" class="rounded-md bg-secondary p-3 text-xs font-bold text-secondary-foreground">
         {{ $t("collection.invite_token_warning") }}
@@ -165,7 +199,9 @@
               <TableHead>{{ $t("collection.invite_token") }}</TableHead>
               <TableHead>{{ $t("collection.expires_at") }}</TableHead>
               <TableHead>{{ $t("collection.remaining_uses") }}</TableHead>
-              <TableHead class="w-40 text-right"></TableHead>
+              <TableHead class="w-40 text-right">
+                <span class="sr-only">{{ $t("collection.actions") }}</span>
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -200,7 +236,7 @@
                         <Button
                           variant="destructive"
                           size="icon"
-                          :aria-label="$t('global.delete')"
+                          :aria-label="$t('collection.delete_invite')"
                           :disabled="removing[inv.id]"
                           @click="handleDelete(inv)"
                         >
@@ -208,7 +244,7 @@
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent>
-                        {{ $t("global.delete") }}
+                        {{ $t("collection.delete_invite") }}
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
