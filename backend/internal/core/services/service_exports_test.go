@@ -17,6 +17,8 @@ import (
 
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/attachment"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/entity"
+	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/entityfield"
+	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/entitytype"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/group"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/predicate"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/tag"
@@ -354,6 +356,111 @@ func TestCSVImportRejectsSelfParentRef(t *testing.T) {
 	_, err = tSvc.Entities.CsvImport(ctx, dst.ID, strings.NewReader(csvData))
 	require.Error(t, err)
 	assert.ErrorContains(t, err, `entity "self-ref" cannot be its own parent`)
+}
+
+type csvImportGroupCounts struct {
+	Entities  int
+	Locations int
+	Tags      int
+	Types     int
+	Fields    int
+}
+
+func getCSVImportGroupCounts(t *testing.T, gid uuid.UUID) csvImportGroupCounts {
+	t.Helper()
+	ctx := context.Background()
+
+	entities, err := tClient.Entity.Query().
+		Where(entity.HasGroupWith(group.ID(gid))).
+		Count(ctx)
+	require.NoError(t, err)
+	locations, err := tClient.Entity.Query().
+		Where(
+			entity.HasGroupWith(group.ID(gid)),
+			entity.HasEntityTypeWith(
+				entitytype.IsLocation(true),
+				entitytype.HasGroupWith(group.ID(gid)),
+			),
+		).
+		Count(ctx)
+	require.NoError(t, err)
+	tags, err := tClient.Tag.Query().
+		Where(tag.HasGroupWith(group.ID(gid))).
+		Count(ctx)
+	require.NoError(t, err)
+	types, err := tClient.EntityType.Query().
+		Where(entitytype.HasGroupWith(group.ID(gid))).
+		Count(ctx)
+	require.NoError(t, err)
+	fields, err := tClient.EntityField.Query().
+		Where(entityfield.HasEntityWith(entity.HasGroupWith(group.ID(gid)))).
+		Count(ctx)
+	require.NoError(t, err)
+
+	return csvImportGroupCounts{
+		Entities:  entities,
+		Locations: locations,
+		Tags:      tags,
+		Types:     types,
+		Fields:    fields,
+	}
+}
+
+func TestCSVImportRollsBackLateParentReferenceFailure(t *testing.T) {
+	ctx := context.Background()
+	dst, err := tRepos.Groups.GroupCreate(ctx, "csv-parent-rollback-"+fk.Str(4), uuid.Nil)
+	require.NoError(t, err)
+	before := getCSVImportGroupCounts(t, dst.ID)
+
+	csvData := strings.Join([]string{
+		"HB.import_ref,HB.parent_import_ref,HB.location,HB.tags,HB.name",
+		"first-ref,,Rollback Room/Box,rollback-tag-a,First",
+		"child-ref,missing-parent,Rollback Room/Box,rollback-tag-b,Child",
+		"",
+	}, "\n")
+
+	imported, err := tSvc.Entities.CsvImport(ctx, dst.ID, strings.NewReader(csvData))
+	require.Error(t, err)
+	assert.Zero(t, imported)
+	require.ErrorContains(t, err, `error resolving parent entity with ref "missing-parent"`)
+	assert.Equal(t, before, getCSVImportGroupCounts(t, dst.ID),
+		"late parent resolution must roll back row entities, locations, tags, types, and fields")
+}
+
+func TestCSVImportRollsBackFieldFailureAfterCreatingRelatedRows(t *testing.T) {
+	ctx := context.Background()
+	dst, err := tRepos.Groups.GroupCreate(ctx, "csv-field-rollback-"+fk.Str(4), uuid.Nil)
+	require.NoError(t, err)
+	before := getCSVImportGroupCounts(t, dst.ID)
+
+	_, err = tClient.Sql().ExecContext(ctx, `
+		CREATE TRIGGER csv_import_field_failure
+		BEFORE INSERT ON entity_fields
+		WHEN NEW.name = 'force-rollback'
+		BEGIN
+			SELECT RAISE(ABORT, 'forced CSV field failure');
+		END;
+	`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = tClient.Sql().ExecContext(
+			context.Background(),
+			`DROP TRIGGER IF EXISTS csv_import_field_failure`,
+		)
+	})
+
+	csvData := strings.Join([]string{
+		"HB.import_ref,HB.location,HB.tags,HB.name,HB.field.force-rollback",
+		"field-ref,Rollback House/Shelf,rollback-field-tag,Field failure,boom",
+		"",
+	}, "\n")
+
+	imported, err := tSvc.Entities.CsvImport(ctx, dst.ID, strings.NewReader(csvData))
+	require.Error(t, err)
+	assert.Zero(t, imported)
+	require.ErrorContains(t, err, "forced CSV field failure")
+	assert.Equal(t, before, getCSVImportGroupCounts(t, dst.ID),
+		"a field write failure must roll back row entities, locations, tags, types, and fields")
 }
 
 // TestIsGroupReadyForImport_BlocksUserCreatedRows asserts that the import

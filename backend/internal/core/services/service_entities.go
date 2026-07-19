@@ -3,9 +3,7 @@ package services
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
-	"strings"
 
 	"github.com/google/uuid"
 	"github.com/samber/lo"
@@ -168,17 +166,16 @@ func (svc *EntityService) EnsureImportRef(ctx context.Context, gid uuid.UUID) (i
 	return finished, nil
 }
 
-func serializeLocation[T ~[]string](location T) string {
-	return strings.Join(location, "/")
-}
-
 // CsvImport imports entities from a CSV file using the standard defined format.
 //
 // CsvImport applies the following rules/operations
 //
 //  1. If the entity does not exist, it is created.
-//  2. If the entity has an ImportRef and it exists it is skipped
+//  2. If the entity has an ImportRef and it exists it is updated.
 //  3. Locations and Tags are created if they do not exist.
+//
+// All writes are committed atomically. A failure in any row or in the final
+// parent-reference resolution rolls back the complete import.
 func (svc *EntityService) CsvImport(ctx context.Context, gid uuid.UUID, data io.Reader) (int, error) {
 	ctx, span := entityServiceTracer().Start(ctx, "service.EntityService.CsvImport",
 		trace.WithAttributes(attribute.String("group.id", gid.String())))
@@ -198,311 +195,62 @@ func (svc *EntityService) CsvImport(ctx context.Context, gid uuid.UUID, data io.
 	readSpan.End()
 	span.SetAttributes(attribute.Int("rows.count", len(sheet.Rows)))
 
-	// ========================================
-	// Tags
-
-	var tagMap map[string]uuid.UUID
-	{
-		tagsCtx, tagsSpan := entityServiceTracer().Start(ctx, "service.EntityService.CsvImport.loadTags")
-		tags, err := svc.repo.Tags.GetAll(tagsCtx, gid)
-		if err != nil {
-			recordServiceSpanError(tagsSpan, err)
-			tagsSpan.End()
-			recordServiceSpanError(span, err)
-			return 0, err
-		}
-
-		tagMap = lo.SliceToMap(tags, func(tag repo.TagSummary) (string, uuid.UUID) {
-			return tag.Name, tag.ID
-		})
-		tagsSpan.SetAttributes(attribute.Int("tags.count", len(tags)))
-		tagsSpan.End()
-	}
-
-	// ========================================
-	// Locations
-
-	locationMap := make(map[string]uuid.UUID)
-	{
-		locsCtx, locsSpan := entityServiceTracer().Start(ctx, "service.EntityService.CsvImport.loadLocations")
-		locations, err := svc.repo.Entities.Tree(locsCtx, gid, repo.TreeQuery{WithItems: false})
-		if err != nil {
-			recordServiceSpanError(locsSpan, err)
-			locsSpan.End()
-			recordServiceSpanError(span, err)
-			return 0, err
-		}
-
-		// Traverse the tree and build a map of location full paths to IDs
-		// where the full path is the location name joined by slashes.
-		var traverse func(location *repo.TreeItem, path []string)
-		traverse = func(location *repo.TreeItem, path []string) {
-			path = append(path, location.Name)
-
-			locationMap[serializeLocation(path)] = location.ID
-
-			for _, child := range location.Children {
-				traverse(child, path)
+	rows := lo.Map(sheet.Rows, func(row reporting.ExportCSVRow, _ int) repo.CSVImportRow {
+		fields := lo.Map(row.Fields, func(field reporting.ExportItemFields, _ int) repo.EntityFieldData {
+			return repo.EntityFieldData{
+				Name:      field.Name,
+				Type:      "text",
+				TextValue: field.Value,
 			}
+		})
+
+		return repo.CSVImportRow{
+			ImportRef:       row.ImportRef,
+			ParentImportRef: row.ParentImportRef,
+			Location:        append([]string(nil), row.Location...),
+			TagNames:        append([]string(nil), row.TagStr...),
+			Entity: repo.EntityUpdate{
+				Name:        row.Name,
+				Description: row.Description,
+				AssetID:     row.AssetID,
+				Insured:     row.Insured,
+				Quantity:    row.Quantity,
+				Archived:    row.Archived,
+
+				PurchasePrice: row.PurchasePrice,
+				PurchaseFrom:  row.PurchaseFrom,
+				PurchaseDate:  row.PurchaseDate,
+
+				Manufacturer: row.Manufacturer,
+				ModelNumber:  row.ModelNumber,
+				SerialNumber: row.SerialNumber,
+
+				LifetimeWarranty: row.LifetimeWarranty,
+				WarrantyExpires:  row.WarrantyExpires,
+				WarrantyDetails:  row.WarrantyDetails,
+
+				SoldTo:    row.SoldTo,
+				SoldDate:  row.SoldDate,
+				SoldPrice: row.SoldPrice,
+				SoldNotes: row.SoldNotes,
+
+				Notes:  row.Notes,
+				Fields: fields,
+			},
 		}
+	})
 
-		for _, location := range locations {
-			traverse(&location, []string{})
-		}
-		locsSpan.SetAttributes(
-			attribute.Int("locations.tree.count", len(locations)),
-			attribute.Int("locations.flat.count", len(locationMap)),
-		)
-		locsSpan.End()
-	}
-
-	// ========================================
-	// Import entities
-
-	// Asset ID Pre-Check
-	highestAID := repo.AssetID(-1)
-	if svc.autoIncrementAssetID {
-		highestAID, err = svc.repo.Entities.GetHighestAssetID(ctx, gid)
-		if err != nil {
-			recordServiceSpanError(span, err)
-			return 0, err
-		}
-	}
-
-	importCtx, importSpan := entityServiceTracer().Start(ctx, "service.EntityService.CsvImport.importRows",
+	importCtx, importSpan := entityServiceTracer().Start(ctx, "service.EntityService.CsvImport.transaction",
 		trace.WithAttributes(attribute.Int("rows.count", len(sheet.Rows))))
 	defer importSpan.End()
 
-	finished := 0
-
-	for i := range sheet.Rows {
-		row := sheet.Rows[i]
-
-		rowCtx, rowSpan := entityServiceTracer().Start(importCtx, "service.EntityService.CsvImport.row",
-			trace.WithAttributes(
-				attribute.Int("row.index", i),
-				attribute.String("row.name", row.Name),
-				attribute.String("row.import_ref", row.ImportRef),
-				attribute.Int("row.tags.count", len(row.TagStr)),
-				attribute.Int("row.location.depth", len(row.Location)),
-			))
-		ctx := rowCtx
-
-		createRequired := true
-
-		if row.ImportRef != "" {
-			exists, err := svc.repo.Entities.CheckRef(ctx, gid, row.ImportRef)
-			if err != nil {
-				wrapped := fmt.Errorf("error checking for existing entity with ref %q: %w", row.ImportRef, err)
-				recordServiceSpanError(rowSpan, wrapped)
-				rowSpan.End()
-				recordServiceSpanError(importSpan, wrapped)
-				recordServiceSpanError(span, wrapped)
-				return 0, wrapped
-			}
-
-			if exists {
-				createRequired = false
-			}
-		}
-		rowSpan.SetAttributes(attribute.Bool("row.create_required", createRequired))
-
-		// ========================================
-		// Pre-Create tags as necessary
-		tagIds := make([]uuid.UUID, len(row.TagStr))
-
-		if len(row.TagStr) > 0 {
-			tagsCtx, tagsSpan := entityServiceTracer().Start(rowCtx, "service.EntityService.CsvImport.row.tags",
-				trace.WithAttributes(attribute.Int("tags.count", len(row.TagStr))))
-			tagsCreated := 0
-			for j := range row.TagStr {
-				tag := row.TagStr[j]
-
-				id, ok := tagMap[tag]
-				if !ok {
-					newTag, err := svc.repo.Tags.Create(tagsCtx, gid, repo.TagCreate{Name: tag})
-					if err != nil {
-						recordServiceSpanError(tagsSpan, err)
-						tagsSpan.End()
-						recordServiceSpanError(rowSpan, err)
-						rowSpan.End()
-						recordServiceSpanError(importSpan, err)
-						recordServiceSpanError(span, err)
-						return 0, err
-					}
-					id = newTag.ID
-					tagsCreated++
-				}
-
-				tagIds[j] = id
-				tagMap[tag] = id
-			}
-			tagsSpan.SetAttributes(attribute.Int("tags.created.count", tagsCreated))
-			tagsSpan.End()
-		}
-
-		// ========================================
-		// Pre-Create Locations as necessary
-		path := serializeLocation(row.Location)
-
-		locationID, ok := locationMap[path]
-		if !ok {
-			locsCtx, locsSpan := entityServiceTracer().Start(rowCtx, "service.EntityService.CsvImport.row.locations",
-				trace.WithAttributes(attribute.Int("location.depth", len(row.Location))))
-			locsCreated := 0
-			paths := []string{}
-			for i, pathElement := range row.Location {
-				paths = append(paths, pathElement)
-				path := serializeLocation(paths)
-
-				locationID, ok = locationMap[path]
-				if !ok {
-					parentID := uuid.Nil
-
-					if i > 0 {
-						parentPath := serializeLocation(row.Location[:i])
-						parentID = locationMap[parentPath]
-					}
-
-					newLocation, err := svc.repo.Entities.CreateContainer(locsCtx, gid, repo.EntityCreate{
-						ParentID: parentID,
-						Name:     pathElement,
-					})
-					if err != nil {
-						recordServiceSpanError(locsSpan, err)
-						locsSpan.End()
-						recordServiceSpanError(rowSpan, err)
-						rowSpan.End()
-						recordServiceSpanError(importSpan, err)
-						recordServiceSpanError(span, err)
-						return 0, err
-					}
-					locationID = newLocation.ID
-					locsCreated++
-				}
-
-				locationMap[path] = locationID
-			}
-			locsSpan.SetAttributes(attribute.Int("locations.created.count", locsCreated))
-			locsSpan.End()
-
-			locationID, ok = locationMap[path]
-			if !ok {
-				err := errors.New("failed to create location")
-				recordServiceSpanError(rowSpan, err)
-				rowSpan.End()
-				recordServiceSpanError(importSpan, err)
-				recordServiceSpanError(span, err)
-				return 0, err
-			}
-		}
-
-		var effAID repo.AssetID
-		if svc.autoIncrementAssetID && row.AssetID.Nil() {
-			effAID = highestAID + 1
-			highestAID++
-		} else {
-			effAID = row.AssetID
-		}
-
-		// ========================================
-		// Create Entity
-		var entity repo.EntityOut
-		switch {
-		case createRequired:
-			newEntity := repo.EntityCreate{
-				ImportRef:   row.ImportRef,
-				Name:        row.Name,
-				Description: row.Description,
-				AssetID:     effAID,
-				ParentID:    locationID,
-				TagIDs:      tagIds,
-			}
-
-			entity, err = svc.repo.Entities.Create(ctx, gid, newEntity)
-			if err != nil {
-				recordServiceSpanError(rowSpan, err)
-				rowSpan.End()
-				recordServiceSpanError(importSpan, err)
-				recordServiceSpanError(span, err)
-				return 0, err
-			}
-		default:
-			entity, err = svc.repo.Entities.GetByRef(ctx, gid, row.ImportRef)
-			if err != nil {
-				recordServiceSpanError(rowSpan, err)
-				rowSpan.End()
-				recordServiceSpanError(importSpan, err)
-				recordServiceSpanError(span, err)
-				return 0, err
-			}
-		}
-
-		if entity.ID == uuid.Nil {
-			wrapped := fmt.Errorf("entity ID is nil for entity with import ref %q", row.ImportRef)
-			recordServiceSpanError(rowSpan, wrapped)
-			rowSpan.End()
-			recordServiceSpanError(importSpan, wrapped)
-			recordServiceSpanError(span, wrapped)
-			return 0, wrapped
-		}
-		rowSpan.SetAttributes(attribute.String("entity.id", entity.ID.String()))
-
-		fields := lo.Map(row.Fields, func(f reporting.ExportItemFields, _ int) repo.EntityFieldData {
-			return repo.EntityFieldData{
-				Name:      f.Name,
-				Type:      "text",
-				TextValue: f.Value,
-			}
-		})
-
-		updateEntity := repo.EntityUpdate{
-			ID:       entity.ID,
-			TagIDs:   tagIds,
-			ParentID: locationID,
-
-			Name:        row.Name,
-			Description: row.Description,
-			AssetID:     effAID,
-			Insured:     row.Insured,
-			Quantity:    row.Quantity,
-			Archived:    row.Archived,
-
-			PurchasePrice: row.PurchasePrice,
-			PurchaseFrom:  row.PurchaseFrom,
-			PurchaseDate:  row.PurchaseDate,
-
-			Manufacturer: row.Manufacturer,
-			ModelNumber:  row.ModelNumber,
-			SerialNumber: row.SerialNumber,
-
-			LifetimeWarranty: row.LifetimeWarranty,
-			WarrantyExpires:  row.WarrantyExpires,
-			WarrantyDetails:  row.WarrantyDetails,
-
-			SoldTo:    row.SoldTo,
-			SoldDate:  row.SoldDate,
-			SoldPrice: row.SoldPrice,
-			SoldNotes: row.SoldNotes,
-
-			Notes:  row.Notes,
-			Fields: fields,
-		}
-
-		_, err = svc.repo.Entities.UpdateByGroup(ctx, gid, updateEntity)
-		if err != nil {
-			recordServiceSpanError(rowSpan, err)
-			rowSpan.End()
-			recordServiceSpanError(importSpan, err)
-			recordServiceSpanError(span, err)
-			return 0, err
-		}
-
-		finished++
-		rowSpan.End()
-	}
-
-	if err := svc.patchCSVParentRefs(ctx, gid, sheet.Rows); err != nil {
+	finished, err := svc.repo.Entities.ImportCSV(
+		importCtx,
+		gid,
+		rows,
+		svc.autoIncrementAssetID,
+	)
+	if err != nil {
 		recordServiceSpanError(importSpan, err)
 		recordServiceSpanError(span, err)
 		return 0, err
@@ -511,35 +259,6 @@ func (svc *EntityService) CsvImport(ctx context.Context, gid uuid.UUID, data io.
 	importSpan.SetAttributes(attribute.Int("rows.imported.count", finished))
 	span.SetAttributes(attribute.Int("rows.imported.count", finished))
 	return finished, nil
-}
-
-func (svc *EntityService) patchCSVParentRefs(ctx context.Context, gid uuid.UUID, rows []reporting.ExportCSVRow) error {
-	for i := range rows {
-		row := rows[i]
-		if row.ImportRef == "" || row.ParentImportRef == "" {
-			continue
-		}
-
-		child, err := svc.repo.Entities.GetByRef(ctx, gid, row.ImportRef)
-		if err != nil {
-			return fmt.Errorf("error resolving child entity with ref %q: %w", row.ImportRef, err)
-		}
-
-		parent, err := svc.repo.Entities.GetByRef(ctx, gid, row.ParentImportRef)
-		if err != nil {
-			return fmt.Errorf("error resolving parent entity with ref %q: %w", row.ParentImportRef, err)
-		}
-
-		if child.ID == parent.ID {
-			return fmt.Errorf("invalid parent relationship: entity %q cannot be its own parent", row.ImportRef)
-		}
-
-		if err := svc.repo.Entities.Patch(ctx, gid, child.ID, repo.EntityPatch{ParentID: parent.ID}); err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 func (svc *EntityService) ExportCSV(ctx context.Context, gid uuid.UUID, hbURL string) ([][]string, error) {
