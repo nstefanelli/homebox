@@ -129,15 +129,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           # Upload all archives
-          gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz --clobber || true
-          gh release upload "$GITHUB_REF_NAME" dist/*.zip --clobber || true
+          gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz --clobber
+          gh release upload "$GITHUB_REF_NAME" dist/*.zip --clobber
           
           # Upload checksums
           gh release upload "$GITHUB_REF_NAME" dist/checksums.txt --clobber
           
           # Upload SBOMs
-          gh release upload "$GITHUB_REF_NAME" dist/*.sbom.json --clobber || true
+          gh release upload "$GITHUB_REF_NAME" dist/*.sbom.json --clobber
 
       - name: Generate binary hashes
         id: binary
