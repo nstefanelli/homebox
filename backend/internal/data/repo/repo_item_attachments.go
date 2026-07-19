@@ -42,6 +42,7 @@ import (
 	_ "gocloud.dev/blob/gcsblob"
 	_ "gocloud.dev/blob/memblob"
 	_ "gocloud.dev/blob/s3blob"
+	"gocloud.dev/gcerrors"
 
 	"gocloud.dev/pubsub"
 	_ "gocloud.dev/pubsub/awssnssqs"
@@ -393,7 +394,7 @@ func (r *AttachmentRepo) cleanupUnreferencedBlobs(
 				return
 			}
 		}
-		if err := bucket.Delete(ctx, r.fullPath(path)); err != nil {
+		if err := bucket.Delete(ctx, r.fullPath(path)); err != nil && gcerrors.Code(err) != gcerrors.NotFound {
 			log.Warn().Err(err).Str("path", path).Msg("database deletion committed but blob cleanup failed")
 		}
 	}
@@ -413,9 +414,11 @@ func (r *AttachmentRepo) Create(ctx context.Context, itemID uuid.UUID, doc ItemC
 		return nil, err
 	}
 	committed := false
+	var uploadedCandidates []attachmentBlobCandidate
 	defer func() {
 		if !committed {
 			_ = tx.Rollback()
+			r.cleanupUnreferencedBlobs(ctx, uploadedCandidates)
 		}
 	}()
 
@@ -473,6 +476,10 @@ func (r *AttachmentRepo) Create(ctx context.Context, itemID uuid.UUID, doc ItemC
 	if err != nil {
 		return nil, err
 	}
+	uploadedCandidates = append(uploadedCandidates, attachmentBlobCandidate{
+		Path:     uploadResult.Path,
+		MimeType: uploadResult.ContentType,
+	})
 
 	bldr = bldr.SetMimeType(uploadResult.ContentType)
 	bldr = bldr.SetPath(uploadResult.Path)
@@ -760,11 +767,33 @@ func (r *AttachmentRepo) CreateThumbnail(ctx context.Context, groupId, attachmen
 		return err
 	}
 	committed := false
+	var uploadedCandidates []attachmentBlobCandidate
 	defer func() {
 		if !committed {
 			_ = tx.Rollback()
+			r.cleanupUnreferencedBlobs(ctx, uploadedCandidates)
 		}
 	}()
+
+	source, err := tx.Attachment.Query().
+		Where(
+			attachment.ID(attachmentId),
+			attachment.HasEntityWith(entity.HasGroupWith(group.ID(groupId))),
+		).
+		WithThumbnail().
+		Only(ctx)
+	if err != nil {
+		return err
+	}
+	// Thumbnail delivery is at-least-once. Make sequential redelivery
+	// idempotent instead of replacing the edge and orphaning the prior row.
+	if source.Edges.Thumbnail != nil {
+		return nil
+	}
+	path = source.Path
+	if title == "" {
+		title = source.Title
+	}
 
 	log.Debug().Msg("set initial database transaction")
 	att := tx.Attachment.Create().
@@ -891,6 +920,10 @@ func (r *AttachmentRepo) CreateThumbnail(ctx context.Context, groupId, attachmen
 			}
 			return err
 		}
+		uploadedCandidates = append(uploadedCandidates, attachmentBlobCandidate{
+			Path:     uploadResult.Path,
+			MimeType: uploadResult.ContentType,
+		})
 		att.SetPath(uploadResult.Path)
 	case contentType == "image/webp":
 		log.Debug().Msg("creating thumbnail for webp file")
@@ -911,6 +944,10 @@ func (r *AttachmentRepo) CreateThumbnail(ctx context.Context, groupId, attachmen
 			}
 			return err
 		}
+		uploadedCandidates = append(uploadedCandidates, attachmentBlobCandidate{
+			Path:     uploadResult.Path,
+			MimeType: uploadResult.ContentType,
+		})
 		att.SetPath(uploadResult.Path)
 	case contentType == "image/avif":
 		log.Debug().Msg("creating thumbnail for avif file")
@@ -931,6 +968,10 @@ func (r *AttachmentRepo) CreateThumbnail(ctx context.Context, groupId, attachmen
 			}
 			return err
 		}
+		uploadedCandidates = append(uploadedCandidates, attachmentBlobCandidate{
+			Path:     uploadResult.Path,
+			MimeType: uploadResult.ContentType,
+		})
 		att.SetPath(uploadResult.Path)
 	case contentType == "image/heic" || contentType == "image/heif":
 		log.Debug().Msg("creating thumbnail for heic file")
@@ -951,6 +992,10 @@ func (r *AttachmentRepo) CreateThumbnail(ctx context.Context, groupId, attachmen
 			}
 			return err
 		}
+		uploadedCandidates = append(uploadedCandidates, attachmentBlobCandidate{
+			Path:     uploadResult.Path,
+			MimeType: uploadResult.ContentType,
+		})
 		att.SetPath(uploadResult.Path)
 	case contentType == "image/jxl":
 		log.Debug().Msg("creating thumbnail for jpegxl file")
@@ -971,6 +1016,10 @@ func (r *AttachmentRepo) CreateThumbnail(ctx context.Context, groupId, attachmen
 			}
 			return err
 		}
+		uploadedCandidates = append(uploadedCandidates, attachmentBlobCandidate{
+			Path:     uploadResult.Path,
+			MimeType: uploadResult.ContentType,
+		})
 		att.SetPath(uploadResult.Path)
 	default:
 		return fmt.Errorf("file type %s is not supported for thumbnail creation or document thumnails disabled", title)

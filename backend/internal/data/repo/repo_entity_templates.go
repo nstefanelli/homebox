@@ -16,8 +16,9 @@ import (
 )
 
 type EntityTemplatesRepository struct {
-	db  *ent.Client
-	bus *eventbus.EventBus
+	db          *ent.Client
+	bus         *eventbus.EventBus
+	attachments *AttachmentRepo
 }
 
 type (
@@ -508,67 +509,146 @@ func (r *EntityTemplatesRepository) Update(ctx context.Context, gid uuid.UUID, d
 	return r.GetOne(ctx, gid, template.ID)
 }
 
-// SetPhoto records the storage path of the template's photo.
+func (r *EntityTemplatesRepository) cleanupPhotoBlob(
+	ctx context.Context,
+	path string,
+	mimeType string,
+) {
+	if r.attachments == nil || path == "" {
+		return
+	}
+	r.attachments.cleanupUnreferencedBlobs(ctx, []attachmentBlobCandidate{{
+		Path:     path,
+		MimeType: mimeType,
+	}})
+}
+
+// SetPhoto records a new template photo reference transactionally. The newly
+// uploaded path is cleaned on any database failure, while a replaced path is
+// considered for deletion only after the new reference commits. Global
+// attachment/template checks preserve content-addressed blobs that are shared.
 func (r *EntityTemplatesRepository) SetPhoto(ctx context.Context, gid uuid.UUID, id uuid.UUID, path string, mimeType string) error {
-	n, err := r.db.EntityTemplate.Update().
-		Where(
-			entitytemplate.ID(id),
-			entitytemplate.HasGroupWith(group.ID(gid)),
-		).
-		SetPhotoPath(path).
-		SetPhotoMimeType(mimeType).
-		Save(ctx)
+	tx, err := r.db.Tx(ctx)
 	if err != nil {
+		r.cleanupPhotoBlob(ctx, path, mimeType)
 		return err
 	}
-	if n == 0 {
-		return &ent.NotFoundError{}
-	}
-	r.publishMutationEvent(gid)
-	return nil
-}
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		_ = tx.Rollback()
+		// Upload precedes this repository call. If the row update loses a
+		// delete race or fails, remove the unreferenced upload after rollback.
+		r.cleanupPhotoBlob(ctx, path, mimeType)
+	}()
 
-// ClearPhoto removes the photo reference from the template. The blob is left in
-// storage: paths are content-addressed and may be shared with entity attachments.
-func (r *EntityTemplatesRepository) ClearPhoto(ctx context.Context, gid uuid.UUID, id uuid.UUID) error {
-	n, err := r.db.EntityTemplate.Update().
-		Where(
-			entitytemplate.ID(id),
-			entitytemplate.HasGroupWith(group.ID(gid)),
-		).
-		ClearPhotoPath().
-		ClearPhotoMimeType().
-		Save(ctx)
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return &ent.NotFoundError{}
-	}
-	r.publishMutationEvent(gid)
-	return nil
-}
-
-// Delete deletes a template
-func (r *EntityTemplatesRepository) Delete(ctx context.Context, gid uuid.UUID, id uuid.UUID) error {
-	// Verify template belongs to group
-	_, err := r.db.EntityTemplate.Query().
+	template, err := tx.EntityTemplate.Query().
 		Where(
 			entitytemplate.ID(id),
 			entitytemplate.HasGroupWith(group.ID(gid)),
 		).
 		Only(ctx)
-
 	if err != nil {
 		return err
 	}
+	oldPath, oldMimeType := template.PhotoPath, template.PhotoMimeType
 
-	// Delete template (fields will be cascade deleted)
-	err = r.db.EntityTemplate.DeleteOneID(id).Exec(ctx)
+	if _, err := template.Update().
+		SetPhotoPath(path).
+		SetPhotoMimeType(mimeType).
+		Save(ctx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+
+	if oldPath != path {
+		r.cleanupPhotoBlob(ctx, oldPath, oldMimeType)
+	}
+	r.publishMutationEvent(gid)
+	return nil
+}
+
+// ClearPhoto commits removal of the database reference before attempting
+// best-effort blob deletion. A rollback therefore always leaves the referenced
+// blob intact.
+func (r *EntityTemplatesRepository) ClearPhoto(ctx context.Context, gid uuid.UUID, id uuid.UUID) error {
+	tx, err := r.db.Tx(ctx)
 	if err != nil {
 		return err
 	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
 
+	template, err := tx.EntityTemplate.Query().
+		Where(
+			entitytemplate.ID(id),
+			entitytemplate.HasGroupWith(group.ID(gid)),
+		).
+		Only(ctx)
+	if err != nil {
+		return err
+	}
+	oldPath, oldMimeType := template.PhotoPath, template.PhotoMimeType
+
+	if _, err := template.Update().
+		ClearPhotoPath().
+		ClearPhotoMimeType().
+		Save(ctx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+
+	r.cleanupPhotoBlob(ctx, oldPath, oldMimeType)
+	r.publishMutationEvent(gid)
+	return nil
+}
+
+// Delete removes a template and its fields in one transaction, then globally
+// reference-checks its former photo path before deleting the blob.
+func (r *EntityTemplatesRepository) Delete(ctx context.Context, gid uuid.UUID, id uuid.UUID) error {
+	tx, err := r.db.Tx(ctx)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	template, err := tx.EntityTemplate.Query().
+		Where(
+			entitytemplate.ID(id),
+			entitytemplate.HasGroupWith(group.ID(gid)),
+		).
+		Only(ctx)
+	if err != nil {
+		return err
+	}
+	oldPath, oldMimeType := template.PhotoPath, template.PhotoMimeType
+
+	if err := tx.EntityTemplate.DeleteOneID(id).Exec(ctx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+
+	r.cleanupPhotoBlob(ctx, oldPath, oldMimeType)
 	r.publishMutationEvent(gid)
 	return nil
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/samber/lo"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/entity"
+	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/entitytemplate"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/group"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/groupinvitationtoken"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/ent/notifier"
@@ -402,6 +403,21 @@ func (r *GroupRepository) GroupDelete(ctx context.Context, id uuid.UUID) error {
 	candidates, err := deleteAttachmentThumbnailsTx(ctx, tx, attachments)
 	if err != nil {
 		return err
+	}
+	templates, err := tx.EntityTemplate.Query().
+		Where(entitytemplate.HasGroupWith(group.ID(id))).
+		All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, template := range templates {
+		if template.PhotoPath == "" {
+			continue
+		}
+		candidates = append(candidates, attachmentBlobCandidate{
+			Path:     template.PhotoPath,
+			MimeType: template.PhotoMimeType,
+		})
 	}
 
 	// Every user whose default points at the deleted group must be reassigned

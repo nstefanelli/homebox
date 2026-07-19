@@ -28,6 +28,7 @@ func New(db *ent.Client, bus *eventbus.EventBus, storage config.Storage, pubSubC
 	attachments := &AttachmentRepo{db, storage, pubSubConn, thumbnail}
 	groups := NewGroupRepository(db)
 	groups.attachments = attachments
+	templates := &EntityTemplatesRepository{db: db, bus: bus, attachments: attachments}
 	return &AllRepos{
 		Users:               &UserRepository{db},
 		AuthTokens:          &TokenRepository{db},
@@ -36,7 +37,7 @@ func New(db *ent.Client, bus *eventbus.EventBus, storage config.Storage, pubSubC
 		Groups:              groups,
 		Entities:            &EntityRepository{db, bus, attachments},
 		EntityTypes:         &EntityTypeRepository{db, bus},
-		EntityTemplates:     &EntityTemplatesRepository{db, bus},
+		EntityTemplates:     templates,
 		Tags:                &TagRepository{db, bus},
 		Attachments:         attachments,
 		MaintEntry:          &MaintenanceEntryRepository{db},
