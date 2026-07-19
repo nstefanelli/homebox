@@ -150,7 +150,7 @@ func (ctrl *V1Controller) HandleEntitiesGetAll() errchain.HandlerFunc {
 			}
 			recordCtrlSpanError(span, err)
 			log.Err(err).Msg("failed to get entities")
-			return validate.NewRequestError(err, http.StatusInternalServerError)
+			return paginationRequestError(err)
 		}
 
 		span.SetAttributes(

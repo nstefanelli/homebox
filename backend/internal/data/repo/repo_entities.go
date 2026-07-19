@@ -844,7 +844,7 @@ func applyEntityTypeQueryFilters(qb *ent.EntityQuery, gid uuid.UUID, q EntityQue
 	)
 }
 
-func prepareEntityFetchQuery(qb *ent.EntityQuery, gid uuid.UUID, q EntityQuery) *ent.EntityQuery {
+func prepareEntityFetchQuery(qb *ent.EntityQuery, gid uuid.UUID, q EntityQuery, paginate bool) *ent.EntityQuery {
 	switch q.OrderBy {
 	case "createdAt":
 		qb = qb.Order(ent.Desc(entity.FieldCreatedAt))
@@ -871,7 +871,7 @@ func prepareEntityFetchQuery(qb *ent.EntityQuery, gid uuid.UUID, q EntityQuery) 
 			aq.WithThumbnail()
 		})
 
-	if q.Page != -1 || q.PageSize != -1 {
+	if paginate {
 		qb = qb.
 			Offset(calculateOffset(q.Page, q.PageSize)).
 			Limit(q.PageSize)
@@ -884,6 +884,12 @@ func (r *EntityRepository) QueryByGroup(ctx context.Context, gid uuid.UUID, q En
 	ctx, span := entityTracer().Start(ctx, "repo.EntityRepository.QueryByGroup",
 		trace.WithAttributes(entityQuerySpanAttrs(gid, q)...))
 	defer span.End()
+
+	paginate, err := validatePagination(q.Page, q.PageSize)
+	if err != nil {
+		recordSpanError(span, err)
+		return PaginationResult[EntitySummary]{}, err
+	}
 
 	qb := r.db.Entity.Query().Where(
 		entity.HasGroupWith(group.ID(gid)),
@@ -1005,7 +1011,6 @@ func (r *EntityRepository) QueryByGroup(ctx context.Context, gid uuid.UUID, q En
 	span.SetAttributes(attribute.Int("query.predicates.and.count", len(andPredicates)))
 
 	filteredInventoryValue := float64(0)
-	var err error
 	if q.IncludeInventoryValue {
 		valueCtx, valueSpan := entityTracer().Start(ctx, "repo.EntityRepository.QueryByGroup.inventoryValue")
 		filteredInventoryValue, err = inventoryValueFromQuery(valueCtx, gid, qb.Clone())
@@ -1030,7 +1035,7 @@ func (r *EntityRepository) QueryByGroup(ctx context.Context, gid uuid.UUID, q En
 	countSpan.SetAttributes(attribute.Int("query.total.count", count))
 	countSpan.End()
 
-	qb = prepareEntityFetchQuery(qb, gid, q)
+	qb = prepareEntityFetchQuery(qb, gid, q, paginate)
 
 	fetchCtx, fetchSpan := entityTracer().Start(ctx, "repo.EntityRepository.QueryByGroup.fetch")
 	entities, err := mapEntitiesSummaryErr(qb.All(fetchCtx))
@@ -1144,17 +1149,26 @@ func (r *EntityRepository) QueryByAssetID(ctx context.Context, gid uuid.UUID, as
 		))
 	defer span.End()
 
+	paginate, err := validatePagination(page, pageSize)
+	if err != nil {
+		recordSpanError(span, err)
+		return PaginationResult[EntitySummary]{}, err
+	}
+
 	qb := r.db.Entity.Query().Where(
 		entity.HasGroupWith(group.ID(gid)),
 		entity.AssetID(int64(assetID)),
 	)
 
-	if page != -1 || pageSize != -1 {
+	count, err := qb.Count(ctx)
+	if err != nil {
+		recordSpanError(span, err)
+		return PaginationResult[EntitySummary]{}, err
+	}
+
+	if paginate {
 		qb.Offset(calculateOffset(page, pageSize)).
 			Limit(pageSize)
-	} else {
-		page = -1
-		pageSize = -1
 	}
 
 	entities, err := mapEntitiesSummaryErr(
@@ -1173,7 +1187,7 @@ func (r *EntityRepository) QueryByAssetID(ctx context.Context, gid uuid.UUID, as
 	return PaginationResult[EntitySummary]{
 		Page:     page,
 		PageSize: pageSize,
-		Total:    len(entities),
+		Total:    count,
 		Items:    entities,
 	}, nil
 }

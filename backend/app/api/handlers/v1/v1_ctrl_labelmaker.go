@@ -130,7 +130,7 @@ func (ctrl *V1Controller) HandleGetAssetLabel() errchain.HandlerFunc {
 		}
 
 		auth := services.NewContext(r.Context())
-		item, err := ctrl.repo.Entities.QueryByAssetID(auth, auth.GID, repo.AssetID(assetID), 0, 1)
+		item, err := ctrl.repo.Entities.QueryByAssetID(auth, auth.GID, repo.AssetID(assetID), 1, 1)
 		if err != nil {
 			return err
 		}

@@ -275,6 +275,64 @@ func TestEntityRepository_QueryByGroup_FilteredInventoryValueIgnoresPagination(t
 		"archived and sold rows remain excluded even when the list includes archived entities")
 }
 
+func TestEntityRepository_PaginationReturnsFullFilteredCount(t *testing.T) {
+	ctx := context.Background()
+	prefix := "pagination-" + uuid.NewString()
+	itemType := useItemEntityType(t)
+	created := make([]EntityOut, 0, 3)
+
+	for _, suffix := range []string{"a", "b", "c"} {
+		out, err := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+			Name:         prefix + "-" + suffix,
+			EntityTypeID: itemType.ID,
+		})
+		require.NoError(t, err)
+		created = append(created, out)
+	}
+	t.Cleanup(func() {
+		for _, out := range created {
+			_ = tRepos.Entities.Delete(context.Background(), out.ID)
+		}
+	})
+
+	first, err := tRepos.Entities.QueryByGroup(ctx, tGroup.ID, EntityQuery{
+		Page:     1,
+		PageSize: 2,
+		Search:   prefix,
+	})
+	require.NoError(t, err)
+	require.Len(t, first.Items, 2)
+	assert.Equal(t, 3, first.Total)
+
+	second, err := tRepos.Entities.QueryByGroup(ctx, tGroup.ID, EntityQuery{
+		Page:     2,
+		PageSize: 2,
+		Search:   prefix,
+	})
+	require.NoError(t, err)
+	require.Len(t, second.Items, 1)
+	assert.Equal(t, 3, second.Total)
+
+	all, err := tRepos.Entities.QueryByGroup(ctx, tGroup.ID, EntityQuery{
+		Page:     -1,
+		PageSize: -1,
+		Search:   prefix,
+	})
+	require.NoError(t, err)
+	require.Len(t, all.Items, 3)
+	assert.Equal(t, 3, all.Total)
+
+	assetID := AssetID(time.Now().UnixNano())
+	for _, out := range created {
+		require.NoError(t, tClient.Entity.UpdateOneID(out.ID).SetAssetID(int64(assetID)).Exec(ctx))
+	}
+
+	assetPage, err := tRepos.Entities.QueryByAssetID(ctx, tGroup.ID, assetID, 1, 2)
+	require.NoError(t, err)
+	require.Len(t, assetPage.Items, 2)
+	assert.Equal(t, 3, assetPage.Total)
+}
+
 func TestEntityRepository_Create_RejectsNonFiniteQuantity(t *testing.T) {
 	containerET := useContainerEntityType(t)
 	itemET := useItemEntityType(t)

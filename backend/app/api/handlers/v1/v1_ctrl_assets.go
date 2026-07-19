@@ -10,7 +10,6 @@ import (
 	"github.com/hay-kot/httpkit/server"
 	"github.com/sysadminsmedia/homebox/backend/internal/core/services"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/repo"
-	"github.com/sysadminsmedia/homebox/backend/internal/sys/validate"
 
 	"github.com/rs/zerolog/log"
 )
@@ -55,7 +54,7 @@ func (ctrl *V1Controller) HandleAssetGet() errchain.HandlerFunc {
 		items, err := ctrl.repo.Entities.QueryByAssetID(r.Context(), ctx.GID, repo.AssetID(assetID), int(page), int(pageSize))
 		if err != nil {
 			log.Err(err).Msg("failed to get item")
-			return validate.NewRequestError(err, http.StatusInternalServerError)
+			return paginationRequestError(err)
 		}
 		return server.JSON(w, http.StatusOK, items)
 	}

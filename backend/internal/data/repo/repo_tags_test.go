@@ -396,7 +396,11 @@ func TestTagRepository_DescendantsAreTenantScoped(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, ent.IsNotFound(err))
 
-	_, err = tRepos.Entities.QueryByGroup(ctx, tGroup.ID, EntityQuery{TagIDs: []uuid.UUID{foreignTagID}})
+	_, err = tRepos.Entities.QueryByGroup(ctx, tGroup.ID, EntityQuery{
+		Page:     -1,
+		PageSize: -1,
+		TagIDs:   []uuid.UUID{foreignTagID},
+	})
 	require.Error(t, err)
 	assert.True(t, ent.IsNotFound(err))
 }

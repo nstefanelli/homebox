@@ -1,6 +1,13 @@
 package repo
 
-import "github.com/samber/lo"
+import (
+	"errors"
+	"fmt"
+)
+
+const MaxPageSize = 500
+
+var ErrInvalidPagination = errors.New("invalid pagination")
 
 type PaginationResult[T any] struct {
 	Page                   int     `json:"page"`
@@ -18,6 +25,31 @@ type EntityListResult struct {
 }
 
 func calculateOffset(page, pageSize int) int {
-	offset := (page - 1) * pageSize
-	return lo.Ternary(offset < 0, 0, offset)
+	return (page - 1) * pageSize
+}
+
+func validatePagination(page, pageSize int) (bool, error) {
+	if page == -1 && pageSize == -1 {
+		return false, nil
+	}
+	if page < 1 || pageSize < 1 {
+		return false, fmt.Errorf(
+			"%w: page and pageSize must both be omitted or be positive integers",
+			ErrInvalidPagination,
+		)
+	}
+	if pageSize > MaxPageSize {
+		return false, fmt.Errorf(
+			"%w: pageSize must not exceed %d",
+			ErrInvalidPagination,
+			MaxPageSize,
+		)
+	}
+
+	maxInt := int(^uint(0) >> 1)
+	if page-1 > maxInt/pageSize {
+		return false, fmt.Errorf("%w: page offset is too large", ErrInvalidPagination)
+	}
+
+	return true, nil
 }

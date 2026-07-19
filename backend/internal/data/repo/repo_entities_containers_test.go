@@ -115,6 +115,8 @@ func TestEntityRepository_Query_IsContainerFilter(t *testing.T) {
 	res, err := tRepos.Entities.QueryByGroup(context.Background(), tGroup.ID, EntityQuery{
 		IsLocation:  lo.ToPtr(true),
 		IsContainer: lo.ToPtr(true),
+		Page:        -1,
+		PageSize:    -1,
 	})
 	require.NoError(t, err)
 
