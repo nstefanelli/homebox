@@ -22,7 +22,7 @@ function itemField(id = null): EntityFieldData {
     textValue: faker.lorem.sentence(),
     booleanValue: false,
     numberValue: faker.number.int(),
-    timeValue: "",
+    timeValue: null,
   };
 }
 
