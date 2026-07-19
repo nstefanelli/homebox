@@ -68,7 +68,7 @@ jobs:
       # Step 1: Pull and deploy the upstream version this fork is based on.
       - name: Pull upstream v0.26.2 image
         run: |
-          docker pull ghcr.io/sysadminsmedia/homebox:v0.26.2
+          docker pull ghcr.io/sysadminsmedia/homebox:0.26.2
       
       - name: Start HomeBox (stable version)
         run: |
@@ -81,7 +81,7 @@ jobs:
             -e HBOX_AUTH_API_KEY_PEPPER \
             -e TZ=UTC \
             -v /tmp/homebox-data-old:/data \
-            ghcr.io/sysadminsmedia/homebox:v0.26.2
+            ghcr.io/sysadminsmedia/homebox:0.26.2
           
           # Wait for the service to be ready
           timeout 60 bash -c 'until curl -f http://localhost:7745/api/v1/status; do sleep 2; done'

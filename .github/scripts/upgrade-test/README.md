@@ -151,7 +151,7 @@ docker run -d \
   -e HBOX_OPTIONS_ALLOW_REGISTRATION=true \
   -e HBOX_AUTH_API_KEY_PEPPER \
   -v /tmp/homebox-data:/data \
-  ghcr.io/sysadminsmedia/homebox:v0.26.2
+  ghcr.io/sysadminsmedia/homebox:0.26.2
 
 # Wait for startup
 sleep 10
