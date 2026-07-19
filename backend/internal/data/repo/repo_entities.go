@@ -2114,10 +2114,6 @@ func (r *EntityRepository) UpdateByGroup(ctx context.Context, gid uuid.UUID, dat
 		q.ClearParent()
 	}
 
-	// A parent change deliberately leaves children attached to this entity.
-	// Their effective location follows through the ancestor chain; moving them
-	// to this entity's new parent would flatten and corrupt the hierarchy.
-
 	_, execSpan := entityTracer().Start(ctx, "repo.EntityRepository.UpdateByGroup.exec")
 	err = q.Exec(ctx)
 	if err != nil {
@@ -2127,6 +2123,18 @@ func (r *EntityRepository) UpdateByGroup(ctx context.Context, gid uuid.UUID, dat
 		return EntityOut{}, err
 	}
 	execSpan.End()
+
+	if err := syncChildEntityLocationsTx(
+		ctx,
+		tx,
+		gid,
+		data.ID,
+		data.ParentID,
+		data.SyncChildEntityLocations,
+	); err != nil {
+		recordSpanError(span, err)
+		return EntityOut{}, err
+	}
 
 	fieldsCtx, fieldsSpan := entityTracer().Start(ctx, "repo.EntityRepository.UpdateByGroup.fields",
 		trace.WithAttributes(attribute.Int("fields.input.count", len(data.Fields))))
@@ -2332,6 +2340,43 @@ func patchSyncTags(ctx context.Context, tx *ent.Tx, gid, id uuid.UUID, want []uu
 	return nil
 }
 
+// syncChildEntityLocationsTx implements the legacy sync-child contract: when
+// explicitly enabled on an entity, its direct children move to the entity's
+// own parent. This intentionally flattens one hierarchy level; callers that
+// want nested contents to follow a moving container leave the flag disabled.
+// The scoped bulk update runs in the caller's transaction so the entity,
+// children, tags, and fields cannot be committed partially.
+func syncChildEntityLocationsTx(
+	ctx context.Context,
+	tx *ent.Tx,
+	gid, id, parentID uuid.UUID,
+	enabled bool,
+) error {
+	if !enabled || parentID == uuid.Nil {
+		return nil
+	}
+
+	syncCtx, syncSpan := entityTracer().Start(ctx, "repo.EntityRepository.syncChildLocations")
+	defer syncSpan.End()
+
+	updated, err := tx.Entity.Update().
+		Where(
+			entity.HasGroupWith(group.ID(gid)),
+			entity.HasParentWith(
+				entity.ID(id),
+				entity.HasGroupWith(group.ID(gid)),
+			),
+		).
+		SetParentID(parentID).
+		Save(syncCtx)
+	if err != nil {
+		recordSpanError(syncSpan, err)
+		return err
+	}
+	syncSpan.SetAttributes(attribute.Int("children.updated.count", updated))
+	return nil
+}
+
 func (r *EntityRepository) Patch(ctx context.Context, gid, id uuid.UUID, data EntityPatch) error {
 	ctx, span := entityTracer().Start(ctx, "repo.EntityRepository.Patch",
 		trace.WithAttributes(
@@ -2389,7 +2434,6 @@ func (r *EntityRepository) Patch(ctx context.Context, gid, id uuid.UUID, data En
 		recordSpanError(span, err)
 		return err
 	}
-
 	q := tx.Entity.Update().
 		Where(
 			entity.ID(id),
@@ -2434,8 +2478,27 @@ func (r *EntityRepository) Patch(ctx context.Context, gid, id uuid.UUID, data En
 		}
 	}
 
-	// Keep children attached to this entity when it moves. Their location is
-	// derived from the ancestor chain, so no descendant rewrite is needed.
+	if data.ParentID != uuid.Nil {
+		target, err := tx.Entity.Query().
+			Where(entity.ID(id), entity.HasGroupWith(group.ID(gid))).
+			Select(entity.FieldSyncChildEntityLocations).
+			Only(ctx)
+		if err != nil {
+			recordSpanError(span, err)
+			return err
+		}
+		if err := syncChildEntityLocationsTx(
+			ctx,
+			tx,
+			gid,
+			id,
+			data.ParentID,
+			target.SyncChildEntityLocations,
+		); err != nil {
+			recordSpanError(span, err)
+			return err
+		}
+	}
 
 	_, commitSpan := entityTracer().Start(ctx, "repo.EntityRepository.Patch.commit")
 	if err := tx.Commit(); err != nil {

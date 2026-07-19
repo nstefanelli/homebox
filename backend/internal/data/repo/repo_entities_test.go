@@ -1368,7 +1368,7 @@ func TestEntityRepository_GetOne_DoesNotFollowLegacyForeignParent(t *testing.T) 
 	assert.Nil(t, got.Location, "foreign location ancestor must be filtered")
 }
 
-func TestEntityRepository_MovingEntityKeepsChildrenAttached(t *testing.T) {
+func TestEntityRepository_SyncChildLocationsFlagControlsFlattening(t *testing.T) {
 	ctx := context.Background()
 	locationET := useContainerEntityType(t)
 	itemET := useItemEntityType(t)
@@ -1392,6 +1392,22 @@ func TestEntityRepository_MovingEntityKeepsChildrenAttached(t *testing.T) {
 	child := create("move-child", itemET.ID, box.ID)
 
 	_, err := tRepos.Entities.UpdateByGroup(ctx, tGroup.ID, EntityUpdate{
+		ID:           box.ID,
+		Name:         box.Name,
+		Quantity:     1,
+		EntityTypeID: itemET.ID,
+		ParentID:     locationB.ID,
+	})
+	require.NoError(t, err)
+
+	got, err := tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, child.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.Parent)
+	assert.Equal(t, box.ID, got.Parent.ID, "disabled sync must preserve nesting")
+	require.NotNil(t, got.Location)
+	assert.Equal(t, locationB.ID, got.Location.ID)
+
+	_, err = tRepos.Entities.UpdateByGroup(ctx, tGroup.ID, EntityUpdate{
 		ID:                       box.ID,
 		Name:                     box.Name,
 		Quantity:                 1,
@@ -1401,19 +1417,18 @@ func TestEntityRepository_MovingEntityKeepsChildrenAttached(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	got, err := tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, child.ID)
-	require.NoError(t, err)
-	require.NotNil(t, got.Parent)
-	assert.Equal(t, box.ID, got.Parent.ID, "moving a box must not flatten its children")
-	require.NotNil(t, got.Location)
-	assert.Equal(t, locationB.ID, got.Location.ID)
-
-	err = tRepos.Entities.Patch(ctx, tGroup.ID, box.ID, EntityPatch{ParentID: locationA.ID})
-	require.NoError(t, err)
 	got, err = tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, child.ID)
 	require.NoError(t, err)
 	require.NotNil(t, got.Parent)
-	assert.Equal(t, box.ID, got.Parent.ID)
+	assert.Equal(t, locationB.ID, got.Parent.ID, "enabled sync moves direct children to the entity's location")
+
+	patchChild := create("move-patch-child", itemET.ID, box.ID)
+	err = tRepos.Entities.Patch(ctx, tGroup.ID, box.ID, EntityPatch{ParentID: locationA.ID})
+	require.NoError(t, err)
+	got, err = tRepos.Entities.GetOneByGroup(ctx, tGroup.ID, patchChild.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.Parent)
+	assert.Equal(t, locationA.ID, got.Parent.ID, "patch honors the entity's persisted sync flag")
 }
 
 func TestEntityRepository_RejectsNegativeQuantity(t *testing.T) {

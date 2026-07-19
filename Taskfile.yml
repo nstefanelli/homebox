@@ -88,8 +88,9 @@ tasks:
 
   go:ci:
     env:
-      HBOX_DEMO: true
-    desc: Runs all go test and lint related tasks
+      HBOX_DEMO: false
+      HBOX_AUTH_RATE_LIMIT_ENABLED: false
+    desc: Starts the backend API for frontend integration tests
     dir: backend
     cmds:
       - go run ./app/api/ {{ .CLI_ARGS }} &
