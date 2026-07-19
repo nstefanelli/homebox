@@ -1,9 +1,11 @@
 package services
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/csv"
+	"encoding/json"
 	"io"
 	"strings"
 	"testing"
@@ -69,6 +71,26 @@ func TestExportRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	_, err = tClient.Entity.UpdateOneID(item.ID).AddTagIDs(tg.ID).Save(ctx)
 	require.NoError(t, err)
+
+	defaultTagIDs := []uuid.UUID{tg.ID}
+	template, err := tRepos.EntityTemplates.Create(ctx, src.ID, repo.EntityTemplateCreate{
+		Name:          "Tool template",
+		DefaultTagIDs: &defaultTagIDs,
+	})
+	require.NoError(t, err)
+	templatePhotoBytes := []byte("template photo blob")
+	templatePhotoUpload, err := tRepos.Attachments.UploadFileByGroupID(ctx, src.ID, repo.ItemCreateAttachment{
+		Title:   "template-photo.jpg",
+		Content: bytes.NewReader(templatePhotoBytes),
+	})
+	require.NoError(t, err)
+	require.NoError(t, tRepos.EntityTemplates.SetPhoto(
+		ctx,
+		src.ID,
+		template.ID,
+		templatePhotoUpload.Path,
+		templatePhotoUpload.ContentType,
+	))
 
 	// Real attachment + a fabricated thumbnail row pointing at it.
 	// This is the scenario that broke before: the thumbnail row has
@@ -174,6 +196,16 @@ func TestExportRoundTrip(t *testing.T) {
 	require.Len(t, allTags, 1, "seeded tags should have been wiped")
 	assert.Equal(t, "tools", allTags[0].Name)
 
+	importedTemplates, err := tRepos.EntityTemplates.GetAll(ctx, dst.ID)
+	require.NoError(t, err)
+	require.Len(t, importedTemplates, 1)
+	importedTemplate, err := tRepos.EntityTemplates.GetOne(ctx, dst.ID, importedTemplates[0].ID)
+	require.NoError(t, err)
+	require.Len(t, importedTemplate.DefaultTags, 1)
+	assert.Equal(t, "tools", importedTemplate.DefaultTags[0].Name)
+	assert.True(t, strings.HasPrefix(importedTemplate.PhotoPath, dst.ID.String()+"/documents/"))
+	assert.NotEqual(t, templatePhotoUpload.Path, importedTemplate.PhotoPath)
+
 	// IDs are intentionally regenerated on import (so re-importing the same
 	// archive into a server that already has the data doesn't conflict on
 	// PK). Names + relationship structure are what matters.
@@ -212,6 +244,10 @@ func TestExportRoundTrip(t *testing.T) {
 	thumbBlob, err := bk.ReadAll(ctx, tRepos.Attachments.GetFullPath(gotThumb.Path))
 	require.NoError(t, err, "thumbnail blob must be present at the rewritten path")
 	assert.Equal(t, "dummy thumbnail body", string(thumbBlob))
+
+	templateBlob, err := bk.ReadAll(ctx, tRepos.Attachments.GetFullPath(importedTemplate.PhotoPath))
+	require.NoError(t, err, "template photo blob must be restored at the rewritten path")
+	assert.Equal(t, templatePhotoBytes, templateBlob)
 }
 
 func TestCSVExportImportPreservesItemParent(t *testing.T) {
@@ -366,6 +402,16 @@ func TestIsGroupReadyForImport_BlocksUserCreatedRows(t *testing.T) {
 		assert.False(t, ready, "tag count beyond seed baseline must block")
 	})
 
+	t.Run("single replacement tag blocks despite being below seed count", func(t *testing.T) {
+		g, err := tRepos.Groups.GroupCreate(ctx, "ready-tag-shape-"+fk.Str(4), uuid.Nil)
+		require.NoError(t, err)
+		_, err = tRepos.Tags.Create(ctx, g.ID, repo.TagCreate{Name: "My Custom Tag"})
+		require.NoError(t, err)
+		ready, err := tSvc.Exports.IsGroupReadyForImport(ctx, g.ID)
+		require.NoError(t, err)
+		assert.False(t, ready, "custom tag must not be mistaken for a deleted seed row")
+	})
+
 	t.Run("extra location blocks", func(t *testing.T) {
 		g, err := tRepos.Groups.GroupCreate(ctx, "ready-loc-"+fk.Str(4), uuid.Nil)
 		require.NoError(t, err)
@@ -378,6 +424,18 @@ func TestIsGroupReadyForImport_BlocksUserCreatedRows(t *testing.T) {
 		ready, err := tSvc.Exports.IsGroupReadyForImport(ctx, g.ID)
 		require.NoError(t, err)
 		assert.False(t, ready, "location count beyond seed baseline must block")
+	})
+
+	t.Run("single replacement location blocks despite being below seed count", func(t *testing.T) {
+		g, err := tRepos.Groups.GroupCreate(ctx, "ready-loc-shape-"+fk.Str(4), uuid.Nil)
+		require.NoError(t, err)
+		locET, err := tRepos.EntityTypes.GetDefault(ctx, g.ID, true)
+		require.NoError(t, err)
+		_, err = tRepos.Entities.Create(ctx, g.ID, repo.EntityCreate{Name: "My Shed", EntityTypeID: locET.ID})
+		require.NoError(t, err)
+		ready, err := tSvc.Exports.IsGroupReadyForImport(ctx, g.ID)
+		require.NoError(t, err)
+		assert.False(t, ready, "custom location must not be mistaken for a deleted seed row")
 	})
 
 	t.Run("notifier blocks", func(t *testing.T) {
@@ -418,6 +476,225 @@ func TestIsGroupReadyForImport_BlocksUserCreatedRows(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, ready, "entity_type beyond Item/Location defaults must block")
 	})
+
+	t.Run("single custom entity_type blocks despite being below seed count", func(t *testing.T) {
+		g, err := tRepos.Groups.GroupCreate(ctx, "ready-et-shape-"+fk.Str(4), uuid.Nil)
+		require.NoError(t, err)
+		_, err = tRepos.EntityTypes.Create(ctx, g.ID, repo.EntityTypeCreate{Name: "Custom", IsLocation: false})
+		require.NoError(t, err)
+		ready, err := tSvc.Exports.IsGroupReadyForImport(ctx, g.ID)
+		require.NoError(t, err)
+		assert.False(t, ready, "custom type must not be mistaken for a missing default type")
+	})
+}
+
+func testZipReader(t *testing.T, entries map[string]any) *zip.Reader {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for name, value := range entries {
+		w, err := zw.Create(name)
+		require.NoError(t, err)
+		require.NoError(t, json.NewEncoder(w).Encode(value))
+	}
+	require.NoError(t, zw.Close())
+	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	return zr
+}
+
+func TestReplayImportRowsRejectsUnmappedForeignTenantFK(t *testing.T) {
+	ctx := context.Background()
+	foreign, err := tRepos.Groups.GroupCreate(ctx, "foreign-fk-"+fk.Str(4), uuid.Nil)
+	require.NoError(t, err)
+	foreignType, err := tRepos.EntityTypes.GetDefault(ctx, foreign.ID, false)
+	require.NoError(t, err)
+
+	dst, err := tRepos.Groups.GroupCreate(ctx, "foreign-fk-dst-"+fk.Str(4), uuid.Nil)
+	require.NoError(t, err)
+	srcGID := uuid.New()
+	zr := testZipReader(t, map[string]any{
+		"entities.json": []map[string]any{{
+			"id":                   uuid.NewString(),
+			"group_entities":       srcGID.String(),
+			"entity_type_entities": foreignType.ID.String(),
+		}},
+	})
+
+	tx, err := tClient.Sql().BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+
+	_, err = tSvc.Exports.replayImportRows(ctx, tx, zr, dst.ID, tUser.ID, srcGID)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "unmapped foreign key")
+}
+
+func TestEnforceZipUncompressedLimitUsesAbsoluteAndJSONCaps(t *testing.T) {
+	t.Run("absolute total cap", func(t *testing.T) {
+		zr := &zip.Reader{File: []*zip.File{{
+			FileHeader: zip.FileHeader{
+				Name:               attachmentsDir + "blob",
+				UncompressedSize64: maxImportUncompressedBytes + 1,
+			},
+		}}}
+		err := enforceZipUncompressedLimit(zr, 1<<30)
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "exceeds limit")
+	})
+
+	t.Run("json entry cap", func(t *testing.T) {
+		zr := &zip.Reader{File: []*zip.File{{
+			FileHeader: zip.FileHeader{
+				Name:               "entities.json",
+				UncompressedSize64: maxImportJSONEntryBytes + 1,
+			},
+		}}}
+		err := enforceZipUncompressedLimit(zr, 1<<30)
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "JSON entry")
+	})
+
+	t.Run("large upload arithmetic cannot overflow ratio", func(t *testing.T) {
+		zr := &zip.Reader{File: []*zip.File{{
+			FileHeader: zip.FileHeader{
+				Name:               attachmentsDir + "blob",
+				UncompressedSize64: maxImportUncompressedBytes + 1,
+			},
+		}}}
+		err := enforceZipUncompressedLimit(zr, int64(^uint64(0)>>1))
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "exceeds limit")
+	})
+}
+
+func TestValidateTemplatePhotoArchiveRejectsMissingBlob(t *testing.T) {
+	templateID := uuid.New()
+	zr := testZipReader(t, map[string]any{
+		"entity_templates.json": []map[string]any{{
+			"id":         templateID.String(),
+			"photo_path": uuid.NewString() + "/documents/blob",
+		}},
+	})
+	err := validateTemplatePhotoArchive(zr)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "blob is missing")
+}
+
+func TestValidateAttachmentBlobArchiveRejectsMissingBlob(t *testing.T) {
+	attachmentID := uuid.New()
+	zr := testZipReader(t, map[string]any{
+		"attachments.json": []map[string]any{{
+			"id":        attachmentID.String(),
+			"path":      uuid.NewString() + "/documents/blob",
+			"mime_type": "application/pdf",
+		}},
+	})
+
+	err := validateAttachmentBlobArchive(zr)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "blob is missing")
+}
+
+func TestRewriteTemplatePhotoPathRejectsTraversal(t *testing.T) {
+	src := uuid.New()
+	dst := uuid.New()
+	row := map[string]any{
+		"photo_path": src.String() + "/documents/../secrets/blob",
+	}
+	err := rewriteTemplatePhotoPath(row, src, dst)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "canonical")
+}
+
+func TestCopyTemplatePhotoBlobsFailsWhenReferencedBlobIsMissing(t *testing.T) {
+	ctx := context.Background()
+	g, err := tRepos.Groups.GroupCreate(ctx, "missing-template-photo-"+fk.Str(4), uuid.Nil)
+	require.NoError(t, err)
+	tmpl, err := tRepos.EntityTemplates.Create(ctx, g.ID, repo.EntityTemplateCreate{Name: "missing photo"})
+	require.NoError(t, err)
+	missingPath := g.ID.String() + "/documents/" + uuid.NewString()
+	require.NoError(t, tRepos.EntityTemplates.SetPhoto(ctx, g.ID, tmpl.ID, missingPath, "image/png"))
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	err = tSvc.Exports.copyTemplatePhotoBlobs(ctx, zw, g.ID)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "template")
+	_ = zw.Close()
+}
+
+func TestCopyAttachmentBlobsFailsWhenReferencedBlobIsMissing(t *testing.T) {
+	ctx := context.Background()
+	g, err := tRepos.Groups.GroupCreate(ctx, "missing-attachment-"+fk.Str(4), uuid.Nil)
+	require.NoError(t, err)
+	itemType, err := tRepos.EntityTypes.GetDefault(ctx, g.ID, false)
+	require.NoError(t, err)
+	item, err := tRepos.Entities.Create(ctx, g.ID, repo.EntityCreate{
+		Name:         "missing attachment item",
+		EntityTypeID: itemType.ID,
+	})
+	require.NoError(t, err)
+
+	missingPath := g.ID.String() + "/documents/" + uuid.NewString()
+	_, err = tClient.Attachment.Create().
+		SetType(attachment.TypeManual).
+		SetTitle("missing.pdf").
+		SetPath(missingPath).
+		SetMimeType("application/pdf").
+		SetEntityID(item.ID).
+		Save(ctx)
+	require.NoError(t, err)
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	err = tSvc.Exports.copyAttachmentBlobs(ctx, zw, g.ID)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "blob")
+	_ = zw.Close()
+}
+
+func TestCopyExactSize(t *testing.T) {
+	var dst bytes.Buffer
+	n, err := copyExactSize(&dst, strings.NewReader("abc"), 3)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), n)
+
+	dst.Reset()
+	_, err = copyExactSize(&dst, strings.NewReader("ab"), 3)
+	require.Error(t, err)
+
+	dst.Reset()
+	_, err = copyExactSize(&dst, strings.NewReader("abcd"), 3)
+	require.Error(t, err)
+}
+
+func TestRunImportMarksRedeliveredRunningJobFailedAndRetainsUpload(t *testing.T) {
+	ctx := context.Background()
+	g, err := tRepos.Groups.GroupCreate(ctx, "running-import-"+fk.Str(4), uuid.Nil)
+	require.NoError(t, err)
+
+	uploadKey := g.ID.String() + "/imports/" + uuid.NewString() + ".zip"
+	bucket, err := blob.OpenBucket(ctx, tRepos.Attachments.GetConnString())
+	require.NoError(t, err)
+	defer func() { _ = bucket.Close() }()
+	fullPath := tRepos.Attachments.GetFullPath(uploadKey)
+	require.NoError(t, bucket.WriteAll(ctx, fullPath, []byte("staged"), nil))
+	t.Cleanup(func() { _ = bucket.Delete(context.Background(), fullPath) })
+
+	row, err := tRepos.Exports.CreateImport(ctx, g.ID, uploadKey, int64(len("staged")))
+	require.NoError(t, err)
+	require.NoError(t, tRepos.Exports.SetRunning(ctx, g.ID, row.ID))
+
+	tSvc.Exports.RunImport(ctx, g.ID, tUser.ID, row.ID)
+
+	got, err := tRepos.Exports.Get(ctx, g.ID, row.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "failed", got.Status)
+	assert.Contains(t, got.Error, "interrupted")
+	exists, err := bucket.Exists(ctx, fullPath)
+	require.NoError(t, err)
+	assert.True(t, exists, "staged archive must be retained for recovery")
 }
 
 // copyBlobUnderTest reuses the export service's bucket plumbing to copy a

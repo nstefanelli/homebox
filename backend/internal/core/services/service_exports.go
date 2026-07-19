@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path"
 	"strings"
@@ -53,6 +54,17 @@ const manifestFile = "manifest.json"
 
 // attachmentsDir is the prefix inside the zip for attachment blobs.
 const attachmentsDir = "attachments/"
+
+// templatePhotosDir stores template photo blobs by source template UUID.
+const templatePhotosDir = "template-photos/"
+
+const (
+	maxZipExpansionRatio        = uint64(100)
+	maxImportUncompressedBytes  = uint64(4 << 30)
+	maxImportJSONEntryBytes     = uint64(128 << 20)
+	maxImportManifestEntryBytes = uint64(1 << 20)
+	maxImportZipEntries         = 100_000
+)
 
 // tableSpec describes how to extract one table's rows scoped to a group, and
 // how to handle foreign keys on import.
@@ -100,11 +112,6 @@ type tableSpec struct {
 // (entity_types.entity_type_default_template,
 // entity_templates.entity_template_location) live in deferCols so the first
 // INSERT pass can succeed; the second pass patches them with remapped IDs.
-//
-// Known gap: entity_templates.default_tag_ids is a JSON list of tag UUIDs.
-// We do not currently rewrite UUIDs nested inside JSON columns, so that
-// reference is lost on import. Templates and tags both still come across
-// individually; only the template→tag default association is dropped.
 var exportTables = []tableSpec{
 	{
 		name:      "entity_types",
@@ -249,69 +256,17 @@ func (s *ExportService) EnqueueImport(ctx context.Context, gid uuid.UUID, userID
 	return row, nil
 }
 
-// IsGroupReadyForImport returns true when gid contains no user-created data
-// across any table that wipeGroup will delete. Default locations, tags, and
-// the lazily-created "Item"/"Location" entity_types from registration are
-// tolerated — the import wipes them before restoring. Any extra rows beyond
-// those seed baselines, or any presence in tables that aren't seeded
-// (entity_templates, notifiers), blocks the import so a one-click restore
-// can't silently destroy work.
-//
-// The seed-baseline counts are coarse: a user who deletes some default tags
-// and then adds the same number of custom tags would pass with a false
-// negative. Acceptable trade-off versus adding a per-row "is_seed" flag.
-//
-// Tables not checked explicitly are covered transitively: template_fields
-// require templates; entity_fields/attachments/maintenance_entries/tag_entities
-// require entities or tags.
+// IsGroupReadyForImport returns true only when a group is empty or contains
+// an exact subset of the starter rows created during registration. Import
+// wipes those rows before replaying the archive, so a count-only check is not
+// safe: deleting one default and replacing it with one custom row preserves
+// the count while turning the wipe into user-data loss.
 func (s *ExportService) IsGroupReadyForImport(ctx context.Context, gid uuid.UUID) (bool, error) {
-	items, err := s.db.Entity.Query().Where(
-		entity.HasGroupWith(group.ID(gid)),
-		entity.HasEntityTypeWith(entitytype.IsLocation(false)),
-	).Count(ctx)
-	if err != nil {
-		return false, err
-	}
-	if items > 0 {
-		return false, nil
-	}
-
-	locations, err := s.db.Entity.Query().Where(
-		entity.HasGroupWith(group.ID(gid)),
-		entity.HasEntityTypeWith(entitytype.IsLocation(true)),
-	).Count(ctx)
-	if err != nil {
-		return false, err
-	}
-	if locations > len(defaultLocations()) {
-		return false, nil
-	}
-
-	tags, err := s.db.Tag.Query().Where(tag.HasGroupWith(group.ID(gid))).Count(ctx)
-	if err != nil {
-		return false, err
-	}
-	if tags > len(defaultTags()) {
-		return false, nil
-	}
-
-	// Entity types are lazily created with names "Item" and "Location" the
-	// first time GetDefault is called for each. Anything beyond those two
-	// implies a user-customized type.
-	const defaultEntityTypeCount = 2
-	entityTypes, err := s.db.EntityType.Query().Where(entitytype.HasGroupWith(group.ID(gid))).Count(ctx)
-	if err != nil {
-		return false, err
-	}
-	if entityTypes > defaultEntityTypeCount {
-		return false, nil
-	}
-
 	templates, err := s.db.EntityTemplate.Query().Where(entitytemplate.HasGroupWith(group.ID(gid))).Count(ctx)
 	if err != nil {
 		return false, err
 	}
-	if templates > 0 {
+	if templates != 0 {
 		return false, nil
 	}
 
@@ -319,11 +274,138 @@ func (s *ExportService) IsGroupReadyForImport(ctx context.Context, gid uuid.UUID
 	if err != nil {
 		return false, err
 	}
-	if notifiers > 0 {
+	if notifiers != 0 {
 		return false, nil
 	}
 
+	types, err := s.db.EntityType.Query().
+		Where(entitytype.HasGroupWith(group.ID(gid))).
+		WithDefaultTemplate().
+		All(ctx)
+	if err != nil {
+		return false, err
+	}
+	locationTypeIDs := make(map[uuid.UUID]struct{})
+	seenType := map[bool]bool{}
+	for _, typ := range types {
+		expectedName := "Item"
+		if typ.IsLocation {
+			expectedName = "Location"
+		}
+		if seenType[typ.IsLocation] ||
+			typ.Name != expectedName ||
+			typ.Description != "" ||
+			typ.Icon != "" ||
+			typ.IsContainer ||
+			typ.Edges.DefaultTemplate != nil {
+			return false, nil
+		}
+		seenType[typ.IsLocation] = true
+		if typ.IsLocation {
+			locationTypeIDs[typ.ID] = struct{}{}
+		}
+	}
+
+	allowedLocationNames := make(map[string]struct{}, len(defaultLocations()))
+	for _, loc := range defaultLocations() {
+		allowedLocationNames[loc.Name] = struct{}{}
+	}
+	seenLocations := make(map[string]struct{}, len(allowedLocationNames))
+	entities, err := s.db.Entity.Query().
+		Where(entity.HasGroupWith(group.ID(gid))).
+		WithEntityType().
+		WithParent().
+		WithTag().
+		WithFields().
+		WithMaintenanceEntries().
+		WithAttachments().
+		All(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, entRow := range entities {
+		if !isSeedLocation(entRow, locationTypeIDs, allowedLocationNames) {
+			return false, nil
+		}
+		if _, duplicate := seenLocations[entRow.Name]; duplicate {
+			return false, nil
+		}
+		seenLocations[entRow.Name] = struct{}{}
+	}
+
+	allowedTagNames := make(map[string]struct{}, len(defaultTags()))
+	for _, seedTag := range defaultTags() {
+		allowedTagNames[seedTag.Name] = struct{}{}
+	}
+	seenTags := make(map[string]struct{}, len(allowedTagNames))
+	tags, err := s.db.Tag.Query().
+		Where(tag.HasGroupWith(group.ID(gid))).
+		WithParent().
+		WithEntities().
+		All(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, tagRow := range tags {
+		if _, allowed := allowedTagNames[tagRow.Name]; !allowed ||
+			tagRow.Description != "" ||
+			tagRow.Color != "" ||
+			tagRow.Icon != "" ||
+			tagRow.Edges.Parent != nil ||
+			len(tagRow.Edges.Entities) != 0 {
+			return false, nil
+		}
+		if _, duplicate := seenTags[tagRow.Name]; duplicate {
+			return false, nil
+		}
+		seenTags[tagRow.Name] = struct{}{}
+	}
+
 	return true, nil
+}
+
+func isSeedLocation(
+	row *ent.Entity,
+	locationTypeIDs map[uuid.UUID]struct{},
+	allowedNames map[string]struct{},
+) bool {
+	if row.Edges.EntityType == nil {
+		return false
+	}
+	if _, ok := locationTypeIDs[row.Edges.EntityType.ID]; !ok {
+		return false
+	}
+	if _, ok := allowedNames[row.Name]; !ok {
+		return false
+	}
+
+	return row.Description == "" &&
+		row.ImportRef == "" &&
+		row.Notes == "" &&
+		row.Quantity == 0 &&
+		!row.Insured &&
+		!row.Archived &&
+		row.AssetID == 0 &&
+		!row.SyncChildEntityLocations &&
+		row.SerialNumber == "" &&
+		row.ModelNumber == "" &&
+		row.Manufacturer == "" &&
+		row.Icon == "" &&
+		!row.LifetimeWarranty &&
+		row.WarrantyExpires.IsZero() &&
+		row.WarrantyDetails == "" &&
+		row.PurchaseDate.IsZero() &&
+		row.PurchaseFrom == "" &&
+		row.PurchasePrice == 0 &&
+		row.SoldDate.IsZero() &&
+		row.SoldTo == "" &&
+		row.SoldPrice == 0 &&
+		row.SoldNotes == "" &&
+		row.Edges.Parent == nil &&
+		len(row.Edges.Tag) == 0 &&
+		len(row.Edges.Fields) == 0 &&
+		len(row.Edges.MaintenanceEntries) == 0 &&
+		len(row.Edges.Attachments) == 0
 }
 
 // RunExport is invoked by the pubsub subscriber when an export job message is
@@ -339,6 +421,13 @@ func (s *ExportService) RunExport(ctx context.Context, exportID, gid uuid.UUID) 
 		return
 	}
 	if exp.Status != "pending" {
+		if exp.Status == "running" {
+			err := errors.New("export was interrupted while running; start a new export")
+			if setErr := s.repos.Exports.SetFailed(ctx, gid, exportID, err.Error()); setErr != nil {
+				log.Error().Err(setErr).Stringer("export_id", exportID).Msg("export job: could not persist interrupted state")
+			}
+			s.publishMutation(gid)
+		}
 		log.Warn().Stringer("export_id", exportID).Str("status", exp.Status).Msg("export job: not pending, skipping")
 		return
 	}
@@ -410,6 +499,10 @@ func (s *ExportService) buildArtifact(ctx context.Context, exportID, gid uuid.UU
 	if err := s.copyAttachmentBlobs(ctx, zw, gid); err != nil {
 		_ = zw.Close()
 		return "", 0, fmt.Errorf("copy attachments: %w", err)
+	}
+	if err := s.copyTemplatePhotoBlobs(ctx, zw, gid); err != nil {
+		_ = zw.Close()
+		return "", 0, fmt.Errorf("copy template photos: %w", err)
 	}
 	_ = s.repos.Exports.SetProgress(ctx, gid, exportID, 95)
 
@@ -483,7 +576,7 @@ func (s *ExportService) copyAttachmentBlobs(ctx context.Context, zw *zip.Writer,
 		}
 	}
 
-	q := "SELECT id, path FROM attachments WHERE " + rebindPlaceholders(spec.scope, s.dialect)
+	q := "SELECT id, path, mime_type FROM attachments WHERE " + rebindPlaceholders(spec.scope, s.dialect)
 	args := make([]any, 0, strings.Count(spec.scope, "?"))
 	for i := 0; i < cap(args); i++ {
 		args = append(args, gid.String())
@@ -493,17 +586,17 @@ func (s *ExportService) copyAttachmentBlobs(ctx context.Context, zw *zip.Writer,
 		return err
 	}
 	defer func() { _ = rows.Close() }()
-	type attRef struct{ id, path string }
+	type attRef struct{ id, path, mimeType string }
 	var refs []attRef
 	for rows.Next() {
-		var id, path string
-		if err := rows.Scan(&id, &path); err != nil {
+		var id, path, mimeType string
+		if err := rows.Scan(&id, &path, &mimeType); err != nil {
 			return err
 		}
-		if path == "" {
+		if path == "" || mimeType == repo.MimeTypeLinkURL {
 			continue
 		}
-		refs = append(refs, attRef{id: id, path: path})
+		refs = append(refs, attRef{id: id, path: path, mimeType: mimeType})
 	}
 	if err := rows.Err(); err != nil {
 		return err
@@ -516,13 +609,12 @@ func (s *ExportService) copyAttachmentBlobs(ctx context.Context, zw *zip.Writer,
 	defer func() { _ = bucket.Close() }()
 
 	for _, ref := range refs {
+		if err := validateDocumentBlobPath(ref.path, gid); err != nil {
+			return fmt.Errorf("attachment %s: %w", ref.id, err)
+		}
 		r, err := bucket.NewReader(ctx, s.repos.Attachments.GetFullPath(ref.path), nil)
 		if err != nil {
-			// Don't fail the whole export for one missing blob; just skip it.
-			// On import the attachment row will exist but the blob won't —
-			// same end state as a thumbnail-generation failure today.
-			log.Warn().Err(err).Str("path", ref.path).Msg("export: attachment blob missing, skipping")
-			continue
+			return fmt.Errorf("attachment %s blob %q: %w", ref.id, ref.path, err)
 		}
 		w, err := zw.Create(attachmentsDir + ref.id)
 		if err != nil {
@@ -533,7 +625,54 @@ func (s *ExportService) copyAttachmentBlobs(ctx context.Context, zw *zip.Writer,
 			_ = r.Close()
 			return err
 		}
-		_ = r.Close()
+		if err := r.Close(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// copyTemplatePhotoBlobs writes every template photo under a stable archive
+// name keyed by the source template ID. Unlike attachment thumbnails, a
+// missing template photo is a hard export error: silently omitting it would
+// produce a backup whose template row points at a blob that cannot be restored.
+func (s *ExportService) copyTemplatePhotoBlobs(ctx context.Context, zw *zip.Writer, gid uuid.UUID) error {
+	rows, err := s.db.EntityTemplate.Query().
+		Where(entitytemplate.HasGroupWith(group.ID(gid)), entitytemplate.PhotoPathNEQ("")).
+		All(ctx)
+	if err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+
+	bucket, err := blob.OpenBucket(ctx, s.repos.Attachments.GetConnString())
+	if err != nil {
+		return err
+	}
+	defer func() { _ = bucket.Close() }()
+
+	for _, tmpl := range rows {
+		if err := validateDocumentBlobPath(tmpl.PhotoPath, gid); err != nil {
+			return fmt.Errorf("template %s: %w", tmpl.ID, err)
+		}
+		r, err := bucket.NewReader(ctx, s.repos.Attachments.GetFullPath(tmpl.PhotoPath), nil)
+		if err != nil {
+			return fmt.Errorf("template %s photo %q: %w", tmpl.ID, tmpl.PhotoPath, err)
+		}
+		w, err := zw.Create(templatePhotosDir + tmpl.ID.String())
+		if err != nil {
+			_ = r.Close()
+			return err
+		}
+		if _, err := io.Copy(w, r); err != nil {
+			_ = r.Close()
+			return err
+		}
+		if err := r.Close(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -687,6 +826,13 @@ func (s *ExportService) RunImport(ctx context.Context, gid, userID, importID uui
 		return
 	}
 	if row.Status != "pending" {
+		if row.Status == "running" {
+			errMsg := "import was interrupted while running; the staged archive was retained so it can be imported again"
+			if setErr := s.repos.Exports.SetFailed(ctx, gid, importID, errMsg); setErr != nil {
+				log.Error().Err(setErr).Stringer("import_id", importID).Msg("import job: could not persist interrupted state")
+			}
+			s.publishImportFinished(gid)
+		}
 		log.Warn().Stringer("import_id", importID).Str("status", row.Status).Msg("import job: not pending, skipping")
 		return
 	}
@@ -708,27 +854,36 @@ func (s *ExportService) RunImport(ctx context.Context, gid, userID, importID uui
 	}
 	s.publishImportFinished(gid)
 
-	if err := s.runImport(ctx, gid, userID, importID, uploadKey); err != nil {
+	cleanupUpload := false
+	if err := s.runImport(ctx, gid, userID, importID, uploadKey, row.SizeBytes); err != nil {
 		log.Err(err).Stringer("gid", gid).Msg("import job: failed")
-		_ = s.repos.Exports.SetFailed(ctx, gid, importID, err.Error())
+		if setErr := s.repos.Exports.SetFailed(ctx, gid, importID, err.Error()); setErr != nil {
+			log.Error().Err(setErr).Stringer("import_id", importID).Msg("import job: failed to persist failure; retaining staged archive")
+		} else {
+			cleanupUpload = true
+		}
 	} else {
 		// On success the upload zip has been fully restored; keep the row
 		// size_bytes (set when the upload was staged) and just flip status.
 		if err := s.repos.Exports.SetCompleted(ctx, gid, importID, uploadKey, row.SizeBytes); err != nil {
-			log.Err(err).Stringer("import_id", importID).Msg("import job: failed to mark completed")
+			log.Err(err).Stringer("import_id", importID).Msg("import job: failed to mark completed; retaining staged archive")
+		} else {
+			cleanupUpload = true
 		}
 	}
 
-	// Cleanup the staging blob whether the import succeeded or not — keeping
-	// it around just lets a second delivery race against the populated DB.
-	if err := s.deleteUpload(ctx, uploadKey); err != nil {
-		log.Warn().Err(err).Str("upload_key", uploadKey).Msg("import job: failed to clean staging upload")
+	// Delete only after the terminal status is durable. If status persistence
+	// fails, the staged archive is the only recoverable copy of the operation.
+	if cleanupUpload {
+		if err := s.deleteUpload(ctx, uploadKey); err != nil {
+			log.Warn().Err(err).Str("upload_key", uploadKey).Msg("import job: failed to clean staging upload")
+		}
 	}
 
 	s.publishImportFinished(gid)
 }
 
-func (s *ExportService) runImport(ctx context.Context, gid, userID, importID uuid.UUID, uploadKey string) error {
+func (s *ExportService) runImport(ctx context.Context, gid, userID, importID uuid.UUID, uploadKey string, expectedSize int64) error {
 	// setProgress is best-effort: a failed status update is logged but never
 	// aborts the import itself — progress is observability, not correctness.
 	setProgress := func(pct int) {
@@ -771,7 +926,7 @@ func (s *ExportService) runImport(ctx context.Context, gid, userID, importID uui
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
 	}()
-	size, err := io.Copy(tmp, r)
+	size, err := copyExactSize(tmp, r, expectedSize)
 	if err != nil {
 		return fmt.Errorf("download upload: %w", err)
 	}
@@ -791,6 +946,12 @@ func (s *ExportService) runImport(ctx context.Context, gid, userID, importID uui
 	}
 	if mf.SchemaVersion != ExportSchemaVersion {
 		return fmt.Errorf("unsupported schema version %d (this server expects %d)", mf.SchemaVersion, ExportSchemaVersion)
+	}
+	if err := validateAttachmentBlobArchive(zr); err != nil {
+		return fmt.Errorf("validate attachments: %w", err)
+	}
+	if err := validateTemplatePhotoArchive(zr); err != nil {
+		return fmt.Errorf("validate template photos: %w", err)
 	}
 	// Progress budget: 0–5% download + manifest, ~5–80% reserved for the DB
 	// phase (reported once after commit because intermediate setProgress
@@ -852,6 +1013,12 @@ func (s *ExportService) runImport(ctx context.Context, gid, userID, importID uui
 		}
 		return fmt.Errorf("restore attachments: %w", err)
 	}
+	if err := s.restoreTemplatePhotoBlobs(ctx, zr, idMap["entity_templates"]); err != nil {
+		if werr := wipeGroup(ctx, s.db.Sql(), s.dialect, gid); werr != nil {
+			log.Err(werr).Stringer("gid", gid).Msg("import job: template photo restore failed and rollback wipe also failed")
+		}
+		return fmt.Errorf("restore template photos: %w", err)
+	}
 	setProgress(95)
 
 	// Notify the frontend that lots of things just appeared.
@@ -860,6 +1027,20 @@ func (s *ExportService) runImport(ctx context.Context, gid, userID, importID uui
 		s.bus.Publish(eventbus.EventTagMutation, eventbus.GroupMutationEvent{GID: gid})
 	}
 	return nil
+}
+
+func copyExactSize(dst io.Writer, src io.Reader, expectedSize int64) (int64, error) {
+	if expectedSize <= 0 || expectedSize == int64(^uint64(0)>>1) {
+		return 0, fmt.Errorf("invalid recorded upload size %d", expectedSize)
+	}
+	n, err := io.Copy(dst, io.LimitReader(src, expectedSize+1))
+	if err != nil {
+		return n, err
+	}
+	if n != expectedSize {
+		return n, fmt.Errorf("staged upload size mismatch: recorded %d bytes, read %d", expectedSize, n)
+	}
+	return n, nil
 }
 
 // restoreAttachmentBlobs iterates attachments/* in the zip and writes each
@@ -892,18 +1073,15 @@ func (s *ExportService) restoreAttachmentBlobs(ctx context.Context, zr *zip.Read
 		oldIDStr := strings.TrimPrefix(f.Name, attachmentsDir)
 		newIDStr, ok := idMap[oldIDStr]
 		if !ok {
-			log.Warn().Str("name", f.Name).Msg("import: no attachment row matches blob, skipping")
-			continue
+			return fmt.Errorf("attachment blob %q has no remapped row", f.Name)
 		}
 		id, err := uuid.Parse(newIDStr)
 		if err != nil {
-			log.Warn().Str("name", f.Name).Msg("import: remapped attachment id is not a uuid")
-			continue
+			return fmt.Errorf("attachment blob %q has invalid remapped id: %w", f.Name, err)
 		}
 		att, err := s.db.Attachment.Get(ctx, id)
 		if err != nil {
-			log.Warn().Err(err).Stringer("attachment_id", id).Msg("import: attachment row missing for blob")
-			continue
+			return fmt.Errorf("load attachment %s for blob %q: %w", id, f.Name, err)
 		}
 		zf, err := f.Open()
 		if err != nil {
@@ -934,6 +1112,159 @@ func (s *ExportService) restoreAttachmentBlobs(ctx context.Context, zr *zip.Read
 	return nil
 }
 
+func (s *ExportService) restoreTemplatePhotoBlobs(
+	ctx context.Context,
+	zr *zip.Reader,
+	idMap map[string]string,
+) error {
+	bucket, err := blob.OpenBucket(ctx, s.repos.Attachments.GetConnString())
+	if err != nil {
+		return err
+	}
+	defer func() { _ = bucket.Close() }()
+
+	for _, f := range zr.File {
+		if !strings.HasPrefix(f.Name, templatePhotosDir) || f.FileInfo().IsDir() {
+			continue
+		}
+		oldID := strings.TrimPrefix(f.Name, templatePhotosDir)
+		newIDString, ok := idMap[oldID]
+		if !ok {
+			return fmt.Errorf("template photo %q has no remapped template row", f.Name)
+		}
+		newID, err := uuid.Parse(newIDString)
+		if err != nil {
+			return fmt.Errorf("template photo %q has invalid remapped template id: %w", f.Name, err)
+		}
+		tmpl, err := s.db.EntityTemplate.Get(ctx, newID)
+		if err != nil {
+			return fmt.Errorf("load template %s for photo: %w", newID, err)
+		}
+		if tmpl.PhotoPath == "" {
+			return fmt.Errorf("template %s has archive photo but no photo path", newID)
+		}
+		zf, err := f.Open()
+		if err != nil {
+			return err
+		}
+		w, err := bucket.NewWriter(ctx, s.repos.Attachments.GetFullPath(tmpl.PhotoPath), &blob.WriterOptions{
+			ContentType: tmpl.PhotoMimeType,
+		})
+		if err != nil {
+			_ = zf.Close()
+			return err
+		}
+		if _, err := io.Copy(w, zf); err != nil {
+			_ = w.Close()
+			_ = zf.Close()
+			return err
+		}
+		if err := w.Close(); err != nil {
+			_ = zf.Close()
+			return err
+		}
+		if err := zf.Close(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateAttachmentBlobArchive requires a one-to-one match between every
+// non-link attachment row and attachments/<source-attachment-uuid>. This
+// prevents a truncated or crafted backup from committing rows that point at
+// absent blobs, and rejects orphan/duplicate blob entries before DB writes.
+func validateAttachmentBlobArchive(zr *zip.Reader) error {
+	rows, err := readTableJSON(zr, "attachments.json")
+	if err != nil {
+		return err
+	}
+	expected := make(map[string]struct{})
+	for _, row := range rows {
+		if fmt.Sprint(row["mime_type"]) == repo.MimeTypeLinkURL {
+			continue
+		}
+		id := fmt.Sprint(row["id"])
+		if _, err := uuid.Parse(id); err != nil {
+			return fmt.Errorf("file attachment has invalid id %q", id)
+		}
+		if _, duplicate := expected[id]; duplicate {
+			return fmt.Errorf("duplicate attachment row id %q", id)
+		}
+		expected[id] = struct{}{}
+	}
+
+	seen := make(map[string]struct{})
+	for _, f := range zr.File {
+		if !strings.HasPrefix(f.Name, attachmentsDir) || f.FileInfo().IsDir() {
+			continue
+		}
+		oldID := strings.TrimPrefix(f.Name, attachmentsDir)
+		if _, err := uuid.Parse(oldID); err != nil {
+			return fmt.Errorf("invalid attachment blob entry %q", f.Name)
+		}
+		if _, ok := expected[oldID]; !ok {
+			return fmt.Errorf("attachment blob entry %q has no matching row", f.Name)
+		}
+		if _, duplicate := seen[oldID]; duplicate {
+			return fmt.Errorf("duplicate attachment blob entry %q", f.Name)
+		}
+		seen[oldID] = struct{}{}
+	}
+	for id := range expected {
+		if _, ok := seen[id]; !ok {
+			return fmt.Errorf("attachment %s references a file but its blob is missing", id)
+		}
+	}
+	return nil
+}
+
+// validateTemplatePhotoArchive requires a one-to-one match between template
+// rows with photo_path and template-photos/<source-template-uuid> entries.
+// This runs before the destination transaction is opened.
+func validateTemplatePhotoArchive(zr *zip.Reader) error {
+	rows, err := readTableJSON(zr, "entity_templates.json")
+	if err != nil {
+		return err
+	}
+	expected := make(map[string]struct{})
+	for _, row := range rows {
+		photoPath, _ := row["photo_path"].(string)
+		if photoPath == "" {
+			continue
+		}
+		id := fmt.Sprint(row["id"])
+		if _, err := uuid.Parse(id); err != nil {
+			return fmt.Errorf("template with photo has invalid id %q", id)
+		}
+		expected[id] = struct{}{}
+	}
+
+	seen := make(map[string]struct{})
+	for _, f := range zr.File {
+		if !strings.HasPrefix(f.Name, templatePhotosDir) || f.FileInfo().IsDir() {
+			continue
+		}
+		oldID := strings.TrimPrefix(f.Name, templatePhotosDir)
+		if _, err := uuid.Parse(oldID); err != nil {
+			return fmt.Errorf("invalid template photo entry %q", f.Name)
+		}
+		if _, ok := expected[oldID]; !ok {
+			return fmt.Errorf("template photo entry %q has no matching template row", f.Name)
+		}
+		if _, duplicate := seen[oldID]; duplicate {
+			return fmt.Errorf("duplicate template photo entry %q", f.Name)
+		}
+		seen[oldID] = struct{}{}
+	}
+	for id := range expected {
+		if _, ok := seen[id]; !ok {
+			return fmt.Errorf("template %s references a photo but its blob is missing", id)
+		}
+	}
+	return nil
+}
+
 // deleteUpload removes the staged import zip from blob storage.
 func (s *ExportService) deleteUpload(ctx context.Context, uploadKey string) error {
 	bucket, err := blob.OpenBucket(ctx, s.repos.Attachments.GetConnString())
@@ -957,12 +1288,7 @@ func readManifest(zr *zip.Reader) (Manifest, error) {
 		if f.Name != manifestFile {
 			continue
 		}
-		r, err := f.Open()
-		if err != nil {
-			return mf, err
-		}
-		defer func() { _ = r.Close() }()
-		return mf, json.NewDecoder(r).Decode(&mf)
+		return mf, readBoundedZipJSON(f, maxImportManifestEntryBytes, &mf)
 	}
 	return mf, errors.New("manifest.json missing from zip")
 }
@@ -975,18 +1301,37 @@ func readTableJSON(zr *zip.Reader, name string) ([]map[string]any, error) {
 		if f.Name != name {
 			continue
 		}
-		r, err := f.Open()
-		if err != nil {
-			return nil, err
-		}
-		defer func() { _ = r.Close() }()
 		var out []map[string]any
-		if err := json.NewDecoder(r).Decode(&out); err != nil {
+		if err := readBoundedZipJSON(f, maxImportJSONEntryBytes, &out); err != nil {
 			return nil, err
 		}
 		return out, nil
 	}
 	return nil, nil
+}
+
+func readBoundedZipJSON(f *zip.File, maxBytes uint64, dst any) error {
+	if f.UncompressedSize64 > maxBytes {
+		return fmt.Errorf("zip entry %q exceeds JSON size limit %d", f.Name, maxBytes)
+	}
+	r, err := f.Open()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = r.Close() }()
+
+	limit := int64(maxBytes) + 1
+	data, err := io.ReadAll(io.LimitReader(r, limit))
+	if err != nil {
+		return err
+	}
+	if uint64(len(data)) > maxBytes {
+		return fmt.Errorf("zip entry %q exceeds JSON size limit %d", f.Name, maxBytes)
+	}
+	if err := json.Unmarshal(data, dst); err != nil {
+		return fmt.Errorf("decode %s: %w", f.Name, err)
+	}
+	return nil
 }
 
 // sqlExecer is the minimal interface used by the import path so the same
@@ -1102,16 +1447,27 @@ func rewriteBlobPath(path string, srcGid, dstGid uuid.UUID) string {
 }
 
 // enforceZipUncompressedLimit rejects zip bombs before any member is opened.
-// Legitimate exports compress ~3-10x (JSON tables compress well, attachment
-// binaries barely at all); 100x the compressed upload is a generous ceiling
-// that still flags any pathological expansion ratio. Both per-entry and
-// cumulative caps are checked since either alone is bypassable. The declared
-// uncompressed size in the central directory is what attackers control, but
-// typical bombs declare accurate-but-tiny per-entry sizes that sum to a huge
-// total — the cumulative check is what stops them.
+// The ratio limit handles small highly-compressible archives, while the
+// absolute limit keeps a permitted 1GB upload from declaring 100GB of output.
+// JSON entries have a tighter cap because replay materializes one table at a
+// time; attachment blobs remain streaming and share only the total cap.
 func enforceZipUncompressedLimit(zr *zip.Reader, uploadSize int64) error {
-	const maxZipExpansionRatio = 100
-	maxUncompressed := uint64(uploadSize) * maxZipExpansionRatio
+	if uploadSize <= 0 {
+		return fmt.Errorf("import rejected: invalid compressed size %d", uploadSize)
+	}
+	if len(zr.File) > maxImportZipEntries {
+		return fmt.Errorf("import rejected: zip contains %d entries, exceeds limit %d", len(zr.File), maxImportZipEntries)
+	}
+
+	uploadBytes := uint64(uploadSize)
+	maxUncompressed := maxImportUncompressedBytes
+	if uploadBytes <= ^uint64(0)/maxZipExpansionRatio {
+		byRatio := uploadBytes * maxZipExpansionRatio
+		if byRatio < maxUncompressed {
+			maxUncompressed = byRatio
+		}
+	}
+
 	var total uint64
 	for _, f := range zr.File {
 		if f.UncompressedSize64 > maxUncompressed {
@@ -1121,6 +1477,14 @@ func enforceZipUncompressedLimit(zr *zip.Reader, uploadSize int64) error {
 			return fmt.Errorf("import rejected: zip cumulative uncompressed size exceeds limit %d", maxUncompressed)
 		}
 		total += f.UncompressedSize64
+
+		if f.Name == manifestFile && f.UncompressedSize64 > maxImportManifestEntryBytes {
+			return fmt.Errorf("import rejected: manifest exceeds limit %d", maxImportManifestEntryBytes)
+		}
+		if strings.HasSuffix(f.Name, ".json") && f.Name != manifestFile &&
+			f.UncompressedSize64 > maxImportJSONEntryBytes {
+			return fmt.Errorf("import rejected: JSON entry %q exceeds limit %d", f.Name, maxImportJSONEntryBytes)
+		}
 	}
 	return nil
 }
@@ -1141,29 +1505,34 @@ func (s *ExportService) replayImportRows(ctx context.Context, tx *sql.Tx, zr *zi
 		idMap[table][oldID] = newID
 	}
 
-	// remapFK substitutes an old FK value with its remapped new value, or
-	// returns the original if unknown (which surfaces as a FK violation on
-	// insert — better to fail loud than silently null it out).
-	remapFK := func(target string, v any) any {
+	// remapFK fails closed when the archive references a row that was not
+	// imported. Passing an unknown source UUID through unchanged is unsafe:
+	// a global database FK can resolve it to another tenant's existing row.
+	remapFK := func(target string, v any) (any, error) {
 		if v == nil {
-			return nil
+			return nil, nil
 		}
-		s := fmt.Sprint(v)
-		if s == "" {
-			return nil
+		oldID := fmt.Sprint(v)
+		if oldID == "" {
+			return nil, nil
 		}
 		if mapping, ok := idMap[target]; ok {
-			if newID, found := mapping[s]; found {
-				return newID
+			if newID, found := mapping[oldID]; found {
+				return newID, nil
 			}
 		}
-		return v
+		return nil, fmt.Errorf("unmapped foreign key %q for table %q", oldID, target)
 	}
 
 	type deferredUpdate struct {
 		table, col, newID, oldFKValue, targetTable string
 	}
 	var deferred []deferredUpdate
+	type deferredUUIDListUpdate struct {
+		table, col, newID, targetTable string
+		oldIDs                         []string
+	}
+	var deferredUUIDLists []deferredUUIDListUpdate
 
 	for _, spec := range exportTables {
 		rows, err := readTableJSON(zr, spec.name+".json")
@@ -1174,6 +1543,24 @@ func (s *ExportService) replayImportRows(ctx context.Context, tx *sql.Tx, zr *zi
 			newID, err := remapImportRow(row, spec, gid, userID, srcGroupID, remapFK, rememberID)
 			if err != nil {
 				return nil, err
+			}
+			if spec.name == "entity_templates" {
+				oldTagIDs, err := decodeArchivedUUIDList(row["default_tag_ids"])
+				if err != nil {
+					return nil, fmt.Errorf("decode entity_templates.default_tag_ids: %w", err)
+				}
+				if len(oldTagIDs) > 0 {
+					deferredUUIDLists = append(deferredUUIDLists, deferredUUIDListUpdate{
+						table:       spec.name,
+						col:         "default_tag_ids",
+						newID:       newID,
+						targetTable: "tags",
+						oldIDs:      oldTagIDs,
+					})
+				}
+				// Tags are imported after templates, so clear the JSON list for
+				// the initial insert and patch it once every tag ID is mapped.
+				row["default_tag_ids"] = nil
 			}
 			for col, target := range spec.deferCols {
 				if v, ok := row[col]; ok && v != nil && v != "" {
@@ -1195,17 +1582,87 @@ func (s *ExportService) replayImportRows(ctx context.Context, tx *sql.Tx, zr *zi
 		}
 	}
 
+	for _, d := range deferredUUIDLists {
+		mappedIDs := make([]string, 0, len(d.oldIDs))
+		for _, oldID := range d.oldIDs {
+			mapped, err := remapFK(d.targetTable, oldID)
+			if err != nil {
+				return nil, fmt.Errorf("deferred update %s.%s: %w", d.table, d.col, err)
+			}
+			mappedIDs = append(mappedIDs, fmt.Sprint(mapped))
+		}
+		encoded, err := json.Marshal(mappedIDs)
+		if err != nil {
+			return nil, fmt.Errorf("encode remapped %s.%s: %w", d.table, d.col, err)
+		}
+		q := fmt.Sprintf("UPDATE %s SET %s = %s WHERE id = %s",
+			quoteIdent(s.dialect, d.table),
+			quoteIdent(s.dialect, d.col),
+			placeholder(s.dialect, 1),
+			placeholder(s.dialect, 2))
+		if _, err := tx.ExecContext(ctx, q, string(encoded), d.newID); err != nil {
+			return nil, fmt.Errorf("deferred update %s.%s: %w", d.table, d.col, err)
+		}
+	}
+
 	// Apply deferred updates (self-referential and forward-circular FKs).
 	for _, d := range deferred {
-		newFK := remapFK(d.targetTable, d.oldFKValue)
+		newFK, err := remapFK(d.targetTable, d.oldFKValue)
+		if err != nil {
+			return nil, fmt.Errorf("deferred update %s.%s: %w", d.table, d.col, err)
+		}
 		q := fmt.Sprintf("UPDATE %s SET %s = %s WHERE id = %s",
-			d.table, d.col, placeholder(s.dialect, 1), placeholder(s.dialect, 2))
+			quoteIdent(s.dialect, d.table),
+			quoteIdent(s.dialect, d.col),
+			placeholder(s.dialect, 1),
+			placeholder(s.dialect, 2))
 		if _, err := tx.ExecContext(ctx, q, newFK, d.newID); err != nil {
 			return nil, fmt.Errorf("deferred update %s.%s: %w", d.table, d.col, err)
 		}
 	}
 
 	return idMap, nil
+}
+
+func decodeArchivedUUIDList(v any) ([]string, error) {
+	if v == nil {
+		return nil, nil
+	}
+
+	var raw []any
+	switch value := v.(type) {
+	case string:
+		if strings.TrimSpace(value) == "" || strings.TrimSpace(value) == "null" {
+			return nil, nil
+		}
+		if err := json.Unmarshal([]byte(value), &raw); err != nil {
+			return nil, err
+		}
+	case []any:
+		raw = value
+	default:
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(encoded, &raw); err != nil {
+			return nil, err
+		}
+	}
+
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		idString, ok := item.(string)
+		if !ok {
+			return nil, fmt.Errorf("UUID list contains non-string value %T", item)
+		}
+		id, err := uuid.Parse(idString)
+		if err != nil {
+			return nil, fmt.Errorf("invalid UUID %q: %w", idString, err)
+		}
+		out = append(out, id.String())
+	}
+	return out, nil
 }
 
 // remapImportRow rewrites a single row in place: regenerates its PK, swaps
@@ -1217,7 +1674,7 @@ func remapImportRow(
 	row map[string]any,
 	spec tableSpec,
 	gid, userID, srcGroupID uuid.UUID,
-	remapFK func(target string, v any) any,
+	remapFK func(target string, v any) (any, error),
 	rememberID func(table, oldID, newID string),
 ) (string, error) {
 	var newID string
@@ -1241,7 +1698,11 @@ func remapImportRow(
 	}
 	for col, target := range spec.fkCols {
 		if v, ok := row[col]; ok {
-			row[col] = remapFK(target, v)
+			mapped, err := remapFK(target, v)
+			if err != nil {
+				return "", fmt.Errorf("remap %s.%s: %w", spec.name, col, err)
+			}
+			row[col] = mapped
 		}
 	}
 	// Attachment paths are "{group_id}/documents/{hash}"; rewrite the source
@@ -1260,6 +1721,11 @@ func remapImportRow(
 			return "", err
 		}
 	}
+	if spec.name == "entity_templates" {
+		if err := rewriteTemplatePhotoPath(row, srcGroupID, gid); err != nil {
+			return "", err
+		}
+	}
 	return newID, nil
 }
 
@@ -1275,18 +1741,62 @@ func rewriteAttachmentPath(row map[string]any, srcGroupID, dstGroupID uuid.UUID)
 	if !ok || str == "" {
 		return fmt.Errorf("attachment row has empty/non-string path")
 	}
-	cleanPath := path.Clean(str)
-	srcPrefix := srcGroupID.String() + "/documents/"
-	if !strings.HasPrefix(cleanPath, srcPrefix) {
-		return fmt.Errorf("attachment path %q does not live under source group's documents prefix", str)
+	if fmt.Sprint(row["mime_type"]) == repo.MimeTypeLinkURL {
+		u, err := url.ParseRequestURI(str)
+		if err != nil || u.Host == "" || u.User != nil ||
+			(u.Scheme != "http" && u.Scheme != "https") {
+			return fmt.Errorf("external link attachment has invalid http/https URL")
+		}
+		return nil
 	}
-	newPath := rewriteBlobPath(cleanPath, srcGroupID, dstGroupID)
-	dstPrefix := dstGroupID.String() + "/documents/"
-	if !strings.HasPrefix(newPath, dstPrefix) {
-		return fmt.Errorf("rewritten attachment path %q escapes destination group's documents prefix", newPath)
+	newPath, err := remapDocumentBlobPath(str, srcGroupID, dstGroupID)
+	if err != nil {
+		return fmt.Errorf("attachment %w", err)
 	}
 	row["path"] = newPath
 	return nil
+}
+
+func rewriteTemplatePhotoPath(row map[string]any, srcGroupID, dstGroupID uuid.UUID) error {
+	v, ok := row["photo_path"]
+	if !ok || v == nil || v == "" {
+		return nil
+	}
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("template photo path is not a string")
+	}
+	newPath, err := remapDocumentBlobPath(str, srcGroupID, dstGroupID)
+	if err != nil {
+		return fmt.Errorf("template photo %w", err)
+	}
+	row["photo_path"] = newPath
+	return nil
+}
+
+func validateDocumentBlobPath(blobPath string, gid uuid.UUID) error {
+	_, err := remapDocumentBlobPath(blobPath, gid, gid)
+	return err
+}
+
+func remapDocumentBlobPath(blobPath string, srcGroupID, dstGroupID uuid.UUID) (string, error) {
+	if blobPath == "" || path.Clean(blobPath) != blobPath || strings.HasPrefix(blobPath, "/") {
+		return "", fmt.Errorf("path %q is not a canonical relative blob path", blobPath)
+	}
+	srcPrefix := srcGroupID.String() + "/documents/"
+	if !strings.HasPrefix(blobPath, srcPrefix) {
+		return "", fmt.Errorf("path %q does not live under source group's documents prefix", blobPath)
+	}
+	suffix := strings.TrimPrefix(blobPath, srcPrefix)
+	if suffix == "" || strings.Contains(suffix, "/") {
+		return "", fmt.Errorf("path %q must identify one document blob", blobPath)
+	}
+	newPath := dstGroupID.String() + "/documents/" + suffix
+	dstPrefix := dstGroupID.String() + "/documents/"
+	if !strings.HasPrefix(newPath, dstPrefix) || path.Clean(newPath) != newPath {
+		return "", fmt.Errorf("rewritten path %q escapes destination group's documents prefix", newPath)
+	}
+	return newPath, nil
 }
 
 // wipeGroup deletes every group-scoped row in the export table list, in
