@@ -257,6 +257,8 @@ func New(buildstr string, description string) (*Config, error) {
 		return &cfg, nil
 	}
 
+	// #nosec G304 -- the operator explicitly selects this local configuration
+	// file through the positional CLI argument.
 	configData, err := os.ReadFile(configPath)
 	if err != nil {
 		// The container images use this path as their default command, while a
