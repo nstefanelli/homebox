@@ -4,12 +4,27 @@ include:
   - component: $CI_SERVER_FQDN/components/code-intelligence/golang-code-intel@v0.3.1
   - component: $CI_SERVER_FQDN/components/code-intelligence/typescript-code-intel@v0.3.1
     inputs:
-      node_version: 24
+      node_version: "22.23.1"
   - component: $CI_SERVER_FQDN/components/secret-detection/secret-detection@2.1.0
 
 variables:
   GITLAB_ADVANCED_SAST_ENABLED: 'true'
   ADVANCED_SAST_PARTIAL_SCAN: 'differential'
+  GO_VERSION: "1.26.5"
+  GO_LINUX_AMD64_SHA256: "5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053"
+  NODE_VERSION: "22.23.1"
+  PNPM_VERSION: "10.28.0"
+  PLAYWRIGHT_VERSION: "1.60.0"
+  TASK_VERSION: "3.51.1"
+  GOLANGCI_LINT_VERSION: "2.12.2"
+  GORELEASER_VERSION: "2.17.0"
+  # Keep mutable tags readable while binding execution to immutable manifests.
+  GO_IMAGE: "golang:1.26.5-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651"
+  NODE_IMAGE: "node:22.23.1-bookworm@sha256:5647be709086c696ff32edaaf1c70cd26d1da6ab2b39c32f3c7b4c4a31957e37"
+  PLAYWRIGHT_IMAGE: "mcr.microsoft.com/playwright:v1.60.0-noble@sha256:9bd26ad900bb5e0f4dee75839e957a89ae89c2b7ab1e76050e559790e946b948"
+  PYTHON_IMAGE: "python:3.11.15-bookworm@sha256:5c34b355088846dddc8afb7442c20b9433dccdc8d66192dc52c616adeaa106a3"
+  DOCKER_CLI_IMAGE: "docker:29.6.2-cli@sha256:be132a9f282288de4afaf63379dff75711fda0147c6b72a9df44e51841402144"
+  DOCKER_DIND_IMAGE: "docker:29.6.2-dind@sha256:bfec1f5159c63a81ca6fdedbd81404d2c0e16378ed0feec3bb3fbf3998847659"
   DOCKER_DRIVER: overlay2
   DOCKER_TLS_CERTDIR: "/certs"
   # Registry configuration - adjust as needed
@@ -28,7 +43,7 @@ stages:
 # Backend Tests (Go)
 test:backend:
   stage: test
-  image: golang:1.24
+  image: "$GO_IMAGE"
   cache:
     key:
       files:
@@ -37,9 +52,9 @@ test:backend:
       - backend/.go-pkg-cache/
     policy: pull-push
   before_script:
-    - export GOMODCACHE=$(pwd)/backend/.go-pkg-cache
-    # Install Task
-    - sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
+    - export GOMODCACHE="$CI_PROJECT_DIR/backend/.go-pkg-cache"
+    - GOBIN=/usr/local/bin go install "github.com/go-task/task/v3/cmd/task@v${TASK_VERSION}"
+    - GOBIN=/usr/local/bin go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v${GOLANGCI_LINT_VERSION}"
   script:
     - cd backend
     - task go:lint
@@ -61,7 +76,7 @@ test:backend:
 # Frontend Lint and Typecheck
 test:frontend:lint:
   stage: test
-  image: node:22-alpine
+  image: "$NODE_IMAGE"
   cache:
     key:
       files:
@@ -71,8 +86,9 @@ test:frontend:lint:
       - .pnpm-store/
     policy: pull-push
   before_script:
-    - npm install -g pnpm@9.15.3
-    - pnpm config set store-dir $(pwd)/.pnpm-store
+    - corepack enable
+    - corepack prepare "pnpm@${PNPM_VERSION}" --activate
+    - pnpm config set store-dir "$CI_PROJECT_DIR/.pnpm-store"
   script:
     - cd frontend
     - pnpm install --frozen-lockfile
@@ -85,7 +101,7 @@ test:frontend:lint:
 # Frontend Integration Tests (SQLite)
 test:frontend:integration:
   stage: test
-  image: node:22
+  image: "$NODE_IMAGE"
   cache:
     - key:
         files:
@@ -101,15 +117,15 @@ test:frontend:integration:
         - backend/.go-pkg-cache/
       policy: pull-push
   before_script:
-    - npm install -g pnpm@9.15.3
-    - pnpm config set store-dir $(pwd)/.pnpm-store
-    # Install Task
-    - sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
-    # Install Go
-    - wget -q https://go.dev/dl/go1.24.0.linux-amd64.tar.gz
-    - tar -C /usr/local -xzf go1.24.0.linux-amd64.tar.gz
-    - export PATH=$PATH:/usr/local/go/bin
-    - export GOMODCACHE=$(pwd)/backend/.go-pkg-cache
+    - corepack enable
+    - corepack prepare "pnpm@${PNPM_VERSION}" --activate
+    - pnpm config set store-dir "$CI_PROJECT_DIR/.pnpm-store"
+    - curl --fail --location --silent --show-error --output /tmp/go.tar.gz "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz"
+    - 'echo "${GO_LINUX_AMD64_SHA256}  /tmp/go.tar.gz" | sha256sum --check -'
+    - tar -C /usr/local -xzf /tmp/go.tar.gz
+    - export PATH="/usr/local/go/bin:${PATH}"
+    - export GOMODCACHE="$CI_PROJECT_DIR/backend/.go-pkg-cache"
+    - GOBIN=/usr/local/bin go install "github.com/go-task/task/v3/cmd/task@v${TASK_VERSION}"
   script:
     - cd frontend
     - pnpm install --frozen-lockfile
@@ -122,9 +138,9 @@ test:frontend:integration:
 # Frontend Integration Tests (PostgreSQL Matrix)
 test:frontend:integration:postgresql:
   stage: test
-  image: node:22
+  image: "$NODE_IMAGE"
   services:
-    - name: postgres:${POSTGRES_VERSION}
+    - name: "$POSTGRES_IMAGE"
       alias: postgres
   variables:
     POSTGRES_USER: homebox
@@ -133,7 +149,12 @@ test:frontend:integration:postgresql:
     POSTGRES_HOST_AUTH_METHOD: trust
   parallel:
     matrix:
-      - POSTGRES_VERSION: ["17", "16", "15"]
+      - POSTGRES_VERSION: ["17.10"]
+        POSTGRES_IMAGE: ["postgres:17.10-bookworm@sha256:4f736ae292687621d4dbe0d499ffd024a36bd2ee7d8ca6f2ccd4c800f047b394"]
+      - POSTGRES_VERSION: ["16.14"]
+        POSTGRES_IMAGE: ["postgres:16.14-bookworm@sha256:92620daddcd947f8d5ab5ba66e848702fe443d87fed30c4cea8e389fd78dfc55"]
+      - POSTGRES_VERSION: ["15.18"]
+        POSTGRES_IMAGE: ["postgres:15.18-bookworm@sha256:b0c5bab0fbba8e0c221f73b1dc6359ec35f8650074377e727299df248fc8ad51"]
   cache:
     - key:
         files:
@@ -149,15 +170,15 @@ test:frontend:integration:postgresql:
         - backend/.go-pkg-cache/
       policy: pull-push
   before_script:
-    - npm install -g pnpm@9.15.3
-    - pnpm config set store-dir $(pwd)/.pnpm-store
-    # Install Task
-    - sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
-    # Install Go
-    - wget -q https://go.dev/dl/go1.24.0.linux-amd64.tar.gz
-    - tar -C /usr/local -xzf go1.24.0.linux-amd64.tar.gz
-    - export PATH=$PATH:/usr/local/go/bin
-    - export GOMODCACHE=$(pwd)/backend/.go-pkg-cache
+    - corepack enable
+    - corepack prepare "pnpm@${PNPM_VERSION}" --activate
+    - pnpm config set store-dir "$CI_PROJECT_DIR/.pnpm-store"
+    - curl --fail --location --silent --show-error --output /tmp/go.tar.gz "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz"
+    - 'echo "${GO_LINUX_AMD64_SHA256}  /tmp/go.tar.gz" | sha256sum --check -'
+    - tar -C /usr/local -xzf /tmp/go.tar.gz
+    - export PATH="/usr/local/go/bin:${PATH}"
+    - export GOMODCACHE="$CI_PROJECT_DIR/backend/.go-pkg-cache"
+    - GOBIN=/usr/local/bin go install "github.com/go-task/task/v3/cmd/task@v${TASK_VERSION}"
   script:
     - cd frontend
     - pnpm install --frozen-lockfile
@@ -170,7 +191,7 @@ test:frontend:integration:postgresql:
 # E2E Tests (Playwright) - Sharded
 test:e2e:playwright:
   stage: test
-  image: mcr.microsoft.com/playwright:v1.48.2-jammy
+  image: "$PLAYWRIGHT_IMAGE"
   timeout: 1h
   parallel:
     matrix:
@@ -191,15 +212,15 @@ test:e2e:playwright:
         - backend/.go-pkg-cache/
       policy: pull-push
   before_script:
-    - npm install -g pnpm@9.15.3
-    - pnpm config set store-dir $(pwd)/.pnpm-store
-    # Install Task
-    - sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
-    # Install Go
-    - wget -q https://go.dev/dl/go1.24.0.linux-amd64.tar.gz
-    - tar -C /usr/local -xzf go1.24.0.linux-amd64.tar.gz
-    - export PATH=$PATH:/usr/local/go/bin
-    - export GOMODCACHE=$(pwd)/backend/.go-pkg-cache
+    - corepack enable
+    - corepack prepare "pnpm@${PNPM_VERSION}" --activate
+    - pnpm config set store-dir "$CI_PROJECT_DIR/.pnpm-store"
+    - curl --fail --location --silent --show-error --output /tmp/go.tar.gz "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz"
+    - 'echo "${GO_LINUX_AMD64_SHA256}  /tmp/go.tar.gz" | sha256sum --check -'
+    - tar -C /usr/local -xzf /tmp/go.tar.gz
+    - export PATH="/usr/local/go/bin:${PATH}"
+    - export GOMODCACHE="$CI_PROJECT_DIR/backend/.go-pkg-cache"
+    - GOBIN=/usr/local/bin go install "github.com/go-task/task/v3/cmd/task@v${TASK_VERSION}"
   script:
     - cd frontend
     - pnpm install --frozen-lockfile
@@ -218,7 +239,7 @@ test:e2e:playwright:
 # E2E Reports Merge
 test:e2e:merge-reports:
   stage: test
-  image: mcr.microsoft.com/playwright:v1.48.2-jammy
+  image: "$NODE_IMAGE"
   needs:
     - test:e2e:playwright
   cache:
@@ -230,8 +251,9 @@ test:e2e:merge-reports:
       - .pnpm-store/
     policy: pull
   before_script:
-    - npm install -g pnpm@9.15.3
-    - pnpm config set store-dir $(pwd)/.pnpm-store
+    - corepack enable
+    - corepack prepare "pnpm@${PNPM_VERSION}" --activate
+    - pnpm config set store-dir "$CI_PROJECT_DIR/.pnpm-store"
   script:
     - cd frontend
     - pnpm install --frozen-lockfile
@@ -254,7 +276,7 @@ test:e2e:merge-reports:
 # Update Currencies (Scheduled Job)
 update:currencies:
   stage: test
-  image: python:3.11
+  image: "$PYTHON_IMAGE"
   cache:
     key: python-currencies
     paths:
@@ -285,7 +307,7 @@ update:currencies:
 # ==========================================
 build:binaries:
   stage: build-binaries
-  image: golang:1.24
+  image: "$NODE_IMAGE"
   cache:
     - key:
         files:
@@ -301,17 +323,16 @@ build:binaries:
         - backend/.go-pkg-cache/
       policy: pull-push
   before_script:
-    # Install Node.js and pnpm for frontend build
-    - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-    - apt-get install -y nodejs
-    - npm install -g pnpm@9.15.3
-    # Configure pnpm store
-    - pnpm config set store-dir $(pwd)/.pnpm-store
-    # Install GoReleaser
-    - curl -sfL https://goreleaser.com/static/run | bash -s -- check
-    - curl -sfL https://goreleaser.com/static/run | bash -s -- --version
-    # Configure Go cache
-    - export GOMODCACHE=$(pwd)/backend/.go-pkg-cache
+    - corepack enable
+    - corepack prepare "pnpm@${PNPM_VERSION}" --activate
+    - pnpm config set store-dir "$CI_PROJECT_DIR/.pnpm-store"
+    - curl --fail --location --silent --show-error --output /tmp/go.tar.gz "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz"
+    - 'echo "${GO_LINUX_AMD64_SHA256}  /tmp/go.tar.gz" | sha256sum --check -'
+    - tar -C /usr/local -xzf /tmp/go.tar.gz
+    - export PATH="/usr/local/go/bin:${PATH}"
+    - export GOMODCACHE="$CI_PROJECT_DIR/backend/.go-pkg-cache"
+    - GOBIN=/usr/local/bin go install "github.com/goreleaser/goreleaser/v2@v${GORELEASER_VERSION}"
+    - goreleaser --version
   script:
     # Build frontend
     - cd frontend
@@ -321,13 +342,14 @@ build:binaries:
     - cd ..
     # Run GoReleaser
     - cd backend
+    - goreleaser check
     - |
       if [ -n "$CI_COMMIT_TAG" ]; then
         echo "Building release for tag: $CI_COMMIT_TAG"
-        curl -sfL https://goreleaser.com/static/run | bash -s -- release --clean --skip=publish
+        goreleaser release --clean --skip=publish
       else
         echo "Building snapshot"
-        curl -sfL https://goreleaser.com/static/run | bash -s -- release --clean --snapshot --skip=publish
+        goreleaser release --clean --snapshot --skip=publish
       fi
   artifacts:
     name: "homebox-binaries-$CI_COMMIT_REF_SLUG"
@@ -344,11 +366,16 @@ build:binaries:
 # ==========================================
 .docker_build_template:
   stage: build-docker
-  image: docker:latest
+  image: "$DOCKER_CLI_IMAGE"
   services:
-    - docker:dind
+    - name: "$DOCKER_DIND_IMAGE"
+      alias: docker
   before_script:
-    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - |
+      if [ "$CI_PIPELINE_SOURCE" != "merge_request_event" ]; then
+        printf '%s' "$CI_REGISTRY_PASSWORD" |
+          docker login --username "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+      fi
   variables:
     DOCKER_BUILDKIT: 1
     DOCKERFILE: Dockerfile
@@ -358,22 +385,38 @@ build:binaries:
     - export COMMIT=$CI_COMMIT_SHA
     - export BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     - export CACHE_TAG=${IMAGE_SUFFIX:-regular}
-    # Build and push for the specific platform with layer caching
+    # Merge requests build to a local OCI archive without registry credentials
+    # or registry cache writes. Trusted branch/tag pipelines retain publishing.
     - |
-      docker buildx create --use --name builder-${CI_JOB_ID} || true
-      docker buildx build \
-        --platform $PLATFORM \
-        --build-arg VERSION=$VERSION \
-        --build-arg COMMIT=$COMMIT \
-        --build-arg BUILD_TIME=$BUILD_TIME \
-        --cache-from type=registry,ref=$CI_REGISTRY_IMAGE/cache:${PLATFORM_PAIR}-${CACHE_TAG}-$CI_COMMIT_REF_SLUG \
-        --cache-from type=registry,ref=$CI_REGISTRY_IMAGE/cache:${PLATFORM_PAIR}-${CACHE_TAG}-$CI_DEFAULT_BRANCH \
-        --cache-to type=registry,ref=$CI_REGISTRY_IMAGE/cache:${PLATFORM_PAIR}-${CACHE_TAG}-$CI_COMMIT_REF_SLUG,mode=max \
-        --file ./$DOCKERFILE \
-        --tag $CI_REGISTRY_IMAGE${IMAGE_SUFFIX}:${CI_COMMIT_REF_SLUG}-${PLATFORM_PAIR} \
-        --push \
-        .
-      docker buildx rm builder-${CI_JOB_ID} || true
+      set -eu
+      BUILDER_NAME="builder-${CI_JOB_ID}"
+      trap 'docker buildx rm "$BUILDER_NAME" >/dev/null 2>&1 || true' EXIT
+      docker buildx create --use --name "$BUILDER_NAME"
+
+      if [ "$CI_PIPELINE_SOURCE" = "merge_request_event" ]; then
+        docker buildx build \
+          --platform "$PLATFORM" \
+          --build-arg "VERSION=$VERSION" \
+          --build-arg "COMMIT=$COMMIT" \
+          --build-arg "BUILD_TIME=$BUILD_TIME" \
+          --file "./$DOCKERFILE" \
+          --tag "homebox-ci:${CI_JOB_ID}-${PLATFORM_PAIR}" \
+          --output "type=oci,dest=/tmp/homebox-${PLATFORM_PAIR}.tar" \
+          .
+      else
+        docker buildx build \
+          --platform "$PLATFORM" \
+          --build-arg "VERSION=$VERSION" \
+          --build-arg "COMMIT=$COMMIT" \
+          --build-arg "BUILD_TIME=$BUILD_TIME" \
+          --cache-from "type=registry,ref=$CI_REGISTRY_IMAGE/cache:${PLATFORM_PAIR}-${CACHE_TAG}-$CI_COMMIT_REF_SLUG" \
+          --cache-from "type=registry,ref=$CI_REGISTRY_IMAGE/cache:${PLATFORM_PAIR}-${CACHE_TAG}-$CI_DEFAULT_BRANCH" \
+          --cache-to "type=registry,ref=$CI_REGISTRY_IMAGE/cache:${PLATFORM_PAIR}-${CACHE_TAG}-$CI_COMMIT_REF_SLUG,mode=max" \
+          --file "./$DOCKERFILE" \
+          --tag "$CI_REGISTRY_IMAGE${IMAGE_SUFFIX}:${CI_COMMIT_REF_SLUG}-${PLATFORM_PAIR}" \
+          --push \
+          .
+      fi
   rules:
     - if: $CI_COMMIT_TAG
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
@@ -456,11 +499,12 @@ docker:build:hardened:armv7:
 # ==========================================
 docker:manifest:
   stage: release
-  image: docker:latest
+  image: "$DOCKER_CLI_IMAGE"
   services:
-    - docker:dind
+    - name: "$DOCKER_DIND_IMAGE"
+      alias: docker
   before_script:
-    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - printf '%s' "$CI_REGISTRY_PASSWORD" | docker login --username "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
   script:
     - export VERSION=${CI_COMMIT_TAG:-$CI_COMMIT_REF_NAME}
     # Create manifest for regular image
@@ -511,11 +555,12 @@ docker:manifest:
 # ==========================================
 docker:manifest:rootless:
   stage: release
-  image: docker:latest
+  image: "$DOCKER_CLI_IMAGE"
   services:
-    - docker:dind
+    - name: "$DOCKER_DIND_IMAGE"
+      alias: docker
   before_script:
-    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - printf '%s' "$CI_REGISTRY_PASSWORD" | docker login --username "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
   script:
     - export VERSION=${CI_COMMIT_TAG:-$CI_COMMIT_REF_NAME}
     # Create manifest for rootless image
@@ -559,11 +604,12 @@ docker:manifest:rootless:
 # ==========================================
 docker:manifest:hardened:
   stage: release
-  image: docker:latest
+  image: "$DOCKER_CLI_IMAGE"
   services:
-    - docker:dind
+    - name: "$DOCKER_DIND_IMAGE"
+      alias: docker
   before_script:
-    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - printf '%s' "$CI_REGISTRY_PASSWORD" | docker login --username "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
   script:
     - export VERSION=${CI_COMMIT_TAG:-$CI_COMMIT_REF_NAME}
     # Create manifest for hardened image
