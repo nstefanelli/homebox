@@ -61,7 +61,7 @@ const (
 
 type Config struct {
 	conf.Version
-	Args       conf.Args      `json:"-" yaml:"-"`
+	Args       conf.Args      `json:"-"          yaml:"-"`
 	Mode       string         `yaml:"mode"       conf:"default:development"` // development or production
 	Web        WebConfig      `yaml:"web"`
 	Storage    Storage        `yaml:"storage"`

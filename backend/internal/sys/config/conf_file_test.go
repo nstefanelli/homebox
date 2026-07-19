@@ -31,7 +31,7 @@ auth:
 	if cfg.Auth.APIKeyPepper != "yaml-test-pepper-that-is-at-least-32-bytes" {
 		t.Fatalf("Auth.APIKeyPepper was not loaded from YAML")
 	}
-	if cfg.Version.Build != "test-build" || cfg.Version.Desc != "test description" {
+	if cfg.Build != "test-build" || cfg.Desc != "test description" {
 		t.Fatalf("Version = %#v, want supplied build metadata", cfg.Version)
 	}
 }
