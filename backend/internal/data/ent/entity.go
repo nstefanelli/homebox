@@ -32,6 +32,8 @@ type Entity struct {
 	ImportRef string `json:"import_ref,omitempty"`
 	// Notes holds the value of the "notes" field.
 	Notes string `json:"notes,omitempty"`
+	// Contents holds the value of the "contents" field.
+	Contents string `json:"contents,omitempty"`
 	// Quantity holds the value of the "quantity" field.
 	Quantity float64 `json:"quantity,omitempty"`
 	// Insured holds the value of the "insured" field.
@@ -191,7 +193,7 @@ func (*Entity) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullFloat64)
 		case entity.FieldAssetID:
 			values[i] = new(sql.NullInt64)
-		case entity.FieldName, entity.FieldDescription, entity.FieldImportRef, entity.FieldNotes, entity.FieldSerialNumber, entity.FieldModelNumber, entity.FieldManufacturer, entity.FieldIcon, entity.FieldWarrantyDetails, entity.FieldPurchaseFrom, entity.FieldSoldTo, entity.FieldSoldNotes:
+		case entity.FieldName, entity.FieldDescription, entity.FieldImportRef, entity.FieldNotes, entity.FieldContents, entity.FieldSerialNumber, entity.FieldModelNumber, entity.FieldManufacturer, entity.FieldIcon, entity.FieldWarrantyDetails, entity.FieldPurchaseFrom, entity.FieldSoldTo, entity.FieldSoldNotes:
 			values[i] = new(sql.NullString)
 		case entity.FieldCreatedAt, entity.FieldUpdatedAt, entity.FieldWarrantyExpires, entity.FieldPurchaseDate, entity.FieldSoldDate:
 			values[i] = new(sql.NullTime)
@@ -259,6 +261,12 @@ func (_m *Entity) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field notes", values[i])
 			} else if value.Valid {
 				_m.Notes = value.String
+			}
+		case entity.FieldContents:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field contents", values[i])
+			} else if value.Valid {
+				_m.Contents = value.String
 			}
 		case entity.FieldQuantity:
 			if value, ok := values[i].(*sql.NullFloat64); !ok {
@@ -488,6 +496,9 @@ func (_m *Entity) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("notes=")
 	builder.WriteString(_m.Notes)
+	builder.WriteString(", ")
+	builder.WriteString("contents=")
+	builder.WriteString(_m.Contents)
 	builder.WriteString(", ")
 	builder.WriteString("quantity=")
 	builder.WriteString(fmt.Sprintf("%v", _m.Quantity))

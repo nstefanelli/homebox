@@ -243,6 +243,12 @@ paths:
           in: query
           schema:
             type: boolean
+        - description: include all entity kinds (items, containers, locations); ignored
+            when isLocation is set
+          name: includeAllKinds
+          in: query
+          schema:
+            type: boolean
       responses:
         "200":
           description: OK
@@ -2510,6 +2516,9 @@ components:
         asset_id:
           description: AssetID holds the value of the "asset_id" field.
           type: integer
+        contents:
+          description: Contents holds the value of the "contents" field.
+          type: string
         created_at:
           description: CreatedAt holds the value of the "created_at" field.
           type: string
@@ -3441,6 +3450,8 @@ components:
       required:
         - name
       properties:
+        contents:
+          type: string
         description:
           type: string
           maxLength: 1000
@@ -3520,6 +3531,11 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/repo.EntitySummary"
+        contents:
+          description: |-
+            Contents is a free-text, line-per-line manifest of what is inside a
+            container/location entity.
+          type: string
         createdAt:
           type: string
         description:
@@ -3971,6 +3987,8 @@ components:
         archived:
           type: boolean
         assetId:
+          type: string
+        contents:
           type: string
         description:
           type: string

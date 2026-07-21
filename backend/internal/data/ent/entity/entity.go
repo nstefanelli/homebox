@@ -27,6 +27,8 @@ const (
 	FieldImportRef = "import_ref"
 	// FieldNotes holds the string denoting the notes field in the database.
 	FieldNotes = "notes"
+	// FieldContents holds the string denoting the contents field in the database.
+	FieldContents = "contents"
 	// FieldQuantity holds the string denoting the quantity field in the database.
 	FieldQuantity = "quantity"
 	// FieldInsured holds the string denoting the insured field in the database.
@@ -142,6 +144,7 @@ var Columns = []string{
 	FieldDescription,
 	FieldImportRef,
 	FieldNotes,
+	FieldContents,
 	FieldQuantity,
 	FieldInsured,
 	FieldArchived,
@@ -275,6 +278,11 @@ func ByImportRef(opts ...sql.OrderTermOption) OrderOption {
 // ByNotes orders the results by the notes field.
 func ByNotes(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldNotes, opts...).ToFunc()
+}
+
+// ByContents orders the results by the contents field.
+func ByContents(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldContents, opts...).ToFunc()
 }
 
 // ByQuantity orders the results by the quantity field.

@@ -42,6 +42,10 @@ func (Entity) Fields() []ent.Field {
 		field.String("notes").
 			MaxLen(1000).
 			Optional(),
+		// contents is a free-text, line-per-line manifest of what is inside a
+		// container/location entity. Plain text, no per-line structure.
+		field.Text("contents").
+			Optional(),
 		field.Float("quantity").
 			Default(1),
 		field.Bool("insured").

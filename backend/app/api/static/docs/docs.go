@@ -368,6 +368,12 @@ const docTemplate = `{
                         "description": "filter by container entity types",
                         "name": "isContainer",
                         "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "include all entity kinds (items, containers, locations); ignored when isLocation is set",
+                        "name": "includeAllKinds",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -3841,6 +3847,10 @@ const docTemplate = `{
                     "description": "AssetID holds the value of the \"asset_id\" field.",
                     "type": "integer"
                 },
+                "contents": {
+                    "description": "Contents holds the value of the \"contents\" field.",
+                    "type": "string"
+                },
                 "created_at": {
                     "description": "CreatedAt holds the value of the \"created_at\" field.",
                     "type": "string"
@@ -5161,6 +5171,9 @@ const docTemplate = `{
                 "name"
             ],
             "properties": {
+                "contents": {
+                    "type": "string"
+                },
                 "description": {
                     "type": "string",
                     "maxLength": 1000
@@ -5273,6 +5286,10 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/repo.EntitySummary"
                     }
+                },
+                "contents": {
+                    "description": "Contents is a free-text, line-per-line manifest of what is inside a\ncontainer/location entity.",
+                    "type": "string"
                 },
                 "createdAt": {
                     "type": "string"
@@ -5923,6 +5940,9 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "assetId": {
+                    "type": "string"
+                },
+                "contents": {
                     "type": "string"
                 },
                 "description": {

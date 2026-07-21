@@ -392,6 +392,7 @@ func isSeedLocation(
 	return row.Description == "" &&
 		row.ImportRef == "" &&
 		row.Notes == "" &&
+		row.Contents == "" &&
 		!row.Insured &&
 		!row.Archived &&
 		!row.SyncChildEntityLocations &&

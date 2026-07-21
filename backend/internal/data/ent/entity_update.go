@@ -115,6 +115,26 @@ func (_u *EntityUpdate) ClearNotes() *EntityUpdate {
 	return _u
 }
 
+// SetContents sets the "contents" field.
+func (_u *EntityUpdate) SetContents(v string) *EntityUpdate {
+	_u.mutation.SetContents(v)
+	return _u
+}
+
+// SetNillableContents sets the "contents" field if the given value is not nil.
+func (_u *EntityUpdate) SetNillableContents(v *string) *EntityUpdate {
+	if v != nil {
+		_u.SetContents(*v)
+	}
+	return _u
+}
+
+// ClearContents clears the value of the "contents" field.
+func (_u *EntityUpdate) ClearContents() *EntityUpdate {
+	_u.mutation.ClearContents()
+	return _u
+}
+
 // SetQuantity sets the "quantity" field.
 func (_u *EntityUpdate) SetQuantity(v float64) *EntityUpdate {
 	_u.mutation.ResetQuantity()
@@ -852,6 +872,12 @@ func (_u *EntityUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if _u.mutation.NotesCleared() {
 		_spec.ClearField(entity.FieldNotes, field.TypeString)
 	}
+	if value, ok := _u.mutation.Contents(); ok {
+		_spec.SetField(entity.FieldContents, field.TypeString, value)
+	}
+	if _u.mutation.ContentsCleared() {
+		_spec.ClearField(entity.FieldContents, field.TypeString)
+	}
 	if value, ok := _u.mutation.Quantity(); ok {
 		_spec.SetField(entity.FieldQuantity, field.TypeFloat64, value)
 	}
@@ -1363,6 +1389,26 @@ func (_u *EntityUpdateOne) SetNillableNotes(v *string) *EntityUpdateOne {
 // ClearNotes clears the value of the "notes" field.
 func (_u *EntityUpdateOne) ClearNotes() *EntityUpdateOne {
 	_u.mutation.ClearNotes()
+	return _u
+}
+
+// SetContents sets the "contents" field.
+func (_u *EntityUpdateOne) SetContents(v string) *EntityUpdateOne {
+	_u.mutation.SetContents(v)
+	return _u
+}
+
+// SetNillableContents sets the "contents" field if the given value is not nil.
+func (_u *EntityUpdateOne) SetNillableContents(v *string) *EntityUpdateOne {
+	if v != nil {
+		_u.SetContents(*v)
+	}
+	return _u
+}
+
+// ClearContents clears the value of the "contents" field.
+func (_u *EntityUpdateOne) ClearContents() *EntityUpdateOne {
+	_u.mutation.ClearContents()
 	return _u
 }
 
@@ -2132,6 +2178,12 @@ func (_u *EntityUpdateOne) sqlSave(ctx context.Context) (_node *Entity, err erro
 	}
 	if _u.mutation.NotesCleared() {
 		_spec.ClearField(entity.FieldNotes, field.TypeString)
+	}
+	if value, ok := _u.mutation.Contents(); ok {
+		_spec.SetField(entity.FieldContents, field.TypeString, value)
+	}
+	if _u.mutation.ContentsCleared() {
+		_spec.ClearField(entity.FieldContents, field.TypeString)
 	}
 	if value, ok := _u.mutation.Quantity(); ok {
 		_spec.SetField(entity.FieldQuantity, field.TypeFloat64, value)

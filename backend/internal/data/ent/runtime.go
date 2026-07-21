@@ -174,59 +174,59 @@ func init() {
 	// entity.NotesValidator is a validator for the "notes" field. It is called by the builders before save.
 	entity.NotesValidator = entityDescNotes.Validators[0].(func(string) error)
 	// entityDescQuantity is the schema descriptor for quantity field.
-	entityDescQuantity := entityFields[2].Descriptor()
+	entityDescQuantity := entityFields[3].Descriptor()
 	// entity.DefaultQuantity holds the default value on creation for the quantity field.
 	entity.DefaultQuantity = entityDescQuantity.Default.(float64)
 	// entityDescInsured is the schema descriptor for insured field.
-	entityDescInsured := entityFields[3].Descriptor()
+	entityDescInsured := entityFields[4].Descriptor()
 	// entity.DefaultInsured holds the default value on creation for the insured field.
 	entity.DefaultInsured = entityDescInsured.Default.(bool)
 	// entityDescArchived is the schema descriptor for archived field.
-	entityDescArchived := entityFields[4].Descriptor()
+	entityDescArchived := entityFields[5].Descriptor()
 	// entity.DefaultArchived holds the default value on creation for the archived field.
 	entity.DefaultArchived = entityDescArchived.Default.(bool)
 	// entityDescAssetID is the schema descriptor for asset_id field.
-	entityDescAssetID := entityFields[5].Descriptor()
+	entityDescAssetID := entityFields[6].Descriptor()
 	// entity.DefaultAssetID holds the default value on creation for the asset_id field.
 	entity.DefaultAssetID = entityDescAssetID.Default.(int64)
 	// entityDescSyncChildEntityLocations is the schema descriptor for sync_child_entity_locations field.
-	entityDescSyncChildEntityLocations := entityFields[6].Descriptor()
+	entityDescSyncChildEntityLocations := entityFields[7].Descriptor()
 	// entity.DefaultSyncChildEntityLocations holds the default value on creation for the sync_child_entity_locations field.
 	entity.DefaultSyncChildEntityLocations = entityDescSyncChildEntityLocations.Default.(bool)
 	// entityDescSerialNumber is the schema descriptor for serial_number field.
-	entityDescSerialNumber := entityFields[7].Descriptor()
+	entityDescSerialNumber := entityFields[8].Descriptor()
 	// entity.SerialNumberValidator is a validator for the "serial_number" field. It is called by the builders before save.
 	entity.SerialNumberValidator = entityDescSerialNumber.Validators[0].(func(string) error)
 	// entityDescModelNumber is the schema descriptor for model_number field.
-	entityDescModelNumber := entityFields[8].Descriptor()
+	entityDescModelNumber := entityFields[9].Descriptor()
 	// entity.ModelNumberValidator is a validator for the "model_number" field. It is called by the builders before save.
 	entity.ModelNumberValidator = entityDescModelNumber.Validators[0].(func(string) error)
 	// entityDescManufacturer is the schema descriptor for manufacturer field.
-	entityDescManufacturer := entityFields[9].Descriptor()
+	entityDescManufacturer := entityFields[10].Descriptor()
 	// entity.ManufacturerValidator is a validator for the "manufacturer" field. It is called by the builders before save.
 	entity.ManufacturerValidator = entityDescManufacturer.Validators[0].(func(string) error)
 	// entityDescIcon is the schema descriptor for icon field.
-	entityDescIcon := entityFields[10].Descriptor()
+	entityDescIcon := entityFields[11].Descriptor()
 	// entity.IconValidator is a validator for the "icon" field. It is called by the builders before save.
 	entity.IconValidator = entityDescIcon.Validators[0].(func(string) error)
 	// entityDescLifetimeWarranty is the schema descriptor for lifetime_warranty field.
-	entityDescLifetimeWarranty := entityFields[11].Descriptor()
+	entityDescLifetimeWarranty := entityFields[12].Descriptor()
 	// entity.DefaultLifetimeWarranty holds the default value on creation for the lifetime_warranty field.
 	entity.DefaultLifetimeWarranty = entityDescLifetimeWarranty.Default.(bool)
 	// entityDescWarrantyDetails is the schema descriptor for warranty_details field.
-	entityDescWarrantyDetails := entityFields[13].Descriptor()
+	entityDescWarrantyDetails := entityFields[14].Descriptor()
 	// entity.WarrantyDetailsValidator is a validator for the "warranty_details" field. It is called by the builders before save.
 	entity.WarrantyDetailsValidator = entityDescWarrantyDetails.Validators[0].(func(string) error)
 	// entityDescPurchasePrice is the schema descriptor for purchase_price field.
-	entityDescPurchasePrice := entityFields[16].Descriptor()
+	entityDescPurchasePrice := entityFields[17].Descriptor()
 	// entity.DefaultPurchasePrice holds the default value on creation for the purchase_price field.
 	entity.DefaultPurchasePrice = entityDescPurchasePrice.Default.(float64)
 	// entityDescSoldPrice is the schema descriptor for sold_price field.
-	entityDescSoldPrice := entityFields[19].Descriptor()
+	entityDescSoldPrice := entityFields[20].Descriptor()
 	// entity.DefaultSoldPrice holds the default value on creation for the sold_price field.
 	entity.DefaultSoldPrice = entityDescSoldPrice.Default.(float64)
 	// entityDescSoldNotes is the schema descriptor for sold_notes field.
-	entityDescSoldNotes := entityFields[20].Descriptor()
+	entityDescSoldNotes := entityFields[21].Descriptor()
 	// entity.SoldNotesValidator is a validator for the "sold_notes" field. It is called by the builders before save.
 	entity.SoldNotesValidator = entityDescSoldNotes.Validators[0].(func(string) error)
 	// entityDescID is the schema descriptor for id field.

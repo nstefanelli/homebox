@@ -2621,6 +2621,7 @@ type EntityMutation struct {
 	description                 *string
 	import_ref                  *string
 	notes                       *string
+	contents                    *string
 	quantity                    *float64
 	addquantity                 *float64
 	insured                     *bool
@@ -3028,6 +3029,55 @@ func (m *EntityMutation) NotesCleared() bool {
 func (m *EntityMutation) ResetNotes() {
 	m.notes = nil
 	delete(m.clearedFields, entity.FieldNotes)
+}
+
+// SetContents sets the "contents" field.
+func (m *EntityMutation) SetContents(s string) {
+	m.contents = &s
+}
+
+// Contents returns the value of the "contents" field in the mutation.
+func (m *EntityMutation) Contents() (r string, exists bool) {
+	v := m.contents
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldContents returns the old "contents" field's value of the Entity entity.
+// If the Entity object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EntityMutation) OldContents(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldContents is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldContents requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldContents: %w", err)
+	}
+	return oldValue.Contents, nil
+}
+
+// ClearContents clears the value of the "contents" field.
+func (m *EntityMutation) ClearContents() {
+	m.contents = nil
+	m.clearedFields[entity.FieldContents] = struct{}{}
+}
+
+// ContentsCleared returns if the "contents" field was cleared in this mutation.
+func (m *EntityMutation) ContentsCleared() bool {
+	_, ok := m.clearedFields[entity.FieldContents]
+	return ok
+}
+
+// ResetContents resets all changes to the "contents" field.
+func (m *EntityMutation) ResetContents() {
+	m.contents = nil
+	delete(m.clearedFields, entity.FieldContents)
 }
 
 // SetQuantity sets the "quantity" field.
@@ -4358,7 +4408,7 @@ func (m *EntityMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *EntityMutation) Fields() []string {
-	fields := make([]string, 0, 25)
+	fields := make([]string, 0, 26)
 	if m.created_at != nil {
 		fields = append(fields, entity.FieldCreatedAt)
 	}
@@ -4376,6 +4426,9 @@ func (m *EntityMutation) Fields() []string {
 	}
 	if m.notes != nil {
 		fields = append(fields, entity.FieldNotes)
+	}
+	if m.contents != nil {
+		fields = append(fields, entity.FieldContents)
 	}
 	if m.quantity != nil {
 		fields = append(fields, entity.FieldQuantity)
@@ -4454,6 +4507,8 @@ func (m *EntityMutation) Field(name string) (ent.Value, bool) {
 		return m.ImportRef()
 	case entity.FieldNotes:
 		return m.Notes()
+	case entity.FieldContents:
+		return m.Contents()
 	case entity.FieldQuantity:
 		return m.Quantity()
 	case entity.FieldInsured:
@@ -4513,6 +4568,8 @@ func (m *EntityMutation) OldField(ctx context.Context, name string) (ent.Value, 
 		return m.OldImportRef(ctx)
 	case entity.FieldNotes:
 		return m.OldNotes(ctx)
+	case entity.FieldContents:
+		return m.OldContents(ctx)
 	case entity.FieldQuantity:
 		return m.OldQuantity(ctx)
 	case entity.FieldInsured:
@@ -4601,6 +4658,13 @@ func (m *EntityMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetNotes(v)
+		return nil
+	case entity.FieldContents:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetContents(v)
 		return nil
 	case entity.FieldQuantity:
 		v, ok := value.(float64)
@@ -4825,6 +4889,9 @@ func (m *EntityMutation) ClearedFields() []string {
 	if m.FieldCleared(entity.FieldNotes) {
 		fields = append(fields, entity.FieldNotes)
 	}
+	if m.FieldCleared(entity.FieldContents) {
+		fields = append(fields, entity.FieldContents)
+	}
 	if m.FieldCleared(entity.FieldSerialNumber) {
 		fields = append(fields, entity.FieldSerialNumber)
 	}
@@ -4880,6 +4947,9 @@ func (m *EntityMutation) ClearField(name string) error {
 		return nil
 	case entity.FieldNotes:
 		m.ClearNotes()
+		return nil
+	case entity.FieldContents:
+		m.ClearContents()
 		return nil
 	case entity.FieldSerialNumber:
 		m.ClearSerialNumber()
@@ -4939,6 +5009,9 @@ func (m *EntityMutation) ResetField(name string) error {
 		return nil
 	case entity.FieldNotes:
 		m.ResetNotes()
+		return nil
+	case entity.FieldContents:
+		m.ResetContents()
 		return nil
 	case entity.FieldQuantity:
 		m.ResetQuantity()

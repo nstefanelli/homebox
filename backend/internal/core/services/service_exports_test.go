@@ -749,6 +749,21 @@ func TestIsGroupReadyForImport_BlocksRecreatedSeedNamedLocation(t *testing.T) {
 		assert.False(t, ready, "duplicate asset ids among seed candidates must block")
 	})
 
+	t.Run("seeded location carrying a contents manifest blocks", func(t *testing.T) {
+		gid, _ := registerGroup(t)
+		// Quick-add List mode writes manifests onto seeded locations without
+		// touching any other field — real user data that import must not wipe.
+		_, err := tClient.Entity.Update().
+			Where(entity.HasGroupWith(group.ID(gid)), entity.Name("Garage")).
+			SetContents("Baby Hats\nSleep Sacks").
+			Save(ctx)
+		require.NoError(t, err)
+
+		ready, err := tSvc.Exports.IsGroupReadyForImport(ctx, gid)
+		require.NoError(t, err)
+		assert.False(t, ready, "a seed-shaped location with a contents manifest is user data and must block")
+	})
+
 	t.Run("recreated location just past the seed range blocks", func(t *testing.T) {
 		gid, locETID := registerGroup(t)
 		_, err := tRepos.Entities.Create(ctx, gid, repo.EntityCreate{

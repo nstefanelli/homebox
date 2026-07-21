@@ -110,6 +110,7 @@ type (
 		Name         string    `json:"name"         validate:"required,min=1,max=255"`
 		Quantity     float64   `json:"quantity"`
 		Description  string    `json:"description"  validate:"max=1000"`
+		Contents     string    `json:"contents"`
 		AssetID      AssetID   `json:"-"`
 		EntityTypeID uuid.UUID `json:"entityTypeId"`
 
@@ -160,8 +161,9 @@ type (
 		SoldNotes string     `json:"soldNotes"`
 
 		// Extras
-		Notes  string            `json:"notes"`
-		Fields []EntityFieldData `json:"fields"`
+		Notes    string            `json:"notes"`
+		Contents string            `json:"contents"`
+		Fields   []EntityFieldData `json:"fields"`
 	}
 
 	EntityPatch struct {
@@ -234,6 +236,9 @@ type (
 
 		// Extras
 		Notes string `json:"notes"`
+		// Contents is a free-text, line-per-line manifest of what is inside a
+		// container/location entity.
+		Contents string `json:"contents"`
 
 		Attachments []ItemAttachment  `json:"attachments"`
 		Fields      []EntityFieldData `json:"fields"`
@@ -381,6 +386,7 @@ func mapEntityOut(e *ent.Entity) EntityOut {
 
 		// Extras
 		Notes:       e.Notes,
+		Contents:    e.Contents,
 		Attachments: attachments,
 		Fields:      fields,
 		Children:    children,
@@ -933,6 +939,7 @@ func (r *EntityRepository) QueryByGroup(ctx context.Context, gid uuid.UUID, q En
 				entity.ModelNumberContainsFold(q.Search),
 				entity.ManufacturerContainsFold(q.Search),
 				entity.NotesContainsFold(q.Search),
+				entity.ContentsContainsFold(q.Search),
 			),
 		)
 	}
@@ -1362,6 +1369,7 @@ func (r *EntityRepository) Create(ctx context.Context, gid uuid.UUID, data Entit
 		SetName(data.Name).
 		SetQuantity(data.Quantity).
 		SetDescription(data.Description).
+		SetContents(data.Contents).
 		SetModelNumber(data.ModelNumber).
 		SetManufacturer(data.Manufacturer).
 		SetIcon(data.Icon).
@@ -1424,9 +1432,9 @@ type EntityCreateFromTemplate struct {
 // EntityBatchCreateFromTemplate contains the data needed to create Count numbered
 // entities from a single template in one transaction.
 type EntityBatchCreateFromTemplate struct {
-	Template    EntityCreateFromTemplate `json:"template"`
-	Count       int                      `json:"count"`
-	NamePrefix  string                   `json:"namePrefix"`
+	Template   EntityCreateFromTemplate `json:"template"`
+	Count      int                      `json:"count"`
+	NamePrefix string                   `json:"namePrefix"`
 	// StartNumber seeds the legacy "<NamePrefix> NN" sequence suffix, which is
 	// only used as a fallback when an entity is not assigned a real asset ID
 	// (see batchEntityName). 0 = infer from existing "<NamePrefix> NN" names.
@@ -2106,6 +2114,7 @@ func (r *EntityRepository) UpdateByGroup(ctx context.Context, gid uuid.UUID, dat
 		SetSoldPrice(data.SoldPrice).
 		SetSoldNotes(data.SoldNotes).
 		SetNotes(data.Notes).
+		SetContents(data.Contents).
 		SetLifetimeWarranty(data.LifetimeWarranty).
 		SetInsured(data.Insured).
 		SetWarrantyDetails(data.WarrantyDetails).
@@ -2860,6 +2869,7 @@ func (r *EntityRepository) Duplicate(ctx context.Context, gid, id uuid.UUID, opt
 		SetSoldPrice(originalEntity.SoldPrice).
 		SetSoldNotes(originalEntity.SoldNotes).
 		SetNotes(originalEntity.Notes).
+		SetContents(originalEntity.Contents).
 		SetInsured(originalEntity.Insured).
 		SetArchived(originalEntity.Archived).
 		SetSyncChildEntityLocations(originalEntity.SyncChildEntityLocations)
@@ -3183,6 +3193,7 @@ func (r *EntityRepository) CreateContainer(ctx context.Context, gid uuid.UUID, d
 	q := r.db.Entity.Create().
 		SetName(data.Name).
 		SetDescription(data.Description).
+		SetContents(data.Contents).
 		SetGroupID(gid).
 		SetAssetID(int64(data.AssetID))
 
@@ -3279,7 +3290,8 @@ func (r *EntityRepository) UpdateContainer(ctx context.Context, gid, id uuid.UUI
 			entity.HasGroupWith(group.ID(gid)),
 		).
 		SetName(data.Name).
-		SetDescription(data.Description)
+		SetDescription(data.Description).
+		SetContents(data.Contents)
 
 	if data.ParentID != uuid.Nil {
 		q.SetParentID(data.ParentID)

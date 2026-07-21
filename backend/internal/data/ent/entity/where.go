@@ -86,6 +86,11 @@ func Notes(v string) predicate.Entity {
 	return predicate.Entity(sql.FieldEQ(FieldNotes, v))
 }
 
+// Contents applies equality check predicate on the "contents" field. It's identical to ContentsEQ.
+func Contents(v string) predicate.Entity {
+	return predicate.Entity(sql.FieldEQ(FieldContents, v))
+}
+
 // Quantity applies equality check predicate on the "quantity" field. It's identical to QuantityEQ.
 func Quantity(v float64) predicate.Entity {
 	return predicate.Entity(sql.FieldEQ(FieldQuantity, v))
@@ -549,6 +554,81 @@ func NotesEqualFold(v string) predicate.Entity {
 // NotesContainsFold applies the ContainsFold predicate on the "notes" field.
 func NotesContainsFold(v string) predicate.Entity {
 	return predicate.Entity(sql.FieldContainsFold(FieldNotes, v))
+}
+
+// ContentsEQ applies the EQ predicate on the "contents" field.
+func ContentsEQ(v string) predicate.Entity {
+	return predicate.Entity(sql.FieldEQ(FieldContents, v))
+}
+
+// ContentsNEQ applies the NEQ predicate on the "contents" field.
+func ContentsNEQ(v string) predicate.Entity {
+	return predicate.Entity(sql.FieldNEQ(FieldContents, v))
+}
+
+// ContentsIn applies the In predicate on the "contents" field.
+func ContentsIn(vs ...string) predicate.Entity {
+	return predicate.Entity(sql.FieldIn(FieldContents, vs...))
+}
+
+// ContentsNotIn applies the NotIn predicate on the "contents" field.
+func ContentsNotIn(vs ...string) predicate.Entity {
+	return predicate.Entity(sql.FieldNotIn(FieldContents, vs...))
+}
+
+// ContentsGT applies the GT predicate on the "contents" field.
+func ContentsGT(v string) predicate.Entity {
+	return predicate.Entity(sql.FieldGT(FieldContents, v))
+}
+
+// ContentsGTE applies the GTE predicate on the "contents" field.
+func ContentsGTE(v string) predicate.Entity {
+	return predicate.Entity(sql.FieldGTE(FieldContents, v))
+}
+
+// ContentsLT applies the LT predicate on the "contents" field.
+func ContentsLT(v string) predicate.Entity {
+	return predicate.Entity(sql.FieldLT(FieldContents, v))
+}
+
+// ContentsLTE applies the LTE predicate on the "contents" field.
+func ContentsLTE(v string) predicate.Entity {
+	return predicate.Entity(sql.FieldLTE(FieldContents, v))
+}
+
+// ContentsContains applies the Contains predicate on the "contents" field.
+func ContentsContains(v string) predicate.Entity {
+	return predicate.Entity(sql.FieldContains(FieldContents, v))
+}
+
+// ContentsHasPrefix applies the HasPrefix predicate on the "contents" field.
+func ContentsHasPrefix(v string) predicate.Entity {
+	return predicate.Entity(sql.FieldHasPrefix(FieldContents, v))
+}
+
+// ContentsHasSuffix applies the HasSuffix predicate on the "contents" field.
+func ContentsHasSuffix(v string) predicate.Entity {
+	return predicate.Entity(sql.FieldHasSuffix(FieldContents, v))
+}
+
+// ContentsIsNil applies the IsNil predicate on the "contents" field.
+func ContentsIsNil() predicate.Entity {
+	return predicate.Entity(sql.FieldIsNull(FieldContents))
+}
+
+// ContentsNotNil applies the NotNil predicate on the "contents" field.
+func ContentsNotNil() predicate.Entity {
+	return predicate.Entity(sql.FieldNotNull(FieldContents))
+}
+
+// ContentsEqualFold applies the EqualFold predicate on the "contents" field.
+func ContentsEqualFold(v string) predicate.Entity {
+	return predicate.Entity(sql.FieldEqualFold(FieldContents, v))
+}
+
+// ContentsContainsFold applies the ContainsFold predicate on the "contents" field.
+func ContentsContainsFold(v string) predicate.Entity {
+	return predicate.Entity(sql.FieldContainsFold(FieldContents, v))
 }
 
 // QuantityEQ applies the EQ predicate on the "quantity" field.

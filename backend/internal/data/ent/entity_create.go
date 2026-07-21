@@ -103,6 +103,20 @@ func (_c *EntityCreate) SetNillableNotes(v *string) *EntityCreate {
 	return _c
 }
 
+// SetContents sets the "contents" field.
+func (_c *EntityCreate) SetContents(v string) *EntityCreate {
+	_c.mutation.SetContents(v)
+	return _c
+}
+
+// SetNillableContents sets the "contents" field if the given value is not nil.
+func (_c *EntityCreate) SetNillableContents(v *string) *EntityCreate {
+	if v != nil {
+		_c.SetContents(*v)
+	}
+	return _c
+}
+
 // SetQuantity sets the "quantity" field.
 func (_c *EntityCreate) SetQuantity(v float64) *EntityCreate {
 	_c.mutation.SetQuantity(v)
@@ -729,6 +743,10 @@ func (_c *EntityCreate) createSpec() (*Entity, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Notes(); ok {
 		_spec.SetField(entity.FieldNotes, field.TypeString, value)
 		_node.Notes = value
+	}
+	if value, ok := _c.mutation.Contents(); ok {
+		_spec.SetField(entity.FieldContents, field.TypeString, value)
+		_node.Contents = value
 	}
 	if value, ok := _c.mutation.Quantity(); ok {
 		_spec.SetField(entity.FieldQuantity, field.TypeFloat64, value)
