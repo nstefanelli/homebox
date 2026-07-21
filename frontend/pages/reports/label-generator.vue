@@ -572,6 +572,70 @@
     pages.value = calc;
   }
 
+  // ── PDF download (lib/labels/pdf.ts) ──────────────────────────────────────
+  // WebKit prints CSS inches at ~1.0667 physical inches and ignores @page
+  // size, so only Chromium can print the HTML sheet 1:1 — the PDF (printed at
+  // 100% / Actual Size) is exact everywhere, including AirPrint from iOS.
+  const isChromium = /Chrom(e|ium)/.test(navigator.userAgent);
+  const pdfBusy = ref(false);
+  // Bundled OFL font for PDF text (see assets/fonts/OFL.txt). Resolved by Vite
+  // to the hashed asset URL; fetched lazily so the page load never pays for it.
+  const labelFontUrl = new URL("../../assets/fonts/NotoSans-Regular-subset.ttf", import.meta.url).href;
+
+  async function downloadPdf() {
+    if (pages.value.length === 0) calcPages();
+    if (pages.value.length === 0) {
+      toast.error(t("reports.label_generator.toast.pdf_failed"));
+      return;
+    }
+    pdfBusy.value = true;
+    try {
+      // Lazy-load pdf-lib (and the font) only when the button is used.
+      const [{ generateLabelSheetPdf }, fontBytes] = await Promise.all([
+        import("~~/lib/labels/pdf"),
+        (async () => {
+          const res = await fetch(labelFontUrl);
+          if (!res.ok) throw new Error(`label font failed to load (${res.status})`);
+          return new Uint8Array(await res.arrayBuffer());
+        })(),
+      ]);
+      const bytes = await generateLabelSheetPdf(
+        {
+          measure: out.value.measure,
+          cols: out.value.cols,
+          gapX: out.value.gapX,
+          // The HTML sheet only renders a row gap for presets (see rowGap above).
+          rowGapY: currentPreset.value ? out.value.gapY : 0,
+          card: out.value.card,
+          page: out.value.page,
+          printOffset: printOffset.value,
+          bordered: bordered.value,
+          printLocationRow: printLocationRow.value,
+          qrSize: qrSize.value,
+          textColumnPx: textColumnPx.value,
+          nameFit: { floorRatio: NAME_FIT_FLOOR_RATIO, baseSizePx: NAME_BASE_PX, boldBaseSizePx: TOP_BASE_PX },
+          labelBlankLine,
+          homeBoxLine: getHomeBoxLineText.value,
+          pages: pages.value,
+        },
+        { fontBytes }
+      );
+      // Copy into a fresh Uint8Array<ArrayBuffer>: pdf-lib's Uint8Array is
+      // typed over ArrayBufferLike, which TS 5.9's BlobPart rejects.
+      const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: "application/pdf" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `labels-${selectedPresetId.value}-${new Date().toISOString().slice(0, 10)}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error(err);
+      toast.error(t("reports.label_generator.toast.pdf_failed"));
+    } finally {
+      pdfBusy.value = false;
+    }
+  }
+
   onMounted(() => applyPreset(selectedPresetId.value));
 </script>
 
@@ -709,9 +773,18 @@
 
       <div>
         <p>{{ $t("reports.label_generator.qr_code_example") }} {{ displayProperties.baseURL }}/a/{asset_id}</p>
-        <Button size="lg" class="my-4 w-full" @click="calcPages">
-          {{ $t("reports.label_generator.generate_page") }}
-        </Button>
+        <div class="my-4 flex flex-col gap-2 sm:flex-row">
+          <Button size="lg" class="w-full sm:flex-1" @click="calcPages">
+            {{ $t("reports.label_generator.generate_page") }}
+          </Button>
+          <Button size="lg" variant="outline" class="w-full sm:flex-1" :disabled="pdfBusy" @click="downloadPdf">
+            {{ $t("reports.label_generator.download_pdf") }}
+          </Button>
+        </div>
+        <p class="text-sm text-muted-foreground">{{ $t("reports.label_generator.pdf_print_guidance") }}</p>
+        <p v-if="!isChromium" class="text-sm text-muted-foreground">
+          {{ $t("reports.label_generator.pdf_hint_non_chromium") }}
+        </p>
       </div>
     </div>
   </div>

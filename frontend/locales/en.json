@@ -645,6 +645,7 @@
             "change_entity_type_confirm": "Changing the entity type may cause loss of data in fields that are not shared between the current and new entity types. Are you sure you want to change the entity type?"
         },
         "edit_details": "Edit Details",
+        "entity_kind": "Kind",
         "field": "Field",
         "field_selector": "Field Selector",
         "field_value": "Field Value",
@@ -652,6 +653,9 @@
         "include_archive": "Include Archived Items",
         "insured": "Insured",
         "invalid_asset_id": "Invalid Asset ID",
+        "kind_all": "All",
+        "kind_container": "Container",
+        "kind_containers": "Containers",
         "last": "Last",
         "lifetime_warranty": "Lifetime Warranty",
         "location": "Location",
@@ -971,6 +975,7 @@
             "base_url": "Base URL",
             "bordered_labels": "Bordered Labels",
             "clear_queue": "Clear queue",
+            "download_pdf": "Download PDF",
             "generate_page": "Generate Page",
             "input_placeholder": "Type here",
             "instruction_1": "The HomeBox Label Generator is a tool to help you print labels for your HomeBox inventory. These are intended to\n be print-ahead labels so you can print many labels and have them ready to apply",
@@ -985,6 +990,8 @@
             "page_right_padding": "Page Right Padding",
             "page_top_padding": "Page Top Padding",
             "page_width": "Page Width",
+            "pdf_hint_non_chromium": "This browser cannot print the page at exact label scale — use Download PDF for accurate alignment.",
+            "pdf_print_guidance": "Print the PDF at 100% / Actual Size (macOS: open in Preview; iOS: AirPrint with US Letter paper, no fit-to-page).",
             "presets": {
                 "title": "Label preset",
                 "avery_5160": "Avery 5160 — 30 per sheet (2⅝\" × 1\")",
@@ -1013,7 +1020,8 @@
             "tips": "Tips",
             "title": "Label Generator",
             "toast": {
-                "page_too_small_card": "Page size is too small for the card size"
+                "page_too_small_card": "Page size is too small for the card size",
+                "pdf_failed": "Failed to generate the label PDF"
             }
         }
     },
