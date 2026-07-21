@@ -2,6 +2,8 @@ package repo
 
 import (
 	"context"
+	"fmt"
+	"regexp"
 	"testing"
 	"time"
 
@@ -309,13 +311,27 @@ func TestEntityRepository_CreateFromTemplateBatch(t *testing.T) {
 		}
 	})
 
-	assert.Equal(t, "HDX 27-gal Tote 01", outs[0].Name)
-	assert.Equal(t, "HDX 27-gal Tote 02", outs[1].Name)
-	assert.Equal(t, "HDX 27-gal Tote 03", outs[2].Name)
+	// Each entity is named "<prefix> #<formatted asset id>" using the asset ID
+	// assigned to that same entity — no bare per-batch sequence numbers.
+	legacySeq := regexp.MustCompile(`^HDX 27-gal Tote \d+$`)
+	for i, o := range outs {
+		require.False(t, o.AssetID.Nil(), "batch entity %d should have an assigned asset ID", i)
+		assert.Equal(t, fmt.Sprintf("HDX 27-gal Tote #%s", o.AssetID.String()), o.Name)
+		assert.False(t, legacySeq.MatchString(o.Name), "name %q must not use the legacy sequence suffix", o.Name)
+
+		// The suffix matches the asset ID actually persisted, not just the
+		// value echoed in the response.
+		queried, err := tRepos.Entities.GetOne(context.Background(), o.ID)
+		require.NoError(t, err)
+		assert.Equal(t, o.AssetID, queried.AssetID)
+		assert.Equal(t, fmt.Sprintf("HDX 27-gal Tote #%s", queried.AssetID.String()), queried.Name)
+	}
 	// Distinct asset IDs
 	assert.NotEqual(t, outs[0].AssetID, outs[1].AssetID)
+	assert.NotEqual(t, outs[1].AssetID, outs[2].AssetID)
 
-	// A second batch continues the numbering automatically.
+	// A second batch keeps the naming keyed to each entity's own asset ID; the
+	// old cross-batch name counter is no longer used.
 	outs2, err := tRepos.Entities.CreateFromTemplateBatch(context.Background(), tGroup.ID, EntityBatchCreateFromTemplate{
 		Template: EntityCreateFromTemplate{
 			Quantity:     1,
@@ -332,8 +348,65 @@ func TestEntityRepository_CreateFromTemplateBatch(t *testing.T) {
 			_ = tRepos.Entities.Delete(context.Background(), o.ID)
 		}
 	})
-	assert.Equal(t, "HDX 27-gal Tote 04", outs2[0].Name)
-	assert.Equal(t, "HDX 27-gal Tote 05", outs2[1].Name)
+	for _, o := range outs2 {
+		require.False(t, o.AssetID.Nil())
+		assert.Equal(t, fmt.Sprintf("HDX 27-gal Tote #%s", o.AssetID.String()), o.Name)
+		// Asset-ID auto-increment still advances across batches.
+		assert.Greater(t, int64(o.AssetID), int64(outs[2].AssetID))
+	}
+}
+
+// TestEntityRepository_CreateFromTemplateBatch_LegacyFallbackNaming exercises
+// the assetId<=0 fallback: when the batch cannot assign real asset IDs (here
+// forced by seeding the group's highest asset ID far below zero), names keep
+// the legacy "<prefix> NN" sequence so entities within the batch stay
+// distinguishable.
+func TestEntityRepository_CreateFromTemplateBatch_LegacyFallbackNaming(t *testing.T) {
+	foreignGID, _, foreignTypeID := makeForeignGroup(t)
+
+	// Seed an entity whose asset ID is deeply negative so the batch's
+	// GetHighestAssetIDTx+increment still yields non-positive asset IDs.
+	seed, err := tRepos.Entities.Create(context.Background(), foreignGID, EntityCreate{
+		Name:         "negative-asset-seed",
+		AssetID:      -100,
+		EntityTypeID: foreignTypeID,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tRepos.Entities.Delete(context.Background(), seed.ID) })
+
+	outs, err := tRepos.Entities.CreateFromTemplateBatch(context.Background(), foreignGID, EntityBatchCreateFromTemplate{
+		Template: EntityCreateFromTemplate{
+			Quantity:     1,
+			EntityTypeID: foreignTypeID,
+		},
+		Count:      2,
+		NamePrefix: "Fallback Tote",
+	})
+	require.NoError(t, err)
+	require.Len(t, outs, 2)
+	t.Cleanup(func() {
+		for _, o := range outs {
+			_ = tRepos.Entities.Delete(context.Background(), o.ID)
+		}
+	})
+
+	assert.Equal(t, "Fallback Tote 01", outs[0].Name)
+	assert.Equal(t, "Fallback Tote 02", outs[1].Name)
+	for _, o := range outs {
+		assert.True(t, o.AssetID.Nil(), "fallback case requires assetId <= 0, got %d", int64(o.AssetID))
+	}
+}
+
+// TestBatchEntityName pins the exact suffix format: the formatted asset ID must
+// match the frontend's fmtAssetID rendering (zero-padded 3-3 with a dash).
+func TestBatchEntityName(t *testing.T) {
+	assert.Equal(t, "Tote #000-042", batchEntityName("Tote", 42, 7))
+	assert.Equal(t, "Tote #001-234", batchEntityName("Tote", 1234, 1))
+	// >6 digits: dash stays after the first three digits, mirroring fmtAssetID.
+	assert.Equal(t, "Tote #123-4567", batchEntityName("Tote", 1234567, 1))
+	// No real asset ID -> legacy zero-padded sequence keeps names distinct.
+	assert.Equal(t, "Tote 05", batchEntityName("Tote", 0, 5))
+	assert.Equal(t, "Tote 11", batchEntityName("Tote", -1, 11))
 }
 
 func TestEntityRepository_CreateFromTemplateBatch_CountBounds(t *testing.T) {

@@ -1415,7 +1415,10 @@ type EntityBatchCreateFromTemplate struct {
 	Template    EntityCreateFromTemplate `json:"template"`
 	Count       int                      `json:"count"`
 	NamePrefix  string                   `json:"namePrefix"`
-	StartNumber int                      `json:"startNumber"` // 0 = infer from existing names
+	// StartNumber seeds the legacy "<NamePrefix> NN" sequence suffix, which is
+	// only used as a fallback when an entity is not assigned a real asset ID
+	// (see batchEntityName). 0 = infer from existing "<NamePrefix> NN" names.
+	StartNumber int `json:"startNumber"`
 }
 
 // CreateFromTemplate creates an entity with all template data in a single transaction.
@@ -1598,8 +1601,30 @@ func (r *EntityRepository) createFromTemplateTx(ctx context.Context, tx *ent.Tx,
 	return newEntityID, nil
 }
 
+// batchEntityName returns the display name for one entity of a batch create.
+//
+// Primary rule (label-identity spec, docs/superpowers/specs/2026-07-21):
+// "<prefix> #<formatted asset id>", where the formatted form is
+// AssetID.String() ("000-042") — the identical zero-padded 3-3 format the
+// frontend's fmtAssetID renders, so the printed label, the UI list, and the
+// name all carry the same number. The asset ID must be the one actually
+// assigned to this entity in the same operation.
+//
+// Fallback (spec addendum): when the entity ends up without a real asset ID
+// (assetID <= 0 — e.g. auto_increment_asset_id=false or any path that skips
+// assignment), the legacy per-batch sequence suffix "<prefix> NN" is kept so
+// names within the batch stay distinguishable; an asset-ID-based name would
+// collapse every entity in the batch to the same string.
+func batchEntityName(prefix string, assetID AssetID, seq int) string {
+	if assetID.Nil() {
+		return fmt.Sprintf("%s %02d", prefix, seq)
+	}
+	return fmt.Sprintf("%s #%s", prefix, assetID.String())
+}
+
 // nextBatchStartNumber returns 1 + the highest numeric suffix among entities in
-// the group named "<prefix> <number>".
+// the group named "<prefix> <number>". Only consulted for the legacy fallback
+// naming in batchEntityName (entities without an assigned asset ID).
 func (r *EntityRepository) nextBatchStartNumber(ctx context.Context, gid uuid.UUID, prefix string) (int, error) {
 	names, err := r.db.Entity.Query().
 		Where(
@@ -1623,9 +1648,12 @@ func (r *EntityRepository) nextBatchStartNumber(ctx context.Context, gid uuid.UU
 	return maxN + 1, nil
 }
 
-// CreateFromTemplateBatch creates Count numbered entities from template data in a
-// single transaction. Names are "<NamePrefix> NN" (zero-padded to 2). If
-// StartNumber is unset (< 1), the numbering continues from the highest existing
+// CreateFromTemplateBatch creates Count entities from template data in a
+// single transaction. Names are "<NamePrefix> #<formatted asset id>" using the
+// asset ID assigned to that same entity in this operation (see
+// batchEntityName). Entities that end up without a real asset ID fall back to
+// the legacy "<NamePrefix> NN" sequence; for that fallback only, if
+// StartNumber is unset (< 1) the numbering continues from the highest existing
 // "<NamePrefix> NN"-named entity in the group.
 func (r *EntityRepository) CreateFromTemplateBatch(ctx context.Context, gid uuid.UUID, data EntityBatchCreateFromTemplate) ([]EntityOut, error) {
 	ctx, span := entityTracer().Start(ctx, "repo.EntityRepository.CreateFromTemplateBatch",
@@ -1683,6 +1711,9 @@ func (r *EntityRepository) CreateFromTemplateBatch(ctx context.Context, gid uuid
 		data.Template.EntityTypeID = etID
 	}
 
+	// Legacy sequence seed — only consumed by batchEntityName's fallback when
+	// an entity is created without a real asset ID. The primary naming path
+	// derives the suffix from the entity's own asset ID instead.
 	start := data.StartNumber
 	if start < 1 {
 		var err error
@@ -1716,8 +1747,10 @@ func (r *EntityRepository) CreateFromTemplateBatch(ctx context.Context, gid uuid
 	ids := make([]uuid.UUID, 0, data.Count)
 	for i := 0; i < data.Count; i++ {
 		one := data.Template
-		one.Name = fmt.Sprintf("%s %02d", data.NamePrefix, start+i)
+		// Assign the asset ID before deriving the name: the name must carry
+		// the exact asset ID persisted for this entity in this transaction.
 		nextAssetID++
+		one.Name = batchEntityName(data.NamePrefix, nextAssetID, start+i)
 
 		id, err := r.createFromTemplateTx(ctx, tx, gid, one, nextAssetID)
 		if err != nil {
