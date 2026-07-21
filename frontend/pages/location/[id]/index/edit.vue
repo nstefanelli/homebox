@@ -70,13 +70,16 @@
     return data;
   });
 
-  const item = ref<EntityOut & { tagIds: string[] }>(null as never);
+  // `contents` is optional on EntityOut but the textarea below needs a string,
+  // so it's normalized to "" on load.
+  const item = ref<EntityOut & { tagIds: string[]; contents: string }>(null as never);
 
   watchEffect(() => {
     if (nullableItem.value) {
       item.value = {
         ...nullableItem.value,
         tagIds: nullableItem.value.tags?.map(l => l.id) ?? [],
+        contents: nullableItem.value.contents ?? "",
       };
     }
   });
@@ -450,6 +453,14 @@
                   :label="$t(field.label)"
                   inline
                 />
+              </div>
+            </div>
+            <!-- Contents manifest: plain line-per-line text (not markdown), so a
+                 dedicated textarea rather than a mainFields entry (whose string-key
+                 typing excludes the optional `contents` field). -->
+            <div class="grid grid-cols-1 sm:divide-y">
+              <div class="border-b px-4 pb-4 pt-2 sm:px-6">
+                <FormTextArea v-model="item.contents" :label="$t('locations.contents')" inline />
               </div>
             </div>
           </div>

@@ -5,14 +5,22 @@
 
   type Props = {
     source?: string | null;
+    /**
+     * Render single newlines as line breaks (markdown-it's `breaks`). Opted
+     * into by description renders so entered line breaks display as entered
+     * instead of collapsing into a run-on paragraph.
+     */
+    breaks?: boolean;
   };
 
   const props = withDefaults(defineProps<Props>(), {
     source: null,
+    breaks: false,
   });
 
   const md = new MarkdownIt({
     html: true,
+    breaks: props.breaks,
     linkify: true,
     typographer: true,
   }).use(imgSize);

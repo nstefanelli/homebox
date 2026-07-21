@@ -39,6 +39,7 @@
   import ItemAttachmentsList from "~/components/Item/AttachmentsList.vue";
   import ItemImageDialog from "~/components/Item/ImageDialog.vue";
   import LocationCard from "~/components/Location/Card.vue";
+  import EntityQuickAddRow from "~/components/Entity/QuickAddRow.vue";
   import TagChip from "~/components/Tag/Chip.vue";
   import { useIntegrationsStore } from "~~/stores/integrations";
 
@@ -339,6 +340,16 @@
     });
   });
 
+  // Keeps the Contents card in step with quick add's optimistic List-mode
+  // appends/undos (the row already persisted -- or reverted -- server-side);
+  // local mutation of the async-data ref matches how attachments are pruned in
+  // openImageDialog above.
+  function onContentsUpdated(contents: string) {
+    if (location.value) {
+      location.value.contents = contents;
+    }
+  }
+
   const printQueue = useLabelPrintQueue();
   const printIncludeItems = ref(false);
   const loadingPrintQueue = ref(false);
@@ -518,13 +529,24 @@
           </div>
         </header>
         <Separator v-if="location && location.description" />
-        <Markdown v-if="location && location.description" class="mt-3 text-base" :source="location.description" />
+        <Markdown
+          v-if="location && location.description"
+          class="mt-3 text-base"
+          :source="location.description"
+          breaks
+        />
       </Card>
 
       <!-- Details (notes, custom fields) -->
       <BaseCard v-if="locationDetails.length > 0" class="mt-4">
         <template #title> {{ $t("global.details") }} </template>
         <DetailsSection :details="locationDetails" />
+      </BaseCard>
+
+      <!-- Contents manifest: plain text, rendered line-per-line exactly as stored -->
+      <BaseCard v-if="location.contents" class="mt-4">
+        <template #title> {{ $t("locations.contents") }} </template>
+        <p class="whitespace-pre-line break-words border-t px-5 py-3 text-sm">{{ location.contents }}</p>
       </BaseCard>
 
       <!-- Attachments (non-photo) -->
@@ -553,6 +575,16 @@
           />
         </div>
       </BaseCard>
+
+      <!-- Quick add: keyboard-first entry of many simple items (or manifest lines) -->
+      <!-- Keyed on the location id: navigating A -> B must remount so queue/chips/
+     session state can't leak across locations (NuxtPage reuses the instance). -->
+      <EntityQuickAddRow
+        :key="location.id"
+        :entity="location"
+        @refresh="refreshItemList"
+        @update:contents="onContentsUpdated"
+      />
 
       <!-- Items in this location -->
       <section v-if="location && items">

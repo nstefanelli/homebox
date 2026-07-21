@@ -750,6 +750,8 @@ export interface DuplicateOptions {
 }
 
 export interface EntityCreate {
+  /** Free-text contents manifest, one entry per line */
+  contents?: string;
   /** @maxLength 1000 */
   description: string;
   entityTypeId: string;
@@ -798,6 +800,8 @@ export interface EntityOut {
   attachments: ItemAttachment[];
   /** Container-specific fields (for entities whose entity_type.is_location = true) */
   children: EntitySummary[];
+  /** Free-text contents manifest, one entry per line */
+  contents?: string;
   createdAt: Date | string;
   description: string;
   entityType?: EntityTypeSummary | null;
@@ -1026,6 +1030,8 @@ export interface EntityTypeUpdate {
 export interface EntityUpdate {
   archived: boolean;
   assetId: string;
+  /** Free-text contents manifest, one entry per line */
+  contents?: string;
   /** @maxLength 1000 */
   description: string;
   entityTypeId: string;

@@ -232,6 +232,21 @@
                 "rotate_photo": "Rotate photo",
                 "set_as_primary_photo": "Set as { isPrimary, select, true {non-} false {} other {}}primary photo",
                 "item_selector_no_results_text": "Type to search…"
+            },
+            "quick_add": {
+                "add": "Add",
+                "mode_items": "Items",
+                "mode_list": "List",
+                "placeholder_items": "Quick add items — e.g. “3x AA batteries”, Enter to add",
+                "placeholder_list": "Quick add a contents line — Enter to add",
+                "print_labels": "Print labels ({count})",
+                "progress": "{done}/{total}…",
+                "toast": {
+                    "lines_failed": "{count, plural, =1 {1 entry failed — left in the input} other {{count} entries failed — left in the input}}",
+                    "no_item_type": "No item entity type available — create one first.",
+                    "undo_failed": "Couldn't undo that — try again."
+                },
+                "undo": "Undo"
             }
         },
         "item": {
@@ -778,6 +793,7 @@
     "locations": {
         "child_locations": "Child Locations",
         "collapse_tree": "Collapse Tree",
+        "contents": "Contents",
         "expand_tree": "Expand Tree",
         "hide_items": "Hide Items",
         "icon": "Icon",
