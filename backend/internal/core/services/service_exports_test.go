@@ -139,24 +139,23 @@ func TestExportRoundTrip(t *testing.T) {
 		"artifact path %q must be scoped to source group", artifactPath)
 
 	// --- Destination: fresh group with seeded defaults -----------------
-	// Mirror what real registration does: a new group has default locations
-	// and tags but no items. The import must tolerate this and wipe them.
-	dst, err := tRepos.Groups.GroupCreate(ctx, "export-dst-"+fk.Str(4), uuid.Nil)
+	// Run the real registration flow so the destination carries the actual
+	// seeder output (locations created via CreateContainer with quantity at
+	// the schema default of 1 and sequential asset IDs, plus default tags).
+	// Hand-rolled lookalike rows previously masked a readiness-check bug
+	// that rejected every genuinely registered collection.
+	dstUser, err := tSvc.User.RegisterUser(ctx, UserRegistration{
+		Name:     "Export Dst User",
+		Email:    fk.Email(),
+		Password: "export-dst-password",
+	})
 	require.NoError(t, err)
-
-	dstContainerET, err := tRepos.EntityTypes.GetDefault(ctx, dst.ID, true)
+	t.Cleanup(func() {
+		_ = tRepos.Users.Delete(context.Background(), dstUser.ID)
+		_ = tRepos.Groups.GroupDelete(context.Background(), dstUser.DefaultGroupID)
+	})
+	dst, err := tRepos.Groups.GroupByID(ctx, dstUser.DefaultGroupID)
 	require.NoError(t, err)
-	for _, name := range []string{"Living Room", defaultLocationGarage, "Kitchen"} {
-		_, err := tRepos.Entities.Create(ctx, dst.ID, repo.EntityCreate{
-			Name:         name,
-			EntityTypeID: dstContainerET.ID,
-		})
-		require.NoError(t, err)
-	}
-	for _, name := range []string{"Appliances", "Electronics"} {
-		_, err := tRepos.Tags.Create(ctx, dst.ID, repo.TagCreate{Name: name})
-		require.NoError(t, err)
-	}
 
 	ready, err := tSvc.Exports.IsGroupReadyForImport(ctx, dst.ID)
 	require.NoError(t, err)
@@ -172,7 +171,7 @@ func TestExportRoundTrip(t *testing.T) {
 	// and to report status/progress against.
 	impRow, err := tRepos.Exports.CreateImport(ctx, dst.ID, importKey, sizeBytes)
 	require.NoError(t, err)
-	tSvc.Exports.RunImport(ctx, dst.ID, tUser.ID, impRow.ID)
+	tSvc.Exports.RunImport(ctx, dst.ID, dstUser.ID, impRow.ID)
 
 	// --- Assertions ----------------------------------------------------
 	dstEntities, err := tClient.Entity.Query().Where(entity.HasGroupWith(group.ID(dst.ID))).All(ctx)
@@ -594,6 +593,208 @@ func TestIsGroupReadyForImport_BlocksUserCreatedRows(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, ready, "custom type must not be mistaken for a missing default type")
 	})
+}
+
+// TestIsGroupReadyForImport_FreshRegistration exercises the real registration
+// seeder instead of hand-built lookalike rows. The seeder creates default
+// locations via CreateContainer, which leaves quantity at the schema default
+// of 1 and assigns each row a sequential asset ID — a shape the readiness
+// check must accept. Regression: the check previously required
+// Quantity == 0 && AssetID == 0, so every freshly registered collection got
+// a 409 on import.
+func TestIsGroupReadyForImport_FreshRegistration(t *testing.T) {
+	ctx := context.Background()
+
+	usr, err := tSvc.User.RegisterUser(ctx, UserRegistration{
+		Name:     "Import Ready User",
+		Email:    fk.Email(),
+		Password: "import-ready-password",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = tRepos.Users.Delete(context.Background(), usr.ID)
+		_ = tRepos.Groups.GroupDelete(context.Background(), usr.DefaultGroupID)
+	})
+	gid := usr.DefaultGroupID
+
+	ready, err := tSvc.Exports.IsGroupReadyForImport(ctx, gid)
+	require.NoError(t, err)
+	assert.True(t, ready, "a freshly registered collection containing only seeder output must be importable")
+
+	// Negative case: one real user-created item flips readiness off.
+	itemET, err := tRepos.EntityTypes.GetDefault(ctx, gid, false)
+	require.NoError(t, err)
+	userItem, err := tRepos.Entities.Create(ctx, gid, repo.EntityCreate{
+		Name:         "User Drill",
+		EntityTypeID: itemET.ID,
+	})
+	require.NoError(t, err)
+
+	ready, err = tSvc.Exports.IsGroupReadyForImport(ctx, gid)
+	require.NoError(t, err)
+	assert.False(t, ready, "a user-created item must block import")
+
+	// A user-created location that shadows a seed name but carries real data
+	// (quantity beyond the pristine defaults) must also block, even when it
+	// reuses the freed in-range asset ID.
+	require.NoError(t, tRepos.Entities.DeleteByGroup(ctx, gid, userItem.ID))
+	locET, err := tRepos.EntityTypes.GetDefault(ctx, gid, true)
+	require.NoError(t, err)
+	seeded, err := tClient.Entity.Query().
+		Where(entity.HasGroupWith(group.ID(gid)), entity.Name(defaultLocationGarage)).
+		Only(ctx)
+	require.NoError(t, err)
+	require.NoError(t, tRepos.Entities.DeleteByGroup(ctx, gid, seeded.ID))
+	_, err = tRepos.Entities.Create(ctx, gid, repo.EntityCreate{
+		Name:         defaultLocationGarage,
+		EntityTypeID: locET.ID,
+		Quantity:     5,
+		AssetID:      repo.AssetID(seeded.AssetID),
+	})
+	require.NoError(t, err)
+
+	ready, err = tSvc.Exports.IsGroupReadyForImport(ctx, gid)
+	require.NoError(t, err)
+	assert.False(t, ready, "a seed-named location with a non-default quantity must block")
+}
+
+// TestIsGroupReadyForImport_BlocksRecreatedSeedNamedLocation covers the
+// delete-then-recreate hole: a user deletes a seeded location and later
+// creates a new, still-empty location with the same name. Per-row emptiness
+// cannot tell that row from a pristine seed, but its asset_id can — the
+// seeder assigns the contiguous range 1..len(defaultLocations()) on a fresh
+// group, while a recreated location gets either the next counter value
+// (past the seed range once the group has any real usage) or 0 (with
+// auto-increment disabled), a mixed shape alongside the surviving 1..N seed
+// rows. Both must block import, or the wipe would silently delete a
+// user-created location.
+func TestIsGroupReadyForImport_BlocksRecreatedSeedNamedLocation(t *testing.T) {
+	ctx := context.Background()
+
+	// registerGroup registers a real user (running the actual seeder),
+	// deletes the seeded "Attic", and returns the group ID plus the default
+	// Location entity-type ID for recreating it.
+	registerGroup := func(t *testing.T) (uuid.UUID, uuid.UUID) {
+		t.Helper()
+		usr, err := tSvc.User.RegisterUser(ctx, UserRegistration{
+			Name:     "Recreate User",
+			Email:    fk.Email(),
+			Password: "recreate-password",
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = tRepos.Users.Delete(context.Background(), usr.ID)
+			_ = tRepos.Groups.GroupDelete(context.Background(), usr.DefaultGroupID)
+		})
+		gid := usr.DefaultGroupID
+		seeded, err := tClient.Entity.Query().
+			Where(entity.HasGroupWith(group.ID(gid)), entity.Name("Attic")).
+			Only(ctx)
+		require.NoError(t, err)
+		require.NoError(t, tRepos.Entities.DeleteByGroup(ctx, gid, seeded.ID))
+		locET, err := tRepos.EntityTypes.GetDefault(ctx, gid, true)
+		require.NoError(t, err)
+		return gid, locET.ID
+	}
+
+	t.Run("recreated location with out-of-seed-range asset id blocks", func(t *testing.T) {
+		gid, locETID := registerGroup(t)
+		// Any real usage pushes the asset counter past the seed range; the
+		// recreated location then gets an ID the seeder could never assign.
+		_, err := tRepos.Entities.Create(ctx, gid, repo.EntityCreate{
+			Name:         "Attic",
+			EntityTypeID: locETID,
+			Quantity:     1,
+			AssetID:      42,
+		})
+		require.NoError(t, err)
+
+		ready, err := tSvc.Exports.IsGroupReadyForImport(ctx, gid)
+		require.NoError(t, err)
+		assert.False(t, ready, "an empty seed-named location with an out-of-range asset id is user-created and must block")
+	})
+
+	t.Run("recreated location with asset id 0 alongside seeded rows blocks", func(t *testing.T) {
+		gid, locETID := registerGroup(t)
+		// auto_increment_asset_id=false shape: the new location gets asset 0
+		// while the surviving seeds keep 1..N — a mixed shape.
+		_, err := tRepos.Entities.Create(ctx, gid, repo.EntityCreate{
+			Name:         "Attic",
+			EntityTypeID: locETID,
+			Quantity:     1,
+		})
+		require.NoError(t, err)
+
+		ready, err := tSvc.Exports.IsGroupReadyForImport(ctx, gid)
+		require.NoError(t, err)
+		assert.False(t, ready, "asset id 0 mixed with seeded 1..N rows must block")
+	})
+
+	t.Run("recreated location duplicating a seeded asset id blocks", func(t *testing.T) {
+		gid, locETID := registerGroup(t)
+		other, err := tClient.Entity.Query().
+			Where(entity.HasGroupWith(group.ID(gid)), entity.Name("Kitchen")).
+			Only(ctx)
+		require.NoError(t, err)
+		_, err = tRepos.Entities.Create(ctx, gid, repo.EntityCreate{
+			Name:         "Attic",
+			EntityTypeID: locETID,
+			Quantity:     1,
+			AssetID:      repo.AssetID(other.AssetID),
+		})
+		require.NoError(t, err)
+
+		ready, err := tSvc.Exports.IsGroupReadyForImport(ctx, gid)
+		require.NoError(t, err)
+		assert.False(t, ready, "duplicate asset ids among seed candidates must block")
+	})
+
+	t.Run("recreated location just past the seed range blocks", func(t *testing.T) {
+		gid, locETID := registerGroup(t)
+		_, err := tRepos.Entities.Create(ctx, gid, repo.EntityCreate{
+			Name:         "Attic",
+			EntityTypeID: locETID,
+			Quantity:     1,
+			AssetID:      repo.AssetID(len(defaultLocations()) + 1),
+		})
+		require.NoError(t, err)
+
+		ready, err := tSvc.Exports.IsGroupReadyForImport(ctx, gid)
+		require.NoError(t, err)
+		assert.False(t, ready, "the first asset id past the seed range must block")
+	})
+}
+
+// A legacy group (seeded at asset 0 / quantity 0) whose locations were later
+// backfilled by EnsureAssetID carries asset IDs 1..N with quantity still 0.
+// seedLocationNumericShapeOK's doc comment claims that shape stays
+// importable; pin it so a refactor can't silently regress it.
+func TestIsGroupReadyForImport_AcceptsBackfilledLegacySeeds(t *testing.T) {
+	ctx := context.Background()
+	usr, err := tSvc.User.RegisterUser(ctx, UserRegistration{
+		Name:     "Backfill User",
+		Email:    fk.Email(),
+		Password: "backfill-password",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = tRepos.Users.Delete(context.Background(), usr.ID)
+		_ = tRepos.Groups.GroupDelete(context.Background(), usr.DefaultGroupID)
+	})
+	gid := usr.DefaultGroupID
+
+	// Shape the seeds into backfilled-legacy form: EnsureAssetID assigns
+	// 1..N (already true of the current seeder) but never touches quantity,
+	// which legacy seeders left at 0.
+	_, err = tClient.Entity.Update().
+		Where(entity.HasGroupWith(group.ID(gid))).
+		SetQuantity(0).
+		Save(ctx)
+	require.NoError(t, err)
+
+	ready, err := tSvc.Exports.IsGroupReadyForImport(ctx, gid)
+	require.NoError(t, err)
+	assert.True(t, ready, "backfilled legacy seeds (asset 1..N, quantity 0) must stay importable")
 }
 
 func testZipReader(t *testing.T, entries map[string]any) *zip.Reader {

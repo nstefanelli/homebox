@@ -334,6 +334,9 @@ func (s *ExportService) IsGroupReadyForImport(ctx context.Context, gid uuid.UUID
 		}
 		seenLocations[entRow.Name] = struct{}{}
 	}
+	if !seedLocationNumericShapeOK(entities) {
+		return false, nil
+	}
 
 	allowedTagNames := make(map[string]struct{}, len(defaultTags()))
 	for _, seedTag := range defaultTags() {
@@ -381,13 +384,16 @@ func isSeedLocation(
 		return false
 	}
 
+	// Quantity and AssetID are intentionally absent here: both are
+	// user-meaningful (asset-tag lookup, user-settable on update) but their
+	// seeded values depend on which seeder generation created the group, so
+	// they are validated collectively across all candidate rows by
+	// seedLocationNumericShapeOK rather than per row.
 	return row.Description == "" &&
 		row.ImportRef == "" &&
 		row.Notes == "" &&
-		row.Quantity == 0 &&
 		!row.Insured &&
 		!row.Archived &&
-		row.AssetID == 0 &&
 		!row.SyncChildEntityLocations &&
 		row.SerialNumber == "" &&
 		row.ModelNumber == "" &&
@@ -408,6 +414,67 @@ func isSeedLocation(
 		len(row.Edges.Fields) == 0 &&
 		len(row.Edges.MaintenanceEntries) == 0 &&
 		len(row.Edges.Attachments) == 0
+}
+
+// seedLocationNumericShapeOK validates quantity and asset_id across ALL
+// candidate seed locations collectively, accepting exactly one seeder
+// generation per group. Per-row emptiness (isSeedLocation) is not enough:
+// asset IDs and quantity are user-meaningful (asset-tag lookup via the asset
+// endpoints; both user-settable on update), and a user who deletes a seed
+// location and later recreates an empty one with the same name would
+// otherwise pass every per-row clause and get silently wiped by import.
+//
+// Accepted shapes:
+//
+//   - Legacy seeder output: every row has asset_id 0 and quantity 0.
+//   - Current seeder output (createDefaultLocations → CreateContainer on a
+//     fresh group): asset IDs form a duplicate-free subset of the contiguous
+//     range 1..len(defaultLocations()) that the seeder assigns
+//     (GetHighestAssetID is 0 at registration), with quantity 1 (the schema
+//     default) or 0 (legacy rows later backfilled by EnsureAssetID keep
+//     their old quantity).
+//
+// Mixed shapes are rejected: a location recreated with auto-increment
+// enabled gets the next counter value, which in any group with real usage
+// lands past the seed range; one recreated with auto-increment disabled gets
+// asset 0 alongside the remaining 1..N seed rows. Both correctly 409.
+//
+// Residual bound: a recreated location that is byte-identical to a pristine
+// seed row — seed name, all fields empty, default quantity, and an asset ID
+// inside the seed range because the freed slot was reassigned — is
+// indistinguishable from seeder output by any stored data. Wiping it on
+// import loses nothing beyond an empty seed-shaped location, which is the
+// accepted bound of this check. The same bound applies symmetrically to the
+// legacy branch: with auto-increment disabled, deleting and recreating every
+// seed location leaves all rows at asset 0 / quantity 0 — an exact legacy
+// match — but such rows are equally empty seed-shaped placeholders.
+func seedLocationNumericShapeOK(rows []*ent.Entity) bool {
+	legacy := true
+	for _, row := range rows {
+		if row.AssetID != 0 || row.Quantity != 0 {
+			legacy = false
+			break
+		}
+	}
+	if legacy {
+		return true
+	}
+
+	maxSeedAssetID := int64(len(defaultLocations()))
+	seenAssetIDs := make(map[int64]struct{}, len(rows))
+	for _, row := range rows {
+		if row.AssetID < 1 || row.AssetID > maxSeedAssetID {
+			return false
+		}
+		if _, duplicate := seenAssetIDs[row.AssetID]; duplicate {
+			return false
+		}
+		seenAssetIDs[row.AssetID] = struct{}{}
+		if row.Quantity != 0 && row.Quantity != 1 {
+			return false
+		}
+	}
+	return true
 }
 
 // RunExport is invoked by the pubsub subscriber when an export job message is
