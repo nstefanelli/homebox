@@ -2,6 +2,31 @@
 
 All notable changes to this fork are documented in this file. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Upstream is [sysadminsmedia/homebox](https://github.com/sysadminsmedia/homebox); this file only covers fork-specific work on top of v0.26.2.
 
+## v0.26.2-e2e.3 - 2026-07-21
+
+### Changed
+
+- Labels now show the formatted asset ID as the bold identifier on every
+  label — items, containers, and locations alike — omitted only when an
+  entity has no asset ID (a meaningless `000-000` is never printed). The
+  asset ID is the single findable number across the UI list, the label,
+  and the QR code.
+- Label names auto-fit: the name row steps its font size down (to a 65%
+  floor) until the full name fits, ellipsizing only past the floor, so
+  batch numbers at the end of long names stay visible.
+- Batch create (template batch and UPC-scan count) names each created
+  entity `<base> #<asset-id>` from the asset ID assigned in the same
+  operation, replacing the per-batch sequence counter — one identity
+  number per entity instead of two. When no asset ID is assigned
+  (auto-increment disabled), the legacy sequence suffix is kept so names
+  stay distinguishable.
+
+### Added
+
+- Design spec `docs/superpowers/specs/2026-07-21-homebox-label-identity-design.md`;
+  unit tests for the auto-fit sizing function and asset-ID batch naming
+  through the real batch-create path.
+
 ## v0.26.2-e2e.2 - 2026-07-21
 
 ### Fixed
