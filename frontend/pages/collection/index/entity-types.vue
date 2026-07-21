@@ -26,6 +26,7 @@
   import { useEntityTypeStore } from "~/stores/entityTypes";
 
   const { t } = useI18n();
+  const typeName = useEntityTypeName();
 
   useHead({ title: `HomeBox | ${t("collection.tabs.entity_types")}` });
 
@@ -198,7 +199,7 @@
 
   async function deleteEntityType(et: EntityTypeSummary) {
     const { isCanceled } = await confirm.open(
-      t("components.entityTypes.confirm.delete_entity_type", { name: et.name })
+      t("components.entityTypes.confirm.delete_entity_type", { name: typeName(et.name) })
     );
     if (isCanceled) return;
 
@@ -318,7 +319,7 @@
 
           <div class="mr-auto min-w-0">
             <div class="flex items-center gap-2">
-              <span class="font-medium">{{ et.name }}</span>
+              <span class="font-medium">{{ typeName(et.name) }}</span>
               <Badge v-if="et.isLocation" variant="secondary" class="text-xs">
                 {{ t("components.entityTypes.card.badge_container") }}
               </Badge>

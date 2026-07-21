@@ -244,7 +244,7 @@
         :autofocus="true"
         :label="
           $t('components.entity.create_modal.entity_name', {
-            type: selectedEntityType?.name || '',
+            type: typeName(selectedEntityType?.name),
           })
         "
         :max-length="255"
@@ -255,7 +255,7 @@
         v-model.number="form.quantity"
         :label="
           $t('components.entity.create_modal.entity_quantity', {
-            type: selectedEntityType?.name || t('global.entity'),
+            type: typeName(selectedEntityType?.name) || t('global.entity'),
           })
         "
         type="number"
@@ -275,7 +275,7 @@
         v-model="form.description"
         :label="
           $t('components.entity.create_modal.entity_description', {
-            type: selectedEntityType?.name || t('global.entity'),
+            type: typeName(selectedEntityType?.name) || t('global.entity'),
           })
         "
         :max-length="1000"
@@ -316,7 +316,7 @@
       <PhotoUploader
         :label="
           $t('components.entity.create_modal.entity_photo', {
-            type: selectedEntityType?.name || t('global.entity'),
+            type: typeName(selectedEntityType?.name) || t('global.entity'),
           })
         "
         :button-label="$t('components.entity.create_modal.upload_photos')"
@@ -407,6 +407,7 @@
   import EntitySelector from "~/components/Entity/Selector.vue";
 
   const { t } = useI18n();
+  const typeName = useEntityTypeName();
   const { openDialog, closeDialog, registerOpenDialogCallback, activeDialog } = useDialog();
 
   useDialogHotkey(DialogID.CreateEntity, { code: "Digit1", shift: true }, () => ({
@@ -963,7 +964,7 @@
     if (loading.value) {
       toast.error(
         t("components.entity.create_modal.toast.already_creating", {
-          type: selectedEntityType.value?.name || t("global.entity"),
+          type: typeName(selectedEntityType.value?.name) || t("global.entity"),
         })
       );
       return;
@@ -1153,7 +1154,7 @@
       if (error) {
         toast.error(
           t("components.entity.create_modal.toast.create_failed", {
-            type: selectedEntityType.value?.name || t("global.entity"),
+            type: typeName(selectedEntityType.value?.name) || t("global.entity"),
           })
         );
         return;
@@ -1161,7 +1162,7 @@
 
       toast.success(
         t("components.entity.create_modal.toast.create_success", {
-          type: selectedEntityType.value?.name || t("global.entity"),
+          type: typeName(selectedEntityType.value?.name) || t("global.entity"),
         })
       );
 
@@ -1240,7 +1241,7 @@
         selectedEntityType.value?.isContainer
           ? t("components.entity.create_modal.batch_failed")
           : t("components.entity.create_modal.toast.create_failed", {
-              type: selectedEntityType.value?.name || t("global.entity"),
+              type: typeName(selectedEntityType.value?.name) || t("global.entity"),
             })
       );
     } finally {
