@@ -2,6 +2,48 @@
 
 All notable changes to this fork are documented in this file. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Upstream is [sysadminsmedia/homebox](https://github.com/sysadminsmedia/homebox); this file only covers fork-specific work on top of v0.26.2.
 
+## v0.26.2-e2e.2 - 2026-07-21
+
+### Fixed
+
+- Restored the label-print fixes dropped by the `main` rebuild for PR #2
+  (originally phase 3.4/3.5 on `feature/containers`): the 0.1in print-safe
+  inset inside each label cell, the Print Offset X/Y calibration inputs
+  (localStorage-persisted), and line-clamped label text.
+- Corrected the Avery 22806 preset's vertical geometry to the official
+  template (0.625in top/bottom margins, 7/12in row gutter — was 0.6/0.6/0.6),
+  so rows register on the physical die-cut.
+- Reimplemented the print offset as clamped padding deltas on the sheet
+  section instead of a CSS translate: a positive X offset used to push the
+  sheet past the `@page` box and trigger Chromium's print shrink-to-fit,
+  compressing column pitch by roughly the offset being calibrated (latent in
+  the original phase 3.5 implementation).
+- Sized label QR codes to the cell content box (`min(height × 0.9,
+  content width × 0.6)`): the previous height-only formula overflowed the
+  square 22806 cell, clipping the QR and collapsing the text column.
+- Contained long label text: unbreakable tokens no longer print across
+  neighboring labels (cell `overflow-hidden`, `min-w-0` + `break-words` text
+  column) and wrapped lines clamp cleanly instead of clipping mid-glyph.
+- Made the label generator's asset range end-inclusive (start 1 / end 30 now
+  prints 30 labels) and set the default range to fill exactly three 30-up
+  sheets.
+- Fixed collection import always returning 409 for freshly registered
+  collections: `isSeedLocation` required `quantity == 0 && asset_id == 0`,
+  but the registration seeder creates default locations with the schema
+  default quantity (1) and sequential asset IDs 1..8. Seed rows are now
+  matched per-row on emptiness plus a collective numeric-shape check
+  (legacy all-zero or the seeder's contiguous asset-ID range, duplicate-free)
+  so a user-recreated, seed-named location still correctly blocks import
+  instead of being silently wiped.
+
+### Added
+
+- Label geometry regression tests pinning every preset to the official Avery
+  dimensions plus a page-closure invariant, and import-readiness tests
+  covering the real registration seeder, recreated seed-named locations
+  (out-of-range / zero / duplicate / boundary asset IDs), and backfilled
+  legacy seeds.
+
 ## Unreleased - 2026-07-18
 
 ### Security
