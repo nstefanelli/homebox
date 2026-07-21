@@ -30,6 +30,33 @@
   const printLocationRow = ref(true);
   const labelBlankLine = "_______________";
 
+  // Per-printer alignment calibration: printers routinely place the page
+  // origin a small fraction of an inch off (feed registration), which shifts
+  // the whole full-bleed sheet relative to the physical die-cut labels and can
+  // shave the outer columns' content. Standard label-software fix: a user-set
+  // X/Y offset, persisted per browser. Applied as padding deltas on each sheet
+  // (see printOffset below) so the sheet stays exactly pageWidth x pageHeight;
+  // a translate is NOT equivalent — the shifted full-bleed sheet overflows the
+  // @page box and print shrink-to-fit compresses the label pitch off-register.
+  // Units follow the sheet's measure setting (inches for presets).
+  const OFFSET_STORAGE_KEY = "homebox:labelPrintOffset";
+  const storedOffset = (() => {
+    try {
+      return JSON.parse(localStorage.getItem(OFFSET_STORAGE_KEY) ?? "{}");
+    } catch {
+      return {};
+    }
+  })();
+
+  // Print-safe inset inside each label cell. The sheet prints full-bleed
+  // (@page margin:0), so the outer columns' die-cut edges sit ~0.19in from the
+  // paper edge — inside many printers' unprintable zone. Content flush to the
+  // label edge gets shaved there (and is vulnerable to die-cut registration
+  // drift anyway). Absolute CSS unit on purpose: applies regardless of the
+  // sheet's measure setting. Bordered mode still draws at the true label edge
+  // (it marks the die-cut for alignment tests).
+  const LABEL_SAFE_INSET = "0.1in";
+
   // Behavior constants for HomeBox text replacement
   const BEHAVIOR_SHOW = "show";
   const BEHAVIOR_ALWAYS_REPLACE = "always_replace";
@@ -43,7 +70,8 @@
   const displayProperties = reactive({
     baseURL: window.location.origin,
     assetRange: 1,
-    assetRangeMax: 91,
+    // End-inclusive (see the items loop): 1..90 fills exactly three 30-up sheets.
+    assetRangeMax: 90,
     skipLabels: 0,
     measure: "in",
     gapY: 0.25,
@@ -56,7 +84,14 @@
     pageBottomPadding: 0.42,
     pageLeftPadding: 0.25,
     pageRightPadding: 0.1,
+    printOffsetX: Number(storedOffset.x) || 0,
+    printOffsetY: Number(storedOffset.y) || 0,
   });
+
+  watch(
+    () => [displayProperties.printOffsetX, displayProperties.printOffsetY],
+    ([x, y]) => localStorage.setItem(OFFSET_STORAGE_KEY, JSON.stringify({ x, y }))
+  );
 
   // Print queue (Task 9 stores): when non-empty, the page renders the queued
   // entries (containers/locations/items picked elsewhere) instead of the
@@ -120,6 +155,7 @@
     ref: keyof typeof displayProperties;
     type?: "number" | "text";
     min?: number;
+    max?: number;
     step?: number;
   }
 
@@ -175,6 +211,21 @@
       {
         label: t("reports.label_generator.page_right_padding"),
         ref: "pageRightPadding",
+      },
+      // ±0.25 covers any realistic feed-registration error; printOffset
+      // additionally clamps to the sheet margins at render time, so typed
+      // values can never drive a padding negative.
+      {
+        label: t("reports.label_generator.print_offset_x"),
+        ref: "printOffsetX",
+        min: -0.25,
+        max: 0.25,
+      },
+      {
+        label: t("reports.label_generator.print_offset_y"),
+        ref: "printOffsetY",
+        min: -0.25,
+        max: 0.25,
       },
       {
         label: t("reports.label_generator.base_url"),
@@ -262,7 +313,8 @@
     }
 
     const items: LabelData[] = [];
-    for (let i = displayProperties.assetRange - 1; i < displayProperties.assetRangeMax - 1; i++) {
+    // "Asset End" is inclusive: start 1 / end 30 prints 30 labels, not 29.
+    for (let i = displayProperties.assetRange - 1; i < displayProperties.assetRangeMax; i++) {
       const item = allFields?.value?.items?.[i];
       // Real entities use the `parent` edge for their whereabouts. Indices
       // beyond the inventory remain blank, pre-printable labels.
@@ -354,6 +406,39 @@
   useHead(() => ({
     style: printPageRule.value ? [{ id: "label-page-rule", innerHTML: printPageRule.value }] : [],
   }));
+
+  // Calibration offsets, applied as padding deltas on each sheet: +X grows the
+  // left padding and shrinks the right by the same amount (same for Y on
+  // top/bottom), so the section stays exactly pageWidth x pageHeight and never
+  // overflows the @page box. A translate does overflow it, and Chromium print
+  // then shrink-to-fits the whole page (~0.6% at 0.1in) — compressing the
+  // column pitch so labels no longer register on the stock. Offsets clamp to
+  // the sheet margins so no padding goes negative; every preset keeps
+  // >=0.15in margins, comfortably covering the ±0.1in real printers need.
+  // Number() guards the transient empty-string state while the user edits.
+  const printOffset = computed(() => {
+    const p = out.value.page;
+    const x = Number(displayProperties.printOffsetX) || 0;
+    const y = Number(displayProperties.printOffsetY) || 0;
+    return {
+      x: Math.min(p.pr, Math.max(-p.pl, x)),
+      y: Math.min(p.pb, Math.max(-p.pt, y)),
+    };
+  });
+
+  // QR size: nominally 90% of the label height, capped at 60% of the cell's
+  // content-box width. The QR must never exceed the content box — the cell's
+  // overflow-hidden clips its right edge and the min-w-0 text column collapses
+  // to zero width. Height alone can't guarantee that: on near-square labels
+  // (22806, 2x2in) height*0.9 fills the entire content width. Content box =
+  // label width minus the 2px borders and the LABEL_SAFE_INSET per side, both
+  // converted from inches into the sheet's measure.
+  const UNITS_PER_INCH: Record<string, number> = { in: 1, cm: 2.54, mm: 25.4 };
+  const qrSize = computed(() => {
+    const perIn = UNITS_PER_INCH[out.value.measure] ?? 1;
+    const contentWidth = out.value.card.width - (0.2 + 4 / 96) * perIn; // 2x 0.1in inset + 2x 2px border
+    return Math.max(0, Math.min(out.value.card.height * 0.9, contentWidth * 0.6));
+  });
 
   function calcPages() {
     // Set Out Dimensions
@@ -525,7 +610,7 @@
             v-model="displayProperties[prop.ref]"
             :type="prop.type ? prop.type : 'number'"
             :min="prop.min"
-            :max="prop.ref === 'skipLabels' ? Math.max(0, out.rows * out.cols - 1) : undefined"
+            :max="prop.max ?? (prop.ref === 'skipLabels' ? Math.max(0, out.rows * out.cols - 1) : undefined)"
             :step="prop.type === 'text' ? undefined : (prop.step ?? 0.01)"
             :disabled="DIMENSION_REFS.has(prop.ref) && selectedPresetId !== CUSTOM_PRESET_ID"
             :placeholder="$t('reports.label_generator.input_placeholder')"
@@ -601,10 +686,12 @@
       :key="pi"
       class="border-2 print:border-none"
       :style="{
-        paddingTop: `${out.page.pt}${out.measure}`,
-        paddingBottom: `${out.page.pb}${out.measure}`,
-        paddingLeft: `${out.page.pl}${out.measure}`,
-        paddingRight: `${out.page.pr}${out.measure}`,
+        // Sheet margins carry the print-offset calibration as ± padding
+        // deltas (see printOffset) — the sheet's outer size never changes.
+        paddingTop: `${out.page.pt + printOffset.y}${out.measure}`,
+        paddingBottom: `${out.page.pb - printOffset.y}${out.measure}`,
+        paddingLeft: `${out.page.pl + printOffset.x}${out.measure}`,
+        paddingRight: `${out.page.pr - printOffset.x}${out.measure}`,
         width: `${out.page.width}${out.measure}`,
         display: 'grid',
         gridTemplateColumns: `repeat(${out.cols}, ${out.card.width}${out.measure})`,
@@ -624,10 +711,13 @@
         breakBefore: pi > 0 ? 'page' : 'auto',
       }"
     >
+      <!-- overflow-hidden is a hard clip at the cell edge: an unbreakable
+           token (long no-space name) would otherwise force the text column to
+           min-content width and paint across the neighboring labels. -->
       <div
         v-for="(item, idx) in page.items"
         :key="idx"
-        class="flex break-inside-avoid border-2"
+        class="flex break-inside-avoid overflow-hidden border-2"
         :class="{
           'border-black': bordered && !!item,
           'border-transparent': !bordered || !item,
@@ -635,6 +725,8 @@
         :style="{
           height: `${out.card.height}${out.measure}`,
           width: `${out.card.width}${out.measure}`,
+          paddingLeft: LABEL_SAFE_INSET,
+          paddingRight: LABEL_SAFE_INSET,
         }"
       >
         <template v-if="item">
@@ -643,23 +735,28 @@
               :src="item.url"
               :alt="$t('reports.label_generator.qr_code_alt', { label: item.topLine })"
               :style="{
-                minWidth: `${out.card.height * 0.9}${out.measure}`,
-                width: `${out.card.height * 0.9}${out.measure}`,
-                height: `${out.card.height * 0.9}${out.measure}`,
+                minWidth: `${qrSize}${out.measure}`,
+                width: `${qrSize}${out.measure}`,
+                height: `${qrSize}${out.measure}`,
               }"
             />
           </div>
-          <div class="ml-2 flex flex-col justify-center">
-            <div class="font-bold">{{ item.topLine }}</div>
+          <!-- Every line is clamped so the stack can never exceed the label
+               height: unclamped wrapping pushed the bottom line (always the
+               location row) past the overflow guard and it printed chopped.
+               min-w-0 + break-words keep unbreakable tokens wrapping inside
+               the column instead of widening it past the cell. -->
+          <div class="ml-2 flex min-w-0 flex-col justify-center overflow-hidden">
+            <div class="line-clamp-2 break-words font-bold">{{ item.topLine }}</div>
             <div
               v-if="getHomeBoxLineText(item)"
-              class="text-xs"
+              class="truncate text-xs"
               :class="{ 'font-light italic': getHomeBoxLineText(item) !== labelBlankLine }"
             >
               {{ getHomeBoxLineText(item) }}
             </div>
-            <div class="overflow-hidden text-wrap text-xs">{{ item.nameLine }}</div>
-            <div v-if="printLocationRow" class="text-xs">{{ item.locationLine }}</div>
+            <div class="line-clamp-2 text-wrap break-words text-xs">{{ item.nameLine }}</div>
+            <div v-if="printLocationRow" class="truncate text-xs">{{ item.locationLine }}</div>
           </div>
         </template>
       </div>

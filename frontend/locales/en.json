@@ -994,6 +994,8 @@
                 "custom": "Custom dimensions"
             },
             "print_location_row": "Print Location Row",
+            "print_offset_x": "Print Offset X (calibration)",
+            "print_offset_y": "Print Offset Y (calibration)",
             "qr_code_example": "QR Code Example",
             "qr_code_alt": "QR code for {label}",
             "queue_count": "{count} labels queued for printing",

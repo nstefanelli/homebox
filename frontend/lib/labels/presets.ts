@@ -19,8 +19,11 @@ export interface LabelPreset {
 
 export const CUSTOM_PRESET_ID = "custom";
 
-// Geometry verified against Avery spec sheets 2026-07-04. Margins + gutters sum
-// exactly to the page: e.g. 5160: 2*0.1875 + 3*2.625 + 2*0.125 = 8.5.
+// Geometry verified against the official Avery template PDFs 2026-07-21
+// (22806 vertical corrected to template U-0431-01: 0.625in top/bottom margins,
+// 2 7/12in vertical pitch). Margins + gutters sum exactly to the page: e.g.
+// 5160: 2*0.1875 + 3*2.625 + 2*0.125 = 8.5; 22806 vertically:
+// 2*0.625 + 4*2 + 3*(7/12) = 11.
 export const LABEL_PRESETS: LabelPreset[] = [
   {
     id: "avery-5160",
@@ -76,12 +79,12 @@ export const LABEL_PRESETS: LabelPreset[] = [
     labelHeight: 2,
     pageWidth: 8.5,
     pageHeight: 11,
-    pagePaddingTop: 0.6,
-    pagePaddingBottom: 0.6,
+    pagePaddingTop: 0.625,
+    pagePaddingBottom: 0.625,
     pagePaddingLeft: 0.625,
     pagePaddingRight: 0.625,
     gutterX: 0.625,
-    gutterY: 0.6,
+    gutterY: 7 / 12, // 7/12 in — vertical pitch 2.58333in minus the 2in label
     measure: "in",
   },
 ];

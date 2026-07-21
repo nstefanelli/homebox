@@ -27,6 +27,50 @@ describe("label presets", () => {
       expect(p.labelHeight).toBeLessThanOrEqual(p.pageHeight);
     }
   });
+
+  // Pin the exact geometry to the official Avery template numbers so a silent
+  // edit (or a bad merge) can't reintroduce off-spec margins: labels only
+  // register on the physical die-cut sheet when every value matches Avery's.
+  test.each([
+    // [id, marginTB, marginLR, gutterX, gutterY, labelW, labelH]
+    ["avery-5160", 0.5, 0.1875, 0.125, 0, 2.625, 1],
+    ["avery-8160", 0.5, 0.1875, 0.125, 0, 2.625, 1],
+    ["avery-5163", 0.5, 0.15625, 0.1875, 0, 4, 2],
+    ["avery-22806", 0.625, 0.625, 0.625, 7 / 12, 2, 2], // U-0431-01: 7/12in vertical gutter
+  ])("%s matches the official Avery template", (id, marginTB, marginLR, gutterX, gutterY, labelW, labelH) => {
+    const p = LABEL_PRESETS.find(x => x.id === id) as LabelPreset;
+    expect(p.pagePaddingTop).toBe(marginTB);
+    expect(p.pagePaddingBottom).toBe(marginTB);
+    expect(p.pagePaddingLeft).toBe(marginLR);
+    expect(p.pagePaddingRight).toBe(marginLR);
+    expect(p.gutterX).toBe(gutterX);
+    expect(p.gutterY).toBe(gutterY);
+    expect(p.labelWidth).toBe(labelW);
+    expect(p.labelHeight).toBe(labelH);
+    expect(p.pageWidth).toBe(8.5);
+    expect(p.pageHeight).toBe(11);
+  });
+
+  test("every preset's margins, labels and gutters close exactly to the page", () => {
+    for (const p of LABEL_PRESETS) {
+      const grid = calculateGrid({
+        pageWidth: p.pageWidth,
+        pageHeight: p.pageHeight,
+        cardWidth: p.labelWidth,
+        cardHeight: p.labelHeight,
+        pagePaddingTop: p.pagePaddingTop,
+        pagePaddingBottom: p.pagePaddingBottom,
+        pagePaddingLeft: p.pagePaddingLeft,
+        pagePaddingRight: p.pagePaddingRight,
+        gutterX: p.gutterX,
+        gutterY: p.gutterY,
+      });
+      const width = p.pagePaddingLeft + p.pagePaddingRight + grid.cols * p.labelWidth + (grid.cols - 1) * p.gutterX;
+      const height = p.pagePaddingTop + p.pagePaddingBottom + grid.rows * p.labelHeight + (grid.rows - 1) * p.gutterY;
+      expect(Math.abs(width - p.pageWidth)).toBeLessThan(1e-9);
+      expect(Math.abs(height - p.pageHeight)).toBeLessThan(1e-9);
+    }
+  });
 });
 
 describe("calculateGrid", () => {
