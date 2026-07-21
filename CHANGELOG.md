@@ -2,6 +2,38 @@
 
 All notable changes to this fork are documented in this file. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Upstream is [sysadminsmedia/homebox](https://github.com/sysadminsmedia/homebox); this file only covers fork-specific work on top of v0.26.2.
 
+## v0.26.2-e2e.4 - 2026-07-21
+
+### Added
+
+- Label sheets can now be downloaded as a real PDF (Download PDF on the
+  label generator): exact point geometry (Letter = 612×792pt) generated
+  client-side with pdf-lib from the same preset/grid/fit/offset state as
+  the print view. This bypasses the browser print engine entirely —
+  WebKit/Safari prints CSS inches 6.7% oversize (legacy 1.25 shrink
+  factor) and can never print the HTML sheet at true scale — and enables
+  printing from macOS Preview and iOS/AirPrint at 100% / Actual Size.
+  Non-Chromium browsers see a hint steering them to the PDF. Text uses a
+  bundled Noto Sans subset (Latin/Greek/Cyrillic; CJK/Thai/Arabic names
+  render as placeholder glyphs — known limitation).
+
+- Search now covers locations and containers, not just items: a kind
+  filter (All / Items / Containers / Locations) on the search page,
+  kind badges/icons on results, and kind-aware navigation. The
+  `/v1/entities` endpoint gains an opt-in `includeAllKinds` param — its
+  items-only default is unchanged for all existing callers.
+
+### Fixed
+
+- Seeded default entity types ("Item", "Location") displayed their raw
+  i18n keys (`global.item`, `global.location`) in the type dropdown,
+  create-modal labels/toasts, and the entity-types page — a regression
+  from the warning-cleanup in 8174c1ac. Names that are known translation
+  keys are translated again; user-created literal names pass through
+  untouched.
+- Items without an asset ID no longer share a single colliding QR
+  payload (`/a/000-000`); their labels now encode the entity URL.
+
 ## v0.26.2-e2e.3 - 2026-07-21
 
 ### Changed
