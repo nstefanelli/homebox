@@ -2,6 +2,30 @@
 
 All notable changes to this fork are documented in this file. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Upstream is [sysadminsmedia/homebox](https://github.com/sysadminsmedia/homebox); this file only covers fork-specific work on top of v0.26.2.
 
+## v0.26.2-e2e.5 - 2026-07-21
+
+### Added
+
+- Quick add on container/location pages: an inline, keyboard-first entry
+  row — type a name, press Enter, the item is created in place with
+  defaults (parent, default type, auto asset ID). A leading `3x ` prefix
+  sets quantity; pasting a multi-line list creates items sequentially
+  with per-line failure recovery; created items are undoable and a
+  "Print labels (N)" affordance enqueues the session's additions.
+- Contents manifests: a List mode on the same quick-add row appends
+  free-text lines to a new `contents` field on containers/locations —
+  for totes whose contents don't warrant real item records. Rendered
+  line-per-line in a Contents card, editable on the location edit page,
+  and included in search (a manifest line finds its tote). Additive
+  nullable migration (20260721000000, both dialects).
+- Import readiness now treats a seeded location carrying a contents
+  manifest as user data (blocks import wipe).
+
+### Fixed
+
+- Description text preserves entered line breaks when displayed
+  (markdown soft-break rendering opt-in on description surfaces).
+
 ## v0.26.2-e2e.4 - 2026-07-21
 
 ### Added
