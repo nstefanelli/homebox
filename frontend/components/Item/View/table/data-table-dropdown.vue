@@ -17,6 +17,7 @@
   import { DialogID } from "~/components/ui/dialog-provider/utils";
   import { formatValueAsCsvField } from "~/lib/utils";
   import { useLabelPrintQueue } from "~~/stores/labels";
+  import { itemQrPayload } from "~~/lib/labels/qr";
 
   const { t } = useI18n();
   const api = useUserApi();
@@ -144,7 +145,9 @@
         name: e.name,
         parentPath: e.parent?.name ?? "",
         assetId: e.assetId,
-        url: `${window.location.origin}/a/${e.assetId}`,
+        // itemQrPayload deep-links /item/{id} when the item has no asset id —
+        // `/a/` with an empty id is a dead link.
+        url: itemQrPayload(window.location.origin, e),
       }))
     );
     resetSelection();

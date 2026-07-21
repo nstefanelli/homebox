@@ -4,6 +4,7 @@
   import { route } from "../../lib/api/base";
   import { calculateGrid } from "../../lib/labels/grid";
   import { createCanvasMeasurer, fitFontSize } from "../../lib/labels/fit";
+  import { fmtAssetID, rangeQrPayload } from "../../lib/labels/qr";
   import type { AcceptableValue } from "reka-ui";
   import { LABEL_PRESETS, CUSTOM_PRESET_ID } from "~~/lib/labels/presets";
   import { useLabelPrintQueue } from "~~/stores/labels";
@@ -248,47 +249,25 @@
     locationLine: string;
   };
 
-  function fmtAssetID(aid: number | string) {
-    aid = aid.toString();
-
-    let aidStr = aid.toString().padStart(6, "0");
-    aidStr = aidStr.slice(0, 3) + "-" + aidStr.slice(3);
-    return aidStr;
-  }
-
-  function getQRCodeUrl(assetID: string): string {
-    let origin = displayProperties.baseURL.trim();
-
-    // remove trailing slash
-    if (origin.endsWith("/")) {
-      origin = origin.slice(0, -1);
-    }
-
-    const data = `${origin}/a/${assetID}`;
-
-    return route(`/qrcode`, { data: encodeURIComponent(data) });
-  }
-
-  // Generalized QR helper for the print queue: entries already carry an
-  // absolute deep-link URL, so no origin/`/a/` composition is needed.
+  // QR endpoint wrapper: payloads are absolute deep-link URLs — the queue's
+  // entries carry their own, range labels compose theirs via rangeQrPayload.
   function getQRCodeUrlFor(payload: string): string {
     return route("/qrcode", { data: encodeURIComponent(payload) });
   }
 
   function getItem(
     n: number,
-    item: { assetId: string; name: string; parent?: { name: string } | null } | null
+    item: { id: string; assetId: string; name: string; parent?: { name: string } | null } | null
   ): LabelData {
-    // format n into - seperated string with leading zeros
-    const assetID = fmtAssetID(item?.assetId ?? n + 1);
-
     return {
-      url: getQRCodeUrl(assetID),
+      // rangeQrPayload deep-links items whose assetId is "" to /item/{id} —
+      // the asset-URL form would collapse every such item onto /a/000-000.
+      url: getQRCodeUrlFor(rangeQrPayload(displayProperties.baseURL, n, item)),
       // The API's assetId arrives pre-formatted ("000-042") and "" when the
       // entity has none; "" drops the ID row (never print 000-000). Indices
       // past the inventory keep the range-derived ID: those are the blank,
       // pre-printable labels and the ID is their whole content.
-      assetLine: item ? item.assetId : assetID,
+      assetLine: item ? item.assetId : fmtAssetID(n + 1),
       nameLine: item?.name ?? labelBlankLine,
       locationLine: item?.parent?.name ?? labelBlankLine,
     };

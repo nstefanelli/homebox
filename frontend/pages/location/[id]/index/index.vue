@@ -5,6 +5,7 @@
   import { filterZeroValues } from "~~/components/global/DetailsSection/types";
   import type { ItemAttachment } from "~~/lib/api/types/data-contracts";
   import { useLabelPrintQueue, type PrintQueueEntry } from "~~/stores/labels";
+  import { itemQrPayload } from "~~/lib/labels/qr";
   import { resolveEntityIcon } from "~~/lib/icons";
   import MdiPackageVariantClosedRemove from "~icons/mdi/package-variant-closed-remove";
   import MdiPlus from "~icons/mdi/plus";
@@ -375,7 +376,9 @@
             name: i.name,
             parentPath: location.value?.name ?? "",
             assetId: i.assetId,
-            url: `${window.location.origin}/a/${i.assetId}`,
+            // itemQrPayload deep-links /item/{id} when the item has no asset
+            // id — `/a/` with an empty id is a dead link.
+            url: itemQrPayload(window.location.origin, i),
           }))
         );
       }
