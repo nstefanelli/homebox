@@ -333,6 +333,96 @@ func TestEntityRepository_PaginationReturnsFullFilteredCount(t *testing.T) {
 	assert.Equal(t, 3, assetPage.Total)
 }
 
+func TestEntityRepository_QueryByGroup_IncludeAllKinds(t *testing.T) {
+	ctx := context.Background()
+	prefix := "all-kinds-" + uuid.NewString()
+
+	itemType := useItemEntityType(t)
+
+	locationType, err := tRepos.EntityTypes.Create(ctx, tGroup.ID, EntityTypeCreate{
+		Name:       prefix + "-loc-type",
+		IsLocation: true,
+	})
+	require.NoError(t, err)
+	containerType, err := tRepos.EntityTypes.Create(ctx, tGroup.ID, EntityTypeCreate{
+		Name:        prefix + "-cont-type",
+		IsLocation:  true,
+		IsContainer: true,
+	})
+	require.NoError(t, err)
+
+	create := func(suffix string, typeID uuid.UUID) EntityOut {
+		t.Helper()
+		out, createErr := tRepos.Entities.Create(ctx, tGroup.ID, EntityCreate{
+			Name:         prefix + "-" + suffix,
+			EntityTypeID: typeID,
+		})
+		require.NoError(t, createErr)
+		return out
+	}
+
+	item := create("item", itemType.ID)
+	location := create("location", locationType.ID)
+	container := create("container", containerType.ID)
+
+	t.Cleanup(func() {
+		for _, id := range []uuid.UUID{item.ID, location.ID, container.ID} {
+			_ = tRepos.Entities.Delete(context.Background(), id)
+		}
+		_ = tRepos.EntityTypes.Delete(context.Background(), tGroup.ID, containerType.ID)
+		_ = tRepos.EntityTypes.Delete(context.Background(), tGroup.ID, locationType.ID)
+	})
+
+	names := func(result PaginationResult[EntitySummary]) []string {
+		return lo.Map(result.Items, func(e EntitySummary, _ int) string { return e.Name })
+	}
+
+	// Default (no kind flags) stays items-only for backward compatibility.
+	result, err := tRepos.Entities.QueryByGroup(ctx, tGroup.ID, EntityQuery{Page: -1, PageSize: -1, Search: prefix})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{item.Name}, names(result))
+
+	// IncludeAllKinds opts into every entity kind.
+	result, err = tRepos.Entities.QueryByGroup(ctx, tGroup.ID, EntityQuery{Page: -1, PageSize: -1, Search: prefix, IncludeAllKinds: true})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{item.Name, location.Name, container.Name}, names(result))
+	assert.Equal(t, 3, result.Total)
+
+	// IncludeAllKinds composes with IsContainer to narrow to containers only.
+	isTrue := true
+	result, err = tRepos.Entities.QueryByGroup(ctx, tGroup.ID, EntityQuery{
+		Page:            -1,
+		PageSize:        -1,
+		Search:          prefix,
+		IncludeAllKinds: true,
+		IsContainer:     &isTrue,
+	})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{container.Name}, names(result))
+
+	// An explicit IsLocation filter takes precedence over IncludeAllKinds.
+	result, err = tRepos.Entities.QueryByGroup(ctx, tGroup.ID, EntityQuery{
+		Page:            -1,
+		PageSize:        -1,
+		Search:          prefix,
+		IncludeAllKinds: true,
+		IsLocation:      &isTrue,
+	})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{location.Name, container.Name}, names(result))
+
+	isFalse := false
+	result, err = tRepos.Entities.QueryByGroup(ctx, tGroup.ID, EntityQuery{
+		Page:            -1,
+		PageSize:        -1,
+		Search:          prefix,
+		IncludeAllKinds: true,
+		IsLocation:      &isFalse,
+	})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{item.Name}, names(result))
+}
+
 func TestEntityRepository_Create_RejectsNonFiniteQuantity(t *testing.T) {
 	containerET := useContainerEntityType(t)
 	itemET := useItemEntityType(t)

@@ -27,6 +27,12 @@ export type ItemsQuery = {
   onlyWithPhoto?: boolean;
   q?: string;
   fields?: string[];
+  // Entity-kind filters. `includeAllKinds` opts into items + containers +
+  // locations; `isLocation`/`isContainer` narrow to specific kinds and take
+  // precedence server-side. Omitting all of them keeps the items-only default.
+  includeAllKinds?: boolean;
+  isLocation?: boolean;
+  isContainer?: boolean;
 };
 
 export type LocationsQuery = {

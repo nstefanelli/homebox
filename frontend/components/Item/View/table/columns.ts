@@ -9,6 +9,7 @@ import type { EntitySummary } from "~/lib/api/types/data-contracts";
 import Currency from "~/components/global/Currency.vue";
 import DateTime from "~/components/global/DateTime.vue";
 import { cn } from "~/lib/utils";
+import { resolveEntityIcon } from "~/lib/icons";
 
 /**
  * Create columns with i18n support.
@@ -89,7 +90,21 @@ export function makeColumns({
           },
           () => sortable(column, "items.name")
         ),
-      cell: ({ row }) => h("span", { class: "text-sm font-medium" }, row.getValue("name")),
+      cell: ({ row }) => {
+        const item = row.original as EntitySummary;
+        const name = h("span", { class: "text-sm font-medium" }, row.getValue("name"));
+        if (!item.entityType?.isLocation) {
+          return name;
+        }
+        // Locations/containers carry their entity icon so kind is visible in mixed results.
+        const icon = resolveEntityIcon({
+          icon: item.icon,
+          typeIcon: item.entityType?.icon,
+          isContainer: item.entityType?.isContainer,
+          isLocation: true,
+        });
+        return h("span", { class: "inline-flex items-center gap-1.5" }, [h(icon, { class: "size-4 shrink-0" }), name]);
+      },
     },
     {
       id: "quantity",

@@ -75,6 +75,12 @@ type (
 		Fields           []FieldQuery `json:"fields"`
 		OrderBy          string       `json:"orderBy"`
 
+		// IncludeAllKinds is an explicit opt-in that disables the default
+		// items-only kind filter when IsLocation is unset, so results span
+		// items, containers, and locations. An explicit IsLocation (or
+		// IsContainer) filter still takes precedence.
+		IncludeAllKinds bool `json:"includeAllKinds"`
+
 		// IncludeInventoryValue asks QueryByGroup to calculate the value of all
 		// matching inventory independently of pagination. It is an internal
 		// response concern, not a client-controlled filter.
@@ -762,6 +768,7 @@ func entityQuerySpanAttrs(gid uuid.UUID, q EntityQuery) []attribute.KeyValue {
 		attribute.Bool("query.is_location.value", isLocValue),
 		attribute.Bool("query.is_container.set", isContSet),
 		attribute.Bool("query.is_container.value", isContValue),
+		attribute.Bool("query.include_all_kinds", q.IncludeAllKinds),
 		attribute.Bool("query.asset_id.set", !q.AssetID.Nil()),
 		attribute.Bool("query.include_inventory_value", q.IncludeInventoryValue),
 	}
@@ -806,13 +813,18 @@ func inventoryValueFromQuery(ctx context.Context, gid uuid.UUID, qb *ent.EntityQ
 }
 
 func applyEntityTypeQueryFilters(qb *ent.EntityQuery, gid uuid.UUID, q EntityQuery) *ent.EntityQuery {
-	// Default (nil) remains items-only for backward compatibility.
-	if q.IsLocation != nil && *q.IsLocation {
+	switch {
+	case q.IsLocation != nil && *q.IsLocation:
 		qb = qb.Where(entity.HasEntityTypeWith(
 			entitytype.IsLocation(true),
 			entitytype.HasGroupWith(group.ID(gid)),
 		))
-	} else {
+	case q.IsLocation == nil && q.IncludeAllKinds:
+		// Explicit opt-in: no kind predicate, results span items,
+		// containers, and locations.
+	default:
+		// Default (nil, or explicit isLocation=false) remains items-only
+		// for backward compatibility.
 		qb = qb.Where(
 			entity.Or(
 				entity.Not(entity.HasEntityType()),

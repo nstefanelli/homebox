@@ -88,8 +88,25 @@
   const onlyWithoutPhoto = useOptionalRouteQuery("onlyWithoutPhoto", false);
   const onlyWithPhoto = useOptionalRouteQuery("onlyWithPhoto", false);
   const orderBy = useOptionalRouteQuery("orderBy", "name");
+  const entityKind = useOptionalRouteQuery("kind", "all");
   const qLoc = useOptionalRouteQuery("loc", []);
   const qTag = useOptionalRouteQuery("tag", []);
+
+  // Maps the selected entity kind onto the API's kind filters. "items" omits
+  // every kind param, which is the endpoint's items-only default.
+  const entityKindQuery = computed(() => {
+    switch (entityKind.value) {
+      case "items":
+        return {};
+      case "locations":
+        return { isLocation: true, isContainer: false };
+      case "containers":
+        return { isLocation: true, isContainer: true };
+      case "all":
+      default:
+        return { includeAllKinds: true };
+    }
+  });
 
   const preferences = useViewPreferences();
   const pageSize = computed(() => preferences.value.itemsPerTablePage);
@@ -231,6 +248,12 @@
     }
   });
 
+  watch(entityKind, (newV, oldV) => {
+    if (newV !== oldV) {
+      search();
+    }
+  });
+
   watch(
     () => useRoute().query.q,
     (newV, oldV) => {
@@ -278,6 +301,7 @@
       onlyWithoutPhoto: onlyWithoutPhoto.value,
       onlyWithPhoto: onlyWithPhoto.value,
       orderBy: orderBy.value,
+      kind: entityKind.value,
       page: page.value,
       q: query.value,
       loc: locIDs.value,
@@ -319,6 +343,7 @@
       pageSize: pageSize.value,
       orderBy: orderBy.value,
       fields,
+      ...entityKindQuery.value,
     });
 
     function resetItems() {
@@ -404,6 +429,17 @@
       </div>
 
       <div class="flex w-full flex-wrap gap-2 py-2 md:flex-nowrap">
+        <Select v-model="entityKind">
+          <SelectTrigger class="h-9 w-auto gap-1 px-3 text-sm font-medium" :aria-label="$t('items.entity_kind')">
+            <SelectValue :placeholder="$t('items.entity_kind')" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all"> {{ $t("items.kind_all") }} </SelectItem>
+            <SelectItem value="items"> {{ $t("global.items") }} </SelectItem>
+            <SelectItem value="containers"> {{ $t("items.kind_containers") }} </SelectItem>
+            <SelectItem value="locations"> {{ $t("global.locations") }} </SelectItem>
+          </SelectContent>
+        </Select>
         <SearchFilter v-model="selectedLocations" :label="$t('global.locations')" :options="locationFlatTree" />
         <SearchFilter v-model="selectedTags" :label="$t('global.tags')" :options="tags" />
         <Popover>

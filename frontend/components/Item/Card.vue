@@ -8,8 +8,14 @@
         @update:model-value="tableRow.toggleSelected()"
       />
     </div>
-    <NuxtLink :to="`/item/${item.id}`">
+    <NuxtLink :to="detailsLink">
       <div class="relative h-[200px]">
+        <div v-if="isLocationKind" class="absolute right-1 top-1 z-10">
+          <Badge class="gap-1 bg-secondary text-secondary-foreground">
+            <component :is="kindIcon" class="size-4" />
+            {{ item.entityType?.isContainer ? $t("items.kind_container") : $t("global.location") }}
+          </Badge>
+        </div>
         <img
           v-if="imageUrl && objectContain"
           class="absolute h-[200px] w-full object-cover blur-md"
@@ -78,6 +84,7 @@
 
 <script setup lang="ts">
   import type { EntityOut, EntitySummary } from "~~/lib/api/types/data-contracts";
+  import { resolveEntityIcon } from "~~/lib/icons";
   import MdiShieldCheck from "~icons/mdi/shield-check";
   import MdiArchive from "~icons/mdi/archive";
   import { Badge } from "@/components/ui/badge";
@@ -125,6 +132,19 @@
   });
 
   const objectContain = computed(() => imageUrl.value !== "/no-image.jpg" && !preferences.value.legacyImageFit);
+
+  // Locations and containers navigate to the location page; everything else is an item.
+  const isLocationKind = computed(() => !!props.item.entityType?.isLocation);
+  const detailsLink = computed(() => `/${isLocationKind.value ? "location" : "item"}/${props.item.id}`);
+
+  const kindIcon = computed(() =>
+    resolveEntityIcon({
+      icon: props.item.icon,
+      typeIcon: props.item.entityType?.icon,
+      isContainer: props.item.entityType?.isContainer,
+      isLocation: true,
+    })
+  );
 
   const locationString = computed(
     () => props.locationFlatTree.find(l => l.id === props.item.parent?.id)?.treeString || props.item.parent?.name
