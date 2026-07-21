@@ -987,7 +987,11 @@
         const { data: created, error } = await api.templates.batchCreate(templateData.value.id, {
           count: containerCount,
           namePrefix: form.name,
-          startNumber: 0, // 0 = backend infers next number from existing "<prefix> NN" names
+          // The backend names each created entity "<prefix> #<its own
+          // formatted asset id>"; startNumber/inference from existing
+          // "<prefix> NN" names is only the fallback when an entity gets no
+          // asset id (auto-increment disabled). 0 = infer in that fallback.
+          startNumber: 0,
           parentId: (form.location?.id || null) as string,
           entityTypeId: selectedEntityType.value?.id || "",
           tagIds: form.tags,
@@ -1030,12 +1034,15 @@
       }
 
       // Container, no template, count > 1 (e.g. a UPC-scanned tote where the
-      // user just wants N more of the same bin): sequential numbered creates,
-      // mirroring ItemChangeDetails' sequential-PATCH pattern (avoids sqlite
-      // write contention from firing them all concurrently). Numbering
-      // restarts at 01 per prefix since this client-side path has no
-      // server-side inference -- the template batch path above remains the
-      // numbering-aware one.
+      // user just wants N more of the same bin): sequential creates, mirroring
+      // ItemChangeDetails' sequential-PATCH pattern (avoids sqlite write
+      // contention from firing them all concurrently). Same naming rule as
+      // the backend's template batch path: each container ends up named
+      // "<prefix> #<its own formatted asset id>". The asset id is assigned
+      // server-side at create, so create carries a provisional "<prefix> NN"
+      // and a follow-up rename applies the final name; if an entity gets no
+      // asset id (auto-increment disabled) or the rename fails, the
+      // provisional sequence name stays -- still unique within the batch.
       if (selectedEntityType.value?.isContainer && !templateData.value && containerCount > 1) {
         const prefix = form.name;
         const created: EntityOut[] = [];
@@ -1057,7 +1064,7 @@
             toast.error(t("components.entity.create_modal.batch_failed"));
             break;
           }
-          created.push(createdOne);
+          created.push(await renameToAssetId(createdOne, prefix));
         }
 
         if (created.length > 0) {
@@ -1264,6 +1271,7 @@
                 kind: "container" as const,
                 name: e.name,
                 parentPath: form.location?.name ?? "",
+                assetId: e.assetId,
                 url: `${window.location.origin}/location/${e.id}`,
               }))
             );
@@ -1272,6 +1280,31 @@
         },
       }
     );
+  }
+
+  /**
+   * Applies the batch naming rule to one just-created container: renames it
+   * to "<prefix> #<its own formatted asset id>" (same rule the backend uses
+   * for template batch-create). The asset id only exists after the create
+   * response, hence rename-after-create. Returns the renamed entity so
+   * callers toast/enqueue the persisted name; returns the entity unchanged
+   * when it has no asset id or the rename fails -- the provisional sequence
+   * name is the sanctioned fallback, not an error state.
+   */
+  async function renameToAssetId(entity: EntityOut, prefix: string): Promise<EntityOut> {
+    if (!entity.assetId) return entity;
+    try {
+      const { data: renamed, error } = await api.items.update(entity.id, {
+        ...entity,
+        name: `${prefix} #${entity.assetId}`,
+        parentId: entity.parent?.id ?? null,
+        entityTypeId: entity.entityType?.id,
+        tagIds: entity.tags.map(tag => tag.id),
+      });
+      return error ? entity : renamed;
+    } catch {
+      return entity;
+    }
   }
 
   /**

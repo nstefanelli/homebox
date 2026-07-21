@@ -3,6 +3,7 @@
   import DOMPurify from "dompurify";
   import { route } from "../../lib/api/base";
   import { calculateGrid } from "../../lib/labels/grid";
+  import { createCanvasMeasurer, fitFontSize } from "../../lib/labels/fit";
   import type { AcceptableValue } from "reka-ui";
   import { LABEL_PRESETS, CUSTOM_PRESET_ID } from "~~/lib/labels/presets";
   import { useLabelPrintQueue } from "~~/stores/labels";
@@ -239,9 +240,9 @@
 
   type LabelData = {
     url: string;
-    /** asset id (items) or name (locations/containers) */
-    topLine: string;
-    /** item name; empty for locations/containers */
+    /** formatted asset id, bold top row on every kind; "" omits the row */
+    assetLine: string;
+    /** entity name (auto-fit row); takes the bold slot when assetLine is "" */
     nameLine: string;
     /** existing location row / parentPath */
     locationLine: string;
@@ -283,7 +284,11 @@
 
     return {
       url: getQRCodeUrl(assetID),
-      topLine: item?.assetId ?? assetID,
+      // The API's assetId arrives pre-formatted ("000-042") and "" when the
+      // entity has none; "" drops the ID row (never print 000-000). Indices
+      // past the inventory keep the range-derived ID: those are the blank,
+      // pre-printable labels and the ID is their whole content.
+      assetLine: item ? item.assetId : assetID,
       nameLine: item?.name ?? labelBlankLine,
       locationLine: item?.parent?.name ?? labelBlankLine,
     };
@@ -328,8 +333,10 @@
   const queueLabels = computed<LabelData[]>(() =>
     printQueue.entries.map(e => ({
       url: getQRCodeUrlFor(e.url),
-      topLine: e.kind === "item" ? (e.assetId ?? e.name) : e.name,
-      nameLine: e.kind === "item" ? e.name : "",
+      // Uniform identity layout for every kind: formatted asset id bold on
+      // top ("" omits the row), name on the auto-fit title row below.
+      assetLine: e.assetId ?? "",
+      nameLine: e.name,
       locationLine: e.parentPath ?? "",
     }))
   );
@@ -438,6 +445,55 @@
     const perIn = UNITS_PER_INCH[out.value.measure] ?? 1;
     const contentWidth = out.value.card.width - (0.2 + 4 / 96) * perIn; // 2x 0.1in inset + 2x 2px border
     return Math.max(0, Math.min(out.value.card.height * 0.9, contentWidth * 0.6));
+  });
+
+  // Title auto-fit: the name row steps its font size down (floor 65% of base)
+  // before the line-clamp ellipsis engages, so long names print whole. Only
+  // the inner text scales — the cell's border-box geometry never changes —
+  // and the asset-ID row keeps its size (it is the at-a-glance identifier).
+  const NAME_FIT_FLOOR_RATIO = 0.65;
+  // text-xs, the name row's CSS size. When the name occupies the bold slot
+  // (no asset id) it inherits the 16px root size and bold weight instead.
+  const NAME_BASE_PX = 12;
+  const TOP_BASE_PX = 16;
+  // Measure with the family the labels render in so canvas metrics match
+  // layout metrics. One canvas per weight, reused across every label.
+  const labelFontFamily = getComputedStyle(document.body).fontFamily || "sans-serif";
+  const measureRegular = createCanvasMeasurer(400, labelFontFamily);
+  const measureBold = createCanvasMeasurer(700, labelFontFamily);
+
+  // Width of the text column in CSS px (96/in): label width minus the QR,
+  // both safe insets, the 2px borders, and the ml-2 gutter. Mirrors the
+  // content-box math in qrSize above.
+  const textColumnPx = computed(() => {
+    const perIn = UNITS_PER_INCH[out.value.measure] ?? 1;
+    const widthIn = (out.value.card.width - qrSize.value) / perIn - 0.2;
+    return Math.max(0, widthIn * 96 - 4 - 8);
+  });
+
+  // One measurement pass per generated label set, keyed by object identity
+  // (calcPages rebuilds the LabelData objects, invalidating stale entries).
+  // Computed ahead of printing on the same rendered DOM the print pipeline
+  // rasterizes, so the printed sizes are exactly the previewed ones.
+  const nameFontSizes = computed(() => {
+    const sizes = new Map<LabelData, number>();
+    for (const page of pages.value) {
+      for (const item of page.items) {
+        if (!item || sizes.has(item)) continue;
+        const boldSlot = !item.assetLine;
+        sizes.set(
+          item,
+          fitFontSize(
+            item.nameLine,
+            textColumnPx.value,
+            boldSlot ? TOP_BASE_PX : NAME_BASE_PX,
+            boldSlot ? measureBold : measureRegular,
+            { floorRatio: NAME_FIT_FLOOR_RATIO }
+          )
+        );
+      }
+    }
+    return sizes;
   });
 
   function calcPages() {
@@ -733,7 +789,7 @@
           <div class="flex items-center">
             <img
               :src="item.url"
-              :alt="$t('reports.label_generator.qr_code_alt', { label: item.topLine })"
+              :alt="$t('reports.label_generator.qr_code_alt', { label: item.assetLine || item.nameLine })"
               :style="{
                 minWidth: `${qrSize}${out.measure}`,
                 width: `${qrSize}${out.measure}`,
@@ -747,7 +803,12 @@
                min-w-0 + break-words keep unbreakable tokens wrapping inside
                the column instead of widening it past the cell. -->
           <div class="ml-2 flex min-w-0 flex-col justify-center overflow-hidden">
-            <div class="line-clamp-2 break-words font-bold">{{ item.topLine }}</div>
+            <!-- Identity rows: formatted asset ID bold on every kind; when an
+                 entity has none the row is omitted (never 000-000) and the
+                 name takes the bold slot. The name row's inline font-size is
+                 the auto-fit result (nameFontSizes) — its line-clamp stays as
+                 the below-floor ellipsis backstop. -->
+            <div v-if="item.assetLine" class="line-clamp-2 break-words font-bold">{{ item.assetLine }}</div>
             <div
               v-if="getHomeBoxLineText(item)"
               class="truncate text-xs"
@@ -755,7 +816,13 @@
             >
               {{ getHomeBoxLineText(item) }}
             </div>
-            <div class="line-clamp-2 text-wrap break-words text-xs">{{ item.nameLine }}</div>
+            <div
+              class="line-clamp-2 text-wrap break-words"
+              :class="item.assetLine ? 'text-xs' : 'font-bold'"
+              :style="{ fontSize: `${nameFontSizes.get(item) ?? (item.assetLine ? NAME_BASE_PX : TOP_BASE_PX)}px` }"
+            >
+              {{ item.nameLine }}
+            </div>
             <div v-if="printLocationRow" class="truncate text-xs">{{ item.locationLine }}</div>
           </div>
         </template>

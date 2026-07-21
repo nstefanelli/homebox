@@ -33,8 +33,28 @@
   const printQueue = useLabelPrintQueue();
   onUnmounted(() => selection.clear());
 
-  function printSelected() {
-    printQueue.set(Object.values(selection.selected));
+  const printingSelected = ref(false);
+
+  async function printSelected() {
+    if (printingSelected.value) return;
+    printingSelected.value = true;
+    let entries = Object.values(selection.selected);
+    try {
+      // The tree endpoint carries no assetId, so join it in from the
+      // entities list (one request, covers locations and containers) before
+      // printing. On failure the entries go through without an assetId and
+      // the label falls back to its no-ID layout — printing still works.
+      const { data, error } = await api.items.getLocations({ filterChildren: false });
+      if (!error) {
+        const assetIdById = new Map(data.map(l => [l.id, l.assetId]));
+        entries = entries.map(e => ({ ...e, assetId: assetIdById.get(e.id) || e.assetId }));
+      }
+    } catch {
+      // Same fallback as the error branch above.
+    } finally {
+      printingSelected.value = false;
+    }
+    printQueue.set(entries);
     selection.clear();
     navigateTo("/reports/label-generator");
   }

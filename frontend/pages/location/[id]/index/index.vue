@@ -362,6 +362,7 @@
           kind: "container" as const,
           name: c.name,
           parentPath: location.value?.name ?? "",
+          assetId: c.assetId,
           url: `${window.location.origin}/location/${c.id}`,
         }))
       );
