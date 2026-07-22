@@ -2,6 +2,32 @@
 
 All notable changes to this fork are documented in this file. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Upstream is [sysadminsmedia/homebox](https://github.com/sysadminsmedia/homebox); this file only covers fork-specific work on top of v0.26.2.
 
+## v0.26.2-e2e.6 - 2026-07-21
+
+### Added
+
+- Product lookup by keyword: a lookup button on the create dialog
+  searches upcitemdb by name and prefills name/manufacturer/model/
+  description plus the product photo (fetched server-side through the
+  same hardened image pipeline as barcode lookup). Zero results — or any
+  time the catalog misses — a one-click "Ask AI instead" has the
+  configured LLM identify the product, badged as an AI guess and
+  instructed never to invent model numbers. Provider results are capped
+  at 10 with provenance labels; empty results (204) are distinguished
+  from provider failure (502).
+- Enrich existing items from lookup: an "Enrich from lookup" action on
+  the item page runs the same search seeded with the item's name, then a
+  per-field merge preview — current vs proposed with a checkbox per
+  field, blanks pre-checked, overwrites always explicit opt-in; the
+  product photo becomes primary only when the item has no photos.
+
+### Fixed
+
+- Product prefill no longer aborts half-applied when a provider image
+  URL exists but the hardened image fetch rejected it (empty
+  imageBase64) — latent in the barcode lane, reachable via keyword
+  results.
+
 ## v0.26.2-e2e.5 - 2026-07-21
 
 ### Added
