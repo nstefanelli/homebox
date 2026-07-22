@@ -2,6 +2,28 @@
 
 All notable changes to this fork are documented in this file. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Upstream is [sysadminsmedia/homebox](https://github.com/sysadminsmedia/homebox); this file only covers fork-specific work on top of v0.26.2.
 
+## v0.26.2-e2e.7 - 2026-07-22
+
+### Added
+
+- Keyword product search now chains Open Products Facts → Open Food
+  Facts → Open Beauty Facts after upcitemdb (free, keyless, ODbL —
+  attribution in docs). When upcitemdb is rate-limited the chain falls
+  through to the free providers instead of failing the search; the
+  rate-limited error only surfaces when every provider failed. Results
+  aggregate across providers up to the cap with earlier (richer)
+  providers winning duplicates.
+- Lookup dialog shows a specific "product database is rate-limited —
+  wait a minute and retry" message for provider 429s instead of a
+  generic failure, and the enrich merge dialog's empty state now lists
+  per-field reasons (nothing proposed / identical / photo unavailable
+  this fetch) instead of a bare "nothing new to apply".
+
+### Fixed
+
+- Enrich merge dialog no longer shows "nothing new to apply" on the
+  first pick after a page load (plan is now computed on mount).
+
 ## v0.26.2-e2e.6 - 2026-07-21
 
 ### Added

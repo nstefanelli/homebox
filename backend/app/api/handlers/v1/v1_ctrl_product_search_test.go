@@ -335,6 +335,28 @@ func withUPCItemDBServer(t *testing.T, handler http.HandlerFunc) {
 	})
 }
 
+// withOpenFactsSearchServer points every Open*Facts keyword search at a mock
+// server for the duration of one test (all three sources share it). Tests
+// using it must not run in parallel.
+func withOpenFactsSearchServer(t *testing.T, handler http.HandlerFunc) {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	orig := openFactsSearchBaseURLOverride
+	openFactsSearchBaseURLOverride = srv.URL
+	t.Cleanup(func() {
+		openFactsSearchBaseURLOverride = orig
+		srv.Close()
+	})
+}
+
+// respondHTTPStatus is a mock provider handler that always answers with the
+// given HTTP status and an empty body.
+func respondHTTPStatus(status int) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(status)
+	}
+}
+
 // testKeywordSearchController builds a controller whose Integrations service
 // resolves an all-defaults barcode config (fakeIntegrationsStore returns no
 // stored group settings; env fallback is empty).
@@ -367,6 +389,20 @@ func upcitemdbSearchItemsJSON(n int) string {
 	return `{"code":"OK","total":` + fmt.Sprint(n) + `,"offset":0,"items":[` + strings.Join(items, ",") + `]}`
 }
 
+func openFactsSearchProductsJSON(n int) string {
+	products := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		products = append(products, fmt.Sprintf(`{
+			"product_name": "OFF Product %d",
+			"brands": "OFF Brand %d",
+			"categories": "Category %d",
+			"quantity": "%d ml",
+			"image_front_url": ""
+		}`, i, i, i, i))
+	}
+	return `{"products":[` + strings.Join(products, ",") + `]}`
+}
+
 func TestHandleProductSearchFromKeyword_Success(t *testing.T) {
 	var gotPath, gotKeyword string
 	withUPCItemDBServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -376,6 +412,11 @@ func TestHandleProductSearchFromKeyword_Success(t *testing.T) {
 			{"title":"DeWalt 20V Drill","brand":"DeWalt","model":"DCD771","description":"Cordless drill.","images":["https://127.0.0.1/img.jpg"]},
 			{"title":"DeWalt Impact Driver","brand":"DeWalt","model":"DCF885","description":"Impact driver.","images":[]}
 		]}`))
+	})
+	// upcitemdb returns fewer than the cap, so the chain continues into the
+	// Open*Facts providers; they contribute nothing here.
+	withOpenFactsSearchServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"products":[]}`))
 	})
 	ctrl := testKeywordSearchController()
 
@@ -412,6 +453,11 @@ func TestHandleProductSearchFromKeyword_CapsResults(t *testing.T) {
 	withUPCItemDBServer(t, func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(upcitemdbSearchItemsJSON(15)))
 	})
+	// The cap is reached by the first provider, so the chain must
+	// short-circuit without spending Open*Facts requests.
+	withOpenFactsSearchServer(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Error("Open*Facts must not be called once the result cap is reached")
+	})
 	ctrl := testKeywordSearchController()
 
 	rec := httptest.NewRecorder()
@@ -428,6 +474,9 @@ func TestHandleProductSearchFromKeyword_EmptyKeyword400(t *testing.T) {
 	// Provider must never be called; a hit would fail the test via a bogus
 	// non-JSON body making the handler 502 instead of 400.
 	withUPCItemDBServer(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Error("provider must not be called for an empty keyword")
+	})
+	withOpenFactsSearchServer(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Error("provider must not be called for an empty keyword")
 	})
 	ctrl := testKeywordSearchController()
@@ -448,10 +497,9 @@ func TestHandleProductSearchFromKeyword_EmptyKeyword400(t *testing.T) {
 	}
 }
 
-func TestHandleProductSearchFromKeyword_ProviderError502(t *testing.T) {
-	withUPCItemDBServer(t, func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	})
+func TestHandleProductSearchFromKeyword_AllProvidersFailPlain502(t *testing.T) {
+	withUPCItemDBServer(t, respondHTTPStatus(http.StatusInternalServerError))
+	withOpenFactsSearchServer(t, respondHTTPStatus(http.StatusInternalServerError))
 	ctrl := testKeywordSearchController()
 
 	rec := httptest.NewRecorder()
@@ -463,10 +511,11 @@ func TestHandleProductSearchFromKeyword_ProviderError502(t *testing.T) {
 	assert.Equal(t, http.StatusBadGateway, reqErr.Status, "provider failure must be distinguishable from empty results")
 }
 
-func TestHandleProductSearchFromKeyword_RateLimited429(t *testing.T) {
-	withUPCItemDBServer(t, func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusTooManyRequests)
-	})
+func TestHandleProductSearchFromKeyword_AllProvidersFailWith429RateLimited(t *testing.T) {
+	// upcitemdb is rate-limited; the Open*Facts fallbacks fail outright. With
+	// every provider down and at least one 429, the retryable variant wins.
+	withUPCItemDBServer(t, respondHTTPStatus(http.StatusTooManyRequests))
+	withOpenFactsSearchServer(t, respondHTTPStatus(http.StatusInternalServerError))
 	ctrl := testKeywordSearchController()
 
 	rec := httptest.NewRecorder()
@@ -485,6 +534,7 @@ func TestHandleProductSearchFromKeyword_OversizedBody502(t *testing.T) {
 		// the reader must reject before unmarshaling.
 		_, _ = w.Write([]byte(strings.Repeat("a", int(maxBarcodeAPIResponseBytes)+1)))
 	})
+	withOpenFactsSearchServer(t, respondHTTPStatus(http.StatusInternalServerError))
 	ctrl := testKeywordSearchController()
 
 	rec := httptest.NewRecorder()
@@ -499,6 +549,151 @@ func TestHandleProductSearchFromKeyword_OversizedBody502(t *testing.T) {
 func TestHandleProductSearchFromKeyword_NoResults204(t *testing.T) {
 	withUPCItemDBServer(t, func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"code":"OK","total":0,"offset":0,"items":[]}`))
+	})
+	withOpenFactsSearchServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"products":[]}`))
+	})
+	ctrl := testKeywordSearchController()
+
+	rec := httptest.NewRecorder()
+	err := ctrl.HandleProductSearchFromKeyword()(rec, keywordSearchRequest("nothing matches this"))
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusNoContent, rec.Code)
+}
+
+func TestHandleProductSearchFromKeyword_FallsThroughToOpenFactsOn429(t *testing.T) {
+	// upcitemdb's scarce quota is exhausted (429), but the free Open*Facts
+	// fallbacks work — the search must succeed instead of surfacing the rate
+	// limit, and the Open*Facts request must carry the mandatory custom
+	// User-Agent and the small-response fields parameter.
+	withUPCItemDBServer(t, respondHTTPStatus(http.StatusTooManyRequests))
+
+	var gotPath, gotTerms, gotFields, gotUserAgent string
+	withOpenFactsSearchServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotTerms = r.URL.Query().Get("search_terms")
+		gotFields = r.URL.Query().Get("fields")
+		gotUserAgent = r.Header.Get("User-Agent")
+		_, _ = w.Write([]byte(`{"products":[{
+			"product_name": "Dish Soap",
+			"brands": "CleanCo",
+			"generic_name": "Washing-up liquid",
+			"categories": "Cleaning",
+			"quantity": "500 ml",
+			"image_front_url": "http://images.openfoodfacts.org/images/products/123/front_en.4.400.jpg"
+		}]}`))
+	})
+	ctrl := testKeywordSearchController()
+
+	rec := httptest.NewRecorder()
+	err := ctrl.HandleProductSearchFromKeyword()(rec, keywordSearchRequest("dish soap"))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	assert.Equal(t, "/cgi/search.pl", gotPath)
+	assert.Equal(t, "dish soap", gotTerms)
+	assert.Equal(t, "product_name,brands,image_front_url,categories,generic_name,quantity", gotFields)
+	assert.Contains(t, gotUserAgent, "Homebox/1.0")
+
+	var products []repo.BarcodeProduct
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &products))
+	// All three Open*Facts sources answer identically; cross-provider dedupe
+	// by name+brand must collapse them to a single result attributed to the
+	// first source in the keyword chain (Open Products Facts).
+	require.Len(t, products, 1)
+
+	p := products[0]
+	assert.Equal(t, "openproductsfacts.org", p.SearchEngineName)
+	assert.Empty(t, p.Barcode, "keyword search has no scanned barcode")
+	assert.Equal(t, "Dish Soap", p.Item.Name)
+	assert.Equal(t, "CleanCo", p.Manufacturer)
+	assert.Equal(t, "Washing-up liquid | Cleaning | 500 ml", p.Item.Description)
+	assert.Equal(t, "https://images.openfoodfacts.org/images/products/123/front_en.4.400.jpg", p.ImageURL,
+		"shared mapper must normalize http image URLs to https")
+}
+
+func TestHandleProductSearchFromKeyword_OpenFactsAloneOnPlainUPCFailure(t *testing.T) {
+	withUPCItemDBServer(t, respondHTTPStatus(http.StatusInternalServerError))
+	withOpenFactsSearchServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(openFactsSearchProductsJSON(2)))
+	})
+	ctrl := testKeywordSearchController()
+
+	rec := httptest.NewRecorder()
+	err := ctrl.HandleProductSearchFromKeyword()(rec, keywordSearchRequest("dish soap"))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var products []repo.BarcodeProduct
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &products))
+	require.Len(t, products, 2)
+	assert.Equal(t, "openproductsfacts.org", products[0].SearchEngineName)
+	assert.Equal(t, "OFF Product 0", products[0].Item.Name)
+}
+
+func TestHandleProductSearchFromKeyword_MixedProviderAggregationAndDedupe(t *testing.T) {
+	withUPCItemDBServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"code":"OK","total":2,"offset":0,"items":[
+			{"title":"Dish Soap","brand":"CleanCo","model":"DS-1","description":"Soap.","images":[]},
+			{"title":"Sponge","brand":"ScrubCo","model":"SP-2","description":"Sponge.","images":[]}
+		]}`))
+	})
+	withOpenFactsSearchServer(t, func(w http.ResponseWriter, r *http.Request) {
+		// First product duplicates a upcitemdb result (same name+brand,
+		// case-insensitive); the second is new.
+		_, _ = w.Write([]byte(`{"products":[
+			{"product_name": "dish soap", "brands": "cleanco"},
+			{"product_name": "Bottle Brush", "brands": "ScrubCo"}
+		]}`))
+	})
+	ctrl := testKeywordSearchController()
+
+	rec := httptest.NewRecorder()
+	err := ctrl.HandleProductSearchFromKeyword()(rec, keywordSearchRequest("kitchen cleaning"))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var products []repo.BarcodeProduct
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &products))
+	require.Len(t, products, 3, "duplicate name+brand across providers must be dropped")
+
+	// upcitemdb results come first (richer records), then the new Open*Facts
+	// result; the upcitemdb variant of the duplicate wins.
+	assert.Equal(t, "Dish Soap", products[0].Item.Name)
+	assert.Equal(t, "upcitemdb.com", products[0].SearchEngineName)
+	assert.Equal(t, "DS-1", products[0].ModelNumber)
+	assert.Equal(t, "Sponge", products[1].Item.Name)
+	assert.Equal(t, "Bottle Brush", products[2].Item.Name)
+	assert.Equal(t, "openproductsfacts.org", products[2].SearchEngineName)
+}
+
+func TestHandleProductSearchFromKeyword_CapAcrossAggregatedProviders(t *testing.T) {
+	withUPCItemDBServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(upcitemdbSearchItemsJSON(6)))
+	})
+	withOpenFactsSearchServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(openFactsSearchProductsJSON(8)))
+	})
+	ctrl := testKeywordSearchController()
+
+	rec := httptest.NewRecorder()
+	err := ctrl.HandleProductSearchFromKeyword()(rec, keywordSearchRequest("prolific keyword"))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var products []repo.BarcodeProduct
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &products))
+	assert.Len(t, products, maxKeywordSearchResults,
+		"cap must hold across results aggregated from multiple providers")
+}
+
+func TestHandleProductSearchFromKeyword_WorkingProviderEmptyDespite429Is204(t *testing.T) {
+	// upcitemdb is rate-limited but an Open*Facts provider answered (with no
+	// matches): the search itself worked, so this is "no results", not a
+	// rate-limit error.
+	withUPCItemDBServer(t, respondHTTPStatus(http.StatusTooManyRequests))
+	withOpenFactsSearchServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"products":[]}`))
 	})
 	ctrl := testKeywordSearchController()
 

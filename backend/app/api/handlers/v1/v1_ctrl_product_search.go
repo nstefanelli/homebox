@@ -165,11 +165,31 @@ type openFactsSource struct {
 	BaseURL string
 }
 
+var (
+	openFoodFactsSource     = openFactsSource{Name: "openfoodfacts.org", BaseURL: "https://world.openfoodfacts.org"}
+	openBeautyFactsSource   = openFactsSource{Name: "openbeautyfacts.org", BaseURL: "https://world.openbeautyfacts.org"}
+	openProductsFactsSource = openFactsSource{Name: "openproductsfacts.org", BaseURL: "https://world.openproductsfacts.org"}
+)
+
 var openFactsSources = []openFactsSource{
-	{Name: "openfoodfacts.org", BaseURL: "https://world.openfoodfacts.org"},
-	{Name: "openbeautyfacts.org", BaseURL: "https://world.openbeautyfacts.org"},
-	{Name: "openproductsfacts.org", BaseURL: "https://world.openproductsfacts.org"},
+	openFoodFactsSource,
+	openBeautyFactsSource,
+	openProductsFactsSource,
 }
+
+// keywordOpenFactsSources orders the Open*Facts family for keyword search:
+// Open Products Facts first (general goods are the best match for a home
+// inventory), then Food, then Beauty.
+var keywordOpenFactsSources = []openFactsSource{
+	openProductsFactsSource,
+	openFoodFactsSource,
+	openBeautyFactsSource,
+}
+
+// openFactsSearchBaseURLOverride, when non-empty, redirects Open*Facts keyword
+// searches (all sources) to a mock server. Tests only — mirrors the
+// upcitemdbBaseURL pattern above.
+var openFactsSearchBaseURLOverride string
 
 type BARCODESPIDER_COMResponse struct {
 	ItemResponse struct {
@@ -424,6 +444,16 @@ func buildOpenFactsBarcodeProduct(sourceName string, iEan string, product openFa
 	return p, true
 }
 
+// openFactsUserAgent builds the custom User-Agent the Open*Facts APIs require,
+// preferring the configured contact when one is set.
+func openFactsUserAgent(contact string) string {
+	safeContact := sanitizeHeader(strings.TrimSpace(contact))
+	if len(safeContact) > 0 {
+		return "Homebox/1.0 (contact: " + safeContact + ")"
+	}
+	return "Homebox/1.0 (https://github.com/sysadminsmedia/homebox)"
+}
+
 func lookupOpenFacts(contact string, source openFactsSource, iEan string) ([]repo.BarcodeProduct, error) {
 	client := &http.Client{Timeout: barcodeHTTPTimeoutSec * time.Second}
 	req, err := http.NewRequest(
@@ -431,12 +461,7 @@ func lookupOpenFacts(contact string, source openFactsSource, iEan string) ([]rep
 	if err != nil {
 		return nil, err
 	}
-	userAgent := "Homebox/1.0 (https://github.com/sysadminsmedia/homebox)"
-	safeContact := sanitizeHeader(strings.TrimSpace(contact))
-	if len(safeContact) > 0 {
-		userAgent = "Homebox/1.0 (contact: " + safeContact + ")"
-	}
-	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("User-Agent", openFactsUserAgent(contact))
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -475,6 +500,72 @@ func lookupOpenFacts(contact string, source openFactsSource, iEan string) ([]rep
 	}
 
 	return []repo.BarcodeProduct{p}, nil
+}
+
+// openFactsSearchResponse is the /cgi/search.pl payload. Its product elements
+// share the openFactsProduct shape, so the barcode mapper serves both paths.
+type openFactsSearchResponse struct {
+	Products []openFactsProduct `json:"products"`
+}
+
+// searchOpenFacts performs a keyword search against one Open*Facts source.
+// The fields parameter keeps responses small by requesting only what the
+// shared mapper consumes. Open*Facts allows ~10 search requests/min/IP, which
+// is plenty for interactive use; a 429 is marked errProviderRateLimited so the
+// keyword handler can tell "wait and retry" apart from an outage.
+func searchOpenFacts(contact string, source openFactsSource, keyword string) (products []repo.BarcodeProduct, err error) {
+	base := source.BaseURL
+	if openFactsSearchBaseURLOverride != "" {
+		base = openFactsSearchBaseURLOverride
+	}
+	searchURL := strings.TrimRight(base, "/") + "/cgi/search.pl?search_terms=" + url.QueryEscape(keyword) +
+		"&search_simple=1&action=process&json=1" +
+		"&fields=product_name,brands,image_front_url,categories,generic_name,quantity"
+
+	client := &http.Client{Timeout: barcodeHTTPTimeoutSec * time.Second}
+	req, err := http.NewRequest("GET", searchURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", openFactsUserAgent(contact))
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	defer func() {
+		err = errors.Join(err, resp.Body.Close())
+	}()
+
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return nil, fmt.Errorf("%w: %s API returned status code: %d", errProviderRateLimited, source.Name, resp.StatusCode)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s API returned status code: %d", source.Name, resp.StatusCode)
+	}
+
+	body, err := readBoundedHTTPBody(resp.Body, resp.ContentLength, maxBarcodeAPIResponseBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	var result openFactsSearchResponse
+	if err := json.Unmarshal(body, &result); err != nil {
+		log.Error().Msg("Can not unmarshal " + source.Name + " search JSON")
+		return nil, err
+	}
+
+	for _, product := range result.Products {
+		// Barcode is "" — keyword search has no scanned barcode.
+		p, ok := buildOpenFactsBarcodeProduct(source.Name, "", product)
+		if !ok {
+			continue
+		}
+		products = append(products, p)
+	}
+
+	return products, nil
 }
 
 func defaultImageResolver(ctx context.Context, host string) ([]net.IP, error) {
@@ -752,19 +843,44 @@ func attachProductImages(ctx context.Context, products []repo.BarcodeProduct) {
 	}
 }
 
-// keywordSearchProvider is one entry in the keyword lookup chain. Only
-// upcitemdb.com offers a comparable free keyword search today; additional
-// providers chain here the same way the barcode providers do in
-// HandleProductSearchFromBarcode (append another entry consuming conf).
+// keywordSearchProvider is one entry in the keyword lookup chain. Providers
+// are tried in order until the result cap is reached; a failing provider is
+// skipped, not fatal. upcitemdb.com goes first because its records are richer
+// (model numbers, descriptions) when its scarce trial quota holds; the
+// Open*Facts family is the free fallback so a upcitemdb 429 no longer sinks
+// the whole search.
 type keywordSearchProvider struct {
 	name   string
 	search func(keyword string) ([]repo.BarcodeProduct, error)
 }
 
-func keywordSearchProviders(_ config.BarcodeAPIConf) []keywordSearchProvider {
-	return []keywordSearchProvider{
+func keywordSearchProviders(conf config.BarcodeAPIConf) []keywordSearchProvider {
+	providers := []keywordSearchProvider{
 		{name: "upcitemdb.com", search: searchUPCItemDBByKeyword},
 	}
+	for _, source := range keywordOpenFactsSources {
+		providers = append(providers, keywordSearchProvider{
+			name: source.Name,
+			search: func(keyword string) ([]repo.BarcodeProduct, error) {
+				return searchOpenFacts(conf.OpenFoodFactsContact, source, keyword)
+			},
+		})
+	}
+	return providers
+}
+
+// keywordProductDedupeKey identifies a product for cross-provider
+// deduplication: barcode when present, otherwise normalized name+brand.
+// Products with no usable key ("" return) are never deduplicated.
+func keywordProductDedupeKey(p repo.BarcodeProduct) string {
+	if barcode := strings.TrimSpace(p.Barcode); barcode != "" {
+		return "barcode|" + barcode
+	}
+	name := strings.ToLower(strings.TrimSpace(p.Item.Name))
+	if name == "" {
+		return ""
+	}
+	return "name|" + name + "|" + strings.ToLower(strings.TrimSpace(p.Manufacturer))
 }
 
 // HandleProductSearchFromKeyword godoc
@@ -802,15 +918,27 @@ func (ctrl *V1Controller) HandleProductSearchFromKeyword() errchain.HandlerFunc 
 
 		var products []repo.BarcodeProduct
 		var providerErrs []error
+		attempted := 0
+		seen := make(map[string]bool)
 
 		for _, provider := range keywordSearchProviders(conf) {
+			attempted++
 			ps, err := provider.search(keyword)
 			if err != nil {
 				log.Error().Msg("Can not retrieve products from " + provider.name + ": " + err.Error())
 				providerErrs = append(providerErrs, err)
 				continue
 			}
-			products = append(products, ps...)
+
+			for _, p := range ps {
+				if key := keywordProductDedupeKey(p); key != "" {
+					if seen[key] {
+						continue
+					}
+					seen[key] = true
+				}
+				products = append(products, p)
+			}
 
 			if len(products) >= maxKeywordSearchResults {
 				products = products[:maxKeywordSearchResults]
@@ -818,12 +946,15 @@ func (ctrl *V1Controller) HandleProductSearchFromKeyword() errchain.HandlerFunc 
 			}
 		}
 
-		// Distinguishable failures: when every provider errored and nothing was
-		// found, the frontend must be able to tell "search is broken" (502)
-		// apart from "no matches" (204) — and rate limiting (429) apart from
-		// both, since waiting and retrying will fix it. Any rate-limited
-		// provider makes the whole search retryable, so 429 wins over 502.
-		if len(products) == 0 && len(providerErrs) > 0 {
+		// Distinguishable failures: only when EVERY attempted provider errored
+		// and nothing was found must the frontend be able to tell "search is
+		// broken" (502) apart from "no matches" (204) — and rate limiting
+		// (429) apart from both, since waiting and retrying will fix it. Any
+		// rate-limited provider makes the whole search retryable, so 429 wins
+		// over 502. A single working provider returning zero results means
+		// the search worked: that is a 204, not an error, even if another
+		// provider (e.g. quota-starved upcitemdb) failed along the way.
+		if len(products) == 0 && len(providerErrs) > 0 && len(providerErrs) == attempted {
 			for _, providerErr := range providerErrs {
 				if errors.Is(providerErr, errProviderRateLimited) {
 					return validate.NewRequestError(errors.New("keyword search provider rate limited"), http.StatusTooManyRequests)
