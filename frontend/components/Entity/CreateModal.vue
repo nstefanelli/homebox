@@ -39,19 +39,31 @@
             </Tooltip>
             <Tooltip>
               <TooltipTrigger>
-                <Button
-                  variant="outline"
-                  :disabled="loading"
-                  size="icon"
-                  :data-pos="aiPhotoEnabled ? undefined : 'end'"
-                  @click="openBarcodeDialog()"
-                >
+                <Button variant="outline" :disabled="loading" size="icon" @click="openBarcodeDialog()">
                   <MdiBarcode class="size-5" />
                 </Button>
               </TooltipTrigger>
               <TooltipContent>
                 <p>
                   {{ $t("components.entity.create_modal.product_tooltip_input_barcode") }}
+                </p>
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger>
+                <Button
+                  variant="outline"
+                  :disabled="loading"
+                  size="icon"
+                  :data-pos="aiPhotoEnabled ? undefined : 'end'"
+                  @click="openLookupDialog()"
+                >
+                  <MdiTextSearch class="size-5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>
+                  {{ $t("components.entity.create_modal.product_tooltip_lookup") }}
                 </p>
               </TooltipContent>
             </Tooltip>
@@ -350,6 +362,8 @@
       />
     </form>
   </BaseModal>
+
+  <ProductLookupDialog v-model:open="lookupOpen" :seed="form.name" @pick="onLookupPick" />
 </template>
 
 <script setup lang="ts">
@@ -372,6 +386,7 @@
   import { useLabelPrintQueue } from "~~/stores/labels";
   import MdiBarcode from "~icons/mdi/barcode";
   import MdiBarcodeScan from "~icons/mdi/barcode-scan";
+  import MdiTextSearch from "~icons/mdi/text-search";
   import MdiPackageVariant from "~icons/mdi/package-variant";
   import MdiPackageVariantClosed from "~icons/mdi/package-variant-closed";
   import MdiFileDocumentOutline from "~icons/mdi/file-document-outline";
@@ -405,6 +420,8 @@
   import { useEntityTypeStore } from "~~/stores/entityTypes";
   import { useIntegrationsStore } from "~~/stores/integrations";
   import EntitySelector from "~/components/Entity/Selector.vue";
+  import ProductLookupDialog from "~/components/Entity/ProductLookupDialog.vue";
+  import type { ProductLookupPick } from "~~/lib/enrich";
 
   const { t } = useI18n();
   const typeName = useEntityTypeName();
@@ -736,7 +753,11 @@
     form.manufacturer = product.manufacturer || product.item.manufacturer || "";
     form.modelNumber = product.modelNumber || product.item.modelNumber || "";
 
-    if (product.imageURL) {
+    // Both fields must be present: the backend returns imageURL with an EMPTY
+    // imageBase64 whenever its hardened fetch rejects the image (blocked host,
+    // oversized, non-image) — dataURLtoFile("") throws and would abort the
+    // prefill half-applied. Same gate as proposedFromProduct in lib/enrich.ts.
+    if (product.imageURL && product.imageBase64) {
       appendPhotos([
         {
           photoName: "product_view.jpg",
@@ -1372,5 +1393,18 @@
 
   function openBarcodeDialog() {
     openDialog(DialogID.ProductImport);
+  }
+
+  const lookupOpen = ref(false);
+
+  function openLookupDialog() {
+    lookupOpen.value = true;
+  }
+
+  function onLookupPick({ product, aiGuess }: ProductLookupPick) {
+    // Same prefill path the barcode/AI-photo flows use — including its
+    // template-clearing semantics and the product-photo attach.
+    applyProductPrefill(product);
+    aiPrefill.value = aiGuess;
   }
 </script>

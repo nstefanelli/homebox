@@ -223,6 +223,7 @@
                 "delete_photo": "Delete photo",
                 "parent_item": "Parent Item",
                 "product_tooltip_input_barcode": "Autofill with a manually provided barcode",
+                "product_tooltip_lookup": "Autofill by searching for a product by name",
                 "product_tooltip_scan_barcode": "Autofill with a barcode from 📷",
                 "product_tooltip_ai_photo": "Autofill from a photo using AI",
                 "ai_badge": "AI guess — please verify",
@@ -247,6 +248,17 @@
                     "undo_failed": "Couldn't undo that — try again."
                 },
                 "undo": "Undo"
+            },
+            "product_lookup": {
+                "title": "Product lookup",
+                "keyword_label": "Product name or keywords",
+                "search": "Search",
+                "no_results": "No products found for that search.",
+                "ask_ai": "Ask AI instead",
+                "ai_loading": "Asking AI…",
+                "error_provider": "Product search failed — the lookup provider couldn't be reached. Try again in a moment.",
+                "error_ai": "The AI lookup failed — try again or enter the details manually.",
+                "error_ai_unavailable": "AI isn't configured for this collection."
             }
         },
         "item": {
@@ -320,6 +332,21 @@
                     "selected_rows": "{selected} of {total} rows selected.",
                     "table_settings": "Table Settings",
                     "view_item": "View Item"
+                }
+            },
+            "enrich": {
+                "action": "Enrich from lookup",
+                "title": "Enrich “{name}”",
+                "nothing_to_apply": "The selected product has nothing new to apply to this item.",
+                "empty_value": "(empty)",
+                "photo_label": "Product photo",
+                "photo_primary": "Will be added as the primary photo",
+                "photo_additional": "Will be added alongside the existing photos",
+                "apply": "Apply selected",
+                "toast": {
+                    "applied": "Updated: {fields}",
+                    "update_failed": "Couldn't update the item.",
+                    "photo_failed": "Couldn't attach the product photo."
                 }
             }
         },
@@ -484,11 +511,11 @@
                 "badge_container": "Container",
                 "badge_is_container": "Movable Container",
                 "tooltip": {
-                "edit": "Edit",
-                "delete": "Delete"
+                    "edit": "Edit",
+                    "delete": "Delete"
                 },
                 "actions": {
-                "delete": "Delete"
+                    "delete": "Delete"
                 }
             },
             "toasts": {

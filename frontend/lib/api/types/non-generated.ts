@@ -1,4 +1,5 @@
 import type {
+  BarcodeProduct,
   EntityCreate,
   EntityTemplateCreate,
   EntityTemplateUpdate,
@@ -18,6 +19,17 @@ export enum AttachmentTypes {
 export type Result<T> = {
   item: T;
 };
+
+/**
+ * Response of POST /actions/identify-from-keyword (hand-authored until the
+ * swagger types are regenerated; mirrors the backend's
+ * IdentifyFromKeywordResponse). aiGuess is always true on success — the
+ * candidate is an unverified LLM guess and must be badged as such.
+ */
+export interface IdentifyFromKeywordResponse {
+  aiGuess: boolean;
+  product: BarcodeProduct;
+}
 
 export interface PaginationResult<T> {
   items: T[];

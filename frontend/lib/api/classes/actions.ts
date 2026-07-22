@@ -1,5 +1,6 @@
 import { BaseAPI, route } from "../base";
 import type { ActionAmountResult, AnalyzePhotoResponse, AnalyzeBulkResponse } from "../types/data-contracts";
+import type { IdentifyFromKeywordResponse } from "../types/non-generated";
 
 export class ActionsAPI extends BaseAPI {
   ensureAssetIDs() {
@@ -49,6 +50,19 @@ export class ActionsAPI extends BaseAPI {
     return this.http.post<FormData, AnalyzePhotoResponse>({
       url: route("/actions/analyze-photo"),
       data: formData,
+      signal,
+    });
+  }
+
+  /**
+   * AI keyword fallback for product lookup: returns ONE BarcodeProduct-shaped
+   * candidate flagged aiGuess. Gated exactly like analyze-photo — responds
+   * 503 when no AI provider is configured (and 502 on provider failure).
+   */
+  identifyFromKeyword(keyword: string, signal?: AbortSignal) {
+    return this.http.post<{ keyword: string }, IdentifyFromKeywordResponse>({
+      url: route("/actions/identify-from-keyword"),
+      body: { keyword },
       signal,
     });
   }

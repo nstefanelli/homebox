@@ -4,6 +4,10 @@
   import type { AnyDetail, Detail, Details } from "~~/components/global/DetailsSection/types";
   import { filterZeroValues } from "~~/components/global/DetailsSection/types";
   import type { ItemAttachment } from "~~/lib/api/types/data-contracts";
+  import ProductLookupDialog from "~/components/Entity/ProductLookupDialog.vue";
+  import EnrichMergeDialog from "~/components/Item/EnrichMergeDialog.vue";
+  import type { ProductLookupPick } from "~~/lib/enrich";
+  import MdiAutoFix from "~icons/mdi/auto-fix";
   import { resolveEntityIcon } from "~~/lib/icons";
   import MdiPackageVariant from "~icons/mdi/package-variant";
   import MdiPlus from "~icons/mdi/plus";
@@ -620,6 +624,23 @@
     navigateTo(`/template/${data.id}`);
   }
 
+  // "Enrich from lookup": keyword/AI product lookup seeded with the item's
+  // name, then a per-field merge dialog. Item-kind entities only — location
+  // and container kinds have nothing to gain from product lookups.
+  const canEnrich = computed(() => !!item.value && !item.value.entityType?.isLocation);
+  const enrichLookupOpen = ref(false);
+  const enrichMergeOpen = ref(false);
+  const enrichCandidate = ref<ProductLookupPick | null>(null);
+
+  function openEnrichLookup() {
+    enrichLookupOpen.value = true;
+  }
+
+  function onEnrichPick(candidate: ProductLookupPick) {
+    enrichCandidate.value = candidate;
+    enrichMergeOpen.value = true;
+  }
+
   async function createSubitem() {
     openDialog(DialogID.CreateEntity, {
       params: {
@@ -636,6 +657,15 @@
     <Title>{{ item.name }}</Title>
 
     <ItemImageDialog />
+    <ProductLookupDialog v-model:open="enrichLookupOpen" :seed="item.name" @pick="onEnrichPick" />
+    <EnrichMergeDialog
+      v-if="enrichCandidate"
+      v-model:open="enrichMergeOpen"
+      :item="item"
+      :product="enrichCandidate.product"
+      :ai-guess="enrichCandidate.aiGuess"
+      @applied="refresh"
+    />
     <Dialog :dialog-id="DialogID.DuplicateTemporarySettings">
       <DialogContent>
         <DialogHeader>
@@ -741,6 +771,10 @@
                   <DropdownMenuItem @click="saveAsTemplate">
                     <MdiContentSaveEdit class="mr-2 size-4" />
                     {{ $t("components.template.save_as_template") }}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem v-if="canEnrich" @click="openEnrichLookup">
+                    <MdiAutoFix class="mr-2 size-4" />
+                    {{ $t("components.item.enrich.action") }}
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem class="text-destructive focus:text-destructive" @click="deleteItem">
