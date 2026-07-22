@@ -128,7 +128,12 @@
           proposedFromProduct(props.product)
         );
       }
-    }
+    },
+    // The dialog can mount with `open` already true (first pick after a page
+    // load sets the candidate and opens in the same tick); without an
+    // immediate fire the plan is never computed and the empty state shows
+    // "nothing new" for a product with plenty to apply.
+    { immediate: true }
   );
 
   function onOpenChange(open: boolean) {
