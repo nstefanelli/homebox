@@ -96,3 +96,48 @@ func TestAnthropic_AnalyzeContents_Success(t *testing.T) {
 	schema := format["schema"].(map[string]any)
 	assert.Equal(t, "array", schema["type"])
 }
+
+func TestAnthropic_IdentifyKeyword_Success(t *testing.T) {
+	var gotBody map[string]any
+	p := anthropicServer(t, func(w http.ResponseWriter, r *http.Request) {
+		assert.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		resp, _ := json.Marshal(map[string]any{
+			jsonFieldContent: []map[string]any{{"type": "text", "text": goodReply}},
+		})
+		_, _ = w.Write(resp)
+	})
+
+	res, err := p.IdentifyKeyword(context.Background(), "dewalt drill")
+	require.NoError(t, err)
+	assert.Equal(t, "DeWalt 20V Drill", res.Name)
+
+	// keyword system prompt with the no-fabrication instruction
+	sys := gotBody["system"].(string)
+	assert.Contains(t, sys, "NEVER invent a model")
+
+	// text-only single content block — no image block on the keyword lane
+	msgs := gotBody["messages"].([]any)
+	content := msgs[0].(map[string]any)[jsonFieldContent].([]any)
+	require.Len(t, content, 1)
+	block := content[0].(map[string]any)
+	assert.Equal(t, "text", block["type"])
+	assert.Contains(t, block["text"], "dewalt drill")
+
+	// object-typed structured output schema sent
+	oc := gotBody["output_config"].(map[string]any)
+	format := oc["format"].(map[string]any)
+	schema := format["schema"].(map[string]any)
+	assert.Equal(t, "object", schema["type"])
+}
+
+func TestAnthropic_IdentifyKeyword_MalformedReplyErrors(t *testing.T) {
+	p := anthropicServer(t, func(w http.ResponseWriter, r *http.Request) {
+		resp, _ := json.Marshal(map[string]any{
+			jsonFieldContent: []map[string]any{{"type": "text", "text": "no json here"}},
+		})
+		_, _ = w.Write(resp)
+	})
+
+	_, err := p.IdentifyKeyword(context.Background(), "dewalt drill")
+	require.Error(t, err)
+}

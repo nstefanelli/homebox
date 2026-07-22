@@ -148,3 +148,56 @@ func TestOpenAICompatible_AnalyzeContents_RepairRetryRecovers(t *testing.T) {
 	assert.Equal(t, 2, calls)
 	assert.Len(t, res, 2)
 }
+
+func TestOpenAICompatible_IdentifyKeyword_Success(t *testing.T) {
+	var gotBody map[string]any
+	_, p := oaiServer(t, func(w http.ResponseWriter, r *http.Request) {
+		assert.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		_, _ = w.Write(oaiChatResponse(goodReply))
+	})
+
+	res, err := p.IdentifyKeyword(context.Background(), "dewalt drill")
+	require.NoError(t, err)
+	assert.Equal(t, "DeWalt 20V Drill", res.Name)
+	assert.Equal(t, "DCD771", res.ModelNumber)
+
+	// keyword prompt, structured output, and the no-fabrication instruction
+	assert.Equal(t, map[string]any{"type": "json_object"}, gotBody["response_format"])
+	msgs := gotBody["messages"].([]any)
+	sys := msgs[0].(map[string]any)[jsonFieldContent].(string)
+	assert.Contains(t, sys, "NEVER invent a model")
+	assert.Contains(t, sys, "leave that field empty")
+
+	// text-only user turn carrying the keyword — no image content block
+	user := msgs[1].(map[string]any)[jsonFieldContent].(string)
+	assert.Contains(t, user, "dewalt drill")
+}
+
+func TestOpenAICompatible_IdentifyKeyword_RepairRetryRecovers(t *testing.T) {
+	calls := 0
+	_, p := oaiServer(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			_, _ = w.Write(oaiChatResponse("It is probably a drill of some kind."))
+			return
+		}
+		_, _ = w.Write(oaiChatResponse(goodReply))
+	})
+
+	res, err := p.IdentifyKeyword(context.Background(), "dewalt drill")
+	require.NoError(t, err)
+	assert.Equal(t, 2, calls)
+	assert.Equal(t, "DeWalt 20V Drill", res.Name)
+}
+
+func TestOpenAICompatible_IdentifyKeyword_MalformedReplyErrors(t *testing.T) {
+	calls := 0
+	_, p := oaiServer(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_, _ = w.Write(oaiChatResponse("still not json"))
+	})
+
+	_, err := p.IdentifyKeyword(context.Background(), "dewalt drill")
+	require.Error(t, err)
+	assert.Equal(t, 2, calls)
+}

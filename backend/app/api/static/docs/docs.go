@@ -167,6 +167,45 @@ const docTemplate = `{
                 }
             }
         },
+        "/v1/actions/identify-from-keyword": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Asks the configured AI provider to identify the most likely product for a free-text keyword. The result is an unverified AI guess.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Actions"
+                ],
+                "summary": "Identify Product from Keyword",
+                "parameters": [
+                    {
+                        "description": "keyword to identify",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/v1.IdentifyFromKeywordRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/v1.IdentifyFromKeywordResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/v1/actions/set-primary-photos": {
             "post": {
                 "security": [
@@ -2381,6 +2420,42 @@ const docTemplate = `{
                         "description": "barcode to be searched",
                         "name": "data",
                         "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/repo.BarcodeProduct"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/products/search-from-keyword": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Items"
+                ],
+                "summary": "Search Products by Keyword",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "keyword to search products for",
+                        "name": "keyword",
+                        "in": "query",
+                        "required": true
                     }
                 ],
                 "responses": {
@@ -7124,6 +7199,27 @@ const docTemplate = `{
                     "type": "integer",
                     "maximum": 100,
                     "minimum": 1
+                }
+            }
+        },
+        "v1.IdentifyFromKeywordRequest": {
+            "type": "object",
+            "properties": {
+                "keyword": {
+                    "type": "string",
+                    "maxLength": 200
+                }
+            }
+        },
+        "v1.IdentifyFromKeywordResponse": {
+            "type": "object",
+            "properties": {
+                "aiGuess": {
+                    "description": "AIGuess is always true: the candidate is an unverified LLM guess, and\nthe frontend must badge it accordingly.",
+                    "type": "boolean"
+                },
+                "product": {
+                    "$ref": "#/definitions/repo.BarcodeProduct"
                 }
             }
         },

@@ -2456,6 +2456,22 @@ definitions:
     required:
     - uses
     type: object
+  v1.IdentifyFromKeywordRequest:
+    properties:
+      keyword:
+        maxLength: 200
+        type: string
+    type: object
+  v1.IdentifyFromKeywordResponse:
+    properties:
+      aiGuess:
+        description: |-
+          AIGuess is always true: the candidate is an unverified LLM guess, and
+          the frontend must badge it accordingly.
+        type: boolean
+      product:
+        $ref: '#/definitions/repo.BarcodeProduct'
+    type: object
   v1.LoginForm:
     properties:
       password:
@@ -2648,6 +2664,31 @@ paths:
       security:
       - Bearer: []
       summary: Ensures Import Refs
+      tags:
+      - Actions
+  /v1/actions/identify-from-keyword:
+    post:
+      consumes:
+      - application/json
+      description: Asks the configured AI provider to identify the most likely product
+        for a free-text keyword. The result is an unverified AI guess.
+      parameters:
+      - description: keyword to identify
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/v1.IdentifyFromKeywordRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/v1.IdentifyFromKeywordResponse'
+      security:
+      - Bearer: []
+      summary: Identify Product from Keyword
       tags:
       - Actions
   /v1/actions/set-primary-photos:
@@ -4027,6 +4068,28 @@ paths:
       security:
       - Bearer: []
       summary: Search EAN from Barcode
+      tags:
+      - Items
+  /v1/products/search-from-keyword:
+    get:
+      parameters:
+      - description: keyword to search products for
+        in: query
+        name: keyword
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/repo.BarcodeProduct'
+            type: array
+      security:
+      - Bearer: []
+      summary: Search Products by Keyword
       tags:
       - Items
   /v1/qrcode:

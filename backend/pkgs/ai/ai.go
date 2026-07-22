@@ -46,6 +46,10 @@ type Provider interface {
 	// AnalyzeContents identifies every distinct item visible in a photo of an
 	// open container/shelf. Empty slice = nothing identified (valid result).
 	AnalyzeContents(ctx context.Context, imageBytes []byte, mimeType string) ([]AnalyzeResult, error)
+	// IdentifyKeyword identifies the single most likely product a free-text
+	// keyword refers to (text-only turn; no image). Used as the AI fallback
+	// for the keyword product-lookup flow.
+	IdentifyKeyword(ctx context.Context, keyword string) (AnalyzeResult, error)
 }
 
 func NewProvider(conf config.AIConf) (Provider, error) {
@@ -78,6 +82,28 @@ Respond with ONLY a JSON object matching this shape, no other text:
 }`
 
 const userPrompt = `Identify this item.`
+
+const systemPromptKeyword = `You are an inventory cataloging assistant. The user will give you a short
+keyword or product name typed by hand. Identify the single most likely
+real-world product it refers to and return structured product fields.
+Only state what you are confident about: if you are not reasonably
+confident of the manufacturer or the model number, leave that field empty
+("") rather than fabricate a plausible-looking value. NEVER invent a model
+number or manufacturer.
+
+Respond with ONLY a JSON object matching this shape, no other text:
+{
+  "name": string,            // short human title, e.g. "DeWalt 20V Cordless Drill"
+  "description": string,     // 1-2 sentences describing the product
+  "manufacturer": string,    // "" unless confident - never invent one
+  "model_number": string,    // "" unless confident - never invent one
+  "category_hints": string[],// 0-3 short category guesses, e.g. ["power tool", "cordless drill"]
+  "confidence": number       // 0.0-1.0, your confidence in the identification overall
+}`
+
+func keywordUserPrompt(keyword string) string {
+	return "Identify this product: " + keyword
+}
 
 const maxBulkCandidates = 50
 

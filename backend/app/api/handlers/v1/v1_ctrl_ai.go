@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/hay-kot/httpkit/errchain"
@@ -15,10 +16,13 @@ import (
 	"github.com/sysadminsmedia/homebox/backend/internal/data/repo"
 	"github.com/sysadminsmedia/homebox/backend/internal/sys/config"
 	"github.com/sysadminsmedia/homebox/backend/internal/sys/validate"
+	"github.com/sysadminsmedia/homebox/backend/internal/web/adapters"
 	"github.com/sysadminsmedia/homebox/backend/pkgs/ai"
 )
 
 const aiSearchEngineName = "ai-vision"
+
+const aiKeywordSearchEngineName = "ai-keyword"
 
 type AnalyzePhotoResponse struct {
 	Lane          string                `json:"lane"`
@@ -92,21 +96,7 @@ func (ctrl *V1Controller) HandleAnalyzePhoto() errchain.HandlerFunc {
 // form, and returns the validated image bytes + mime type. timeoutSeconds is
 // the effective (group-over-env) AI config's TimeoutSeconds for this request.
 func (ctrl *V1Controller) readPhotoUpload(w http.ResponseWriter, r *http.Request, timeoutSeconds int) ([]byte, string, error) {
-	// The global http.Server write/read timeouts (default 10s, see
-	// internal/sys/config Web.WriteTimeout) are sized for ordinary API
-	// requests. A cold vision-model load on the configured AI provider
-	// can legitimately take 30-60s+ (see spec Q5), so routes using this
-	// helper need a deadline that covers the provider's own timeout plus
-	// margin for upload/JSON overhead — otherwise the server aborts the
-	// connection mid-request long before the provider ever times out.
-	deadline := time.Now().Add(time.Duration(timeoutSeconds+30) * time.Second)
-	rc := http.NewResponseController(w)
-	if err := rc.SetWriteDeadline(deadline); err != nil {
-		log.Warn().Err(err).Msg("failed to extend response deadline for analyze-photo")
-	}
-	if err := rc.SetReadDeadline(deadline); err != nil {
-		log.Warn().Err(err).Msg("failed to extend response deadline for analyze-photo")
-	}
+	extendAIRequestDeadline(w, timeoutSeconds)
 
 	r.Body = http.MaxBytesReader(w, r.Body, multipartRequestLimit(ctrl.maxUploadSize))
 	// #nosec G120 -- the complete body is bounded by MaxBytesReader
@@ -135,6 +125,26 @@ func (ctrl *V1Controller) readPhotoUpload(w http.ResponseWriter, r *http.Request
 		return nil, "", validate.NewRequestError(errors.New("file is not a supported image (jpeg/png/webp)"), http.StatusBadRequest)
 	}
 	return imageBytes, mimeType, nil
+}
+
+// extendAIRequestDeadline pushes the connection deadlines past the global
+// http.Server write/read timeouts (default 10s, see internal/sys/config
+// Web.WriteTimeout), which are sized for ordinary API requests. A cold
+// model load on the configured AI provider can legitimately take 30-60s+
+// (see spec Q5), so AI-backed routes need a deadline that covers the
+// provider's own timeout plus margin for upload/JSON overhead — otherwise
+// the server aborts the connection mid-request long before the provider
+// ever times out. timeoutSeconds is the effective AI config's
+// TimeoutSeconds for this request.
+func extendAIRequestDeadline(w http.ResponseWriter, timeoutSeconds int) {
+	deadline := time.Now().Add(time.Duration(timeoutSeconds+30) * time.Second)
+	rc := http.NewResponseController(w)
+	if err := rc.SetWriteDeadline(deadline); err != nil {
+		log.Warn().Err(err).Msg("failed to extend response deadline for AI request")
+	}
+	if err := rc.SetReadDeadline(deadline); err != nil {
+		log.Warn().Err(err).Msg("failed to extend response deadline for AI request")
+	}
 }
 
 type BulkItemCandidate struct {
@@ -194,6 +204,71 @@ func (ctrl *V1Controller) HandleAnalyzeBulk() errchain.HandlerFunc {
 			})
 		}
 		return server.JSON(w, http.StatusOK, AnalyzeBulkResponse{Lane: "vision-bulk", Candidates: candidates})
+	}
+}
+
+type IdentifyFromKeywordRequest struct {
+	Keyword string `json:"keyword" validate:"max=200"`
+}
+
+type IdentifyFromKeywordResponse struct {
+	// AIGuess is always true: the candidate is an unverified LLM guess, and
+	// the frontend must badge it accordingly.
+	AIGuess bool                `json:"aiGuess"`
+	Product repo.BarcodeProduct `json:"product"`
+}
+
+// HandleIdentifyFromKeyword godoc
+//
+//	@Summary		Identify Product from Keyword
+//	@Description	Asks the configured AI provider to identify the most likely product for a free-text keyword. The result is an unverified AI guess.
+//	@Tags			Actions
+//	@Accept			json
+//	@Produce		json
+//	@Param			payload	body		IdentifyFromKeywordRequest	true	"keyword to identify"
+//	@Success		200		{object}	IdentifyFromKeywordResponse
+//	@Router			/v1/actions/identify-from-keyword [Post]
+//	@Security		Bearer
+func (ctrl *V1Controller) HandleIdentifyFromKeyword() errchain.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) error {
+		provider, conf, err := ctrl.resolveAIProvider(r)
+		if err != nil {
+			return err
+		}
+
+		body, err := adapters.DecodeBody[IdentifyFromKeywordRequest](r)
+		if err != nil {
+			return err
+		}
+
+		keyword := strings.TrimSpace(body.Keyword)
+		if keyword == "" {
+			return validate.NewRequestError(errors.New("keyword is required"), http.StatusBadRequest)
+		}
+
+		extendAIRequestDeadline(w, conf.TimeoutSeconds)
+
+		res, err := provider.IdentifyKeyword(r.Context(), keyword)
+		if err != nil {
+			log.Err(err).Msg("ai keyword identify failed")
+			return validate.NewRequestError(errors.New("ai provider error"), http.StatusBadGateway)
+		}
+
+		return server.JSON(w, http.StatusOK, IdentifyFromKeywordResponse{
+			AIGuess: true,
+			Product: repo.BarcodeProduct{
+				SearchEngineName: aiKeywordSearchEngineName,
+				ModelNumber:      res.ModelNumber,
+				Manufacturer:     res.Manufacturer,
+				Item: repo.EntityCreate{
+					Name:         res.Name,
+					Description:  res.Description,
+					Manufacturer: res.Manufacturer,
+					ModelNumber:  res.ModelNumber,
+					Quantity:     1,
+				},
+			},
+		})
 	}
 }
 

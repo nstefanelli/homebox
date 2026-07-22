@@ -168,6 +168,7 @@ func (a *app) mountRoutes(r *chi.Mux, chain *errchain.ErrChain, repos *repo.AllR
 
 		r.Post("/actions/analyze-photo", chain.ToHandlerFunc(v1Ctrl.HandleAnalyzePhoto(), userMW...))
 		r.Post("/actions/analyze-photo-bulk", chain.ToHandlerFunc(v1Ctrl.HandleAnalyzeBulk(), userMW...))
+		r.Post("/actions/identify-from-keyword", chain.ToHandlerFunc(v1Ctrl.HandleIdentifyFromKeyword(), userMW...))
 
 		// Tags endpoints
 		r.Get("/tags", chain.ToHandlerFunc(v1Ctrl.HandleTagsGetAll(), userMW...))
@@ -242,6 +243,7 @@ func (a *app) mountRoutes(r *chi.Mux, chain *errchain.ErrChain, repos *repo.AllR
 		}
 
 		r.Get("/products/search-from-barcode", chain.ToHandlerFunc(v1Ctrl.HandleProductSearchFromBarcode(), userMW...))
+		r.Get("/products/search-from-keyword", chain.ToHandlerFunc(v1Ctrl.HandleProductSearchFromKeyword(), userMW...))
 
 		r.Get("/qrcode", chain.ToHandlerFunc(v1Ctrl.HandleGenerateQRCode(), assetMW...))
 		r.Get(

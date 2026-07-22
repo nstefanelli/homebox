@@ -109,6 +109,35 @@ func (p *openaiCompatibleProvider) AnalyzeContents(ctx context.Context, imageByt
 	return parseAnalyzeResults(reply)
 }
 
+func (p *openaiCompatibleProvider) IdentifyKeyword(ctx context.Context, keyword string) (AnalyzeResult, error) {
+	messages := []oaiMessage{
+		{Role: "system", Content: systemPromptKeyword},
+		{Role: "user", Content: keywordUserPrompt(keyword)},
+	}
+
+	reply, err := p.complete(ctx, messages, true)
+	if err != nil {
+		return AnalyzeResult{}, err
+	}
+
+	res, parseErr := parseAnalyzeResult(reply)
+	if parseErr == nil {
+		return res, nil
+	}
+
+	// One repair retry: feed the bad reply and the parse error back.
+	messages = append(messages,
+		oaiMessage{Role: "assistant", Content: reply},
+		oaiMessage{Role: "user", Content: fmt.Sprintf(
+			"Your previous response was not the required JSON object (%v). Respond again with ONLY the JSON object, no other text.", parseErr)},
+	)
+	reply, err = p.complete(ctx, messages, true)
+	if err != nil {
+		return AnalyzeResult{}, err
+	}
+	return parseAnalyzeResult(reply)
+}
+
 func (p *openaiCompatibleProvider) complete(ctx context.Context, messages []oaiMessage, jsonObjectFormat bool) (string, error) {
 	payload := map[string]any{
 		"model":    p.model,

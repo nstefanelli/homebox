@@ -3,12 +3,22 @@ package v1
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/sysadminsmedia/homebox/backend/internal/core/services"
+	"github.com/sysadminsmedia/homebox/backend/internal/data/repo"
+	"github.com/sysadminsmedia/homebox/backend/internal/sys/config"
+	"github.com/sysadminsmedia/homebox/backend/internal/sys/validate"
 )
 
 func TestUPCITEMDBResponseUnmarshalNumericListPrice(t *testing.T) {
@@ -308,4 +318,176 @@ func TestProductImageRedirectGuardBlocksDowngradeAndPrivateTarget(t *testing.T) 
 			t.Errorf("redirect should be blocked: %s", rawURL)
 		}
 	}
+}
+
+// --- keyword search handler ---
+
+// withUPCItemDBServer points the shared upcitemdb base URL at a mock server
+// for the duration of one test. Tests using it must not run in parallel.
+func withUPCItemDBServer(t *testing.T, handler http.HandlerFunc) {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	orig := upcitemdbBaseURL
+	upcitemdbBaseURL = srv.URL
+	t.Cleanup(func() {
+		upcitemdbBaseURL = orig
+		srv.Close()
+	})
+}
+
+// testKeywordSearchController builds a controller whose Integrations service
+// resolves an all-defaults barcode config (fakeIntegrationsStore returns no
+// stored group settings; env fallback is empty).
+func testKeywordSearchController() *V1Controller {
+	svc := &services.AllServices{
+		Integrations: services.NewIntegrationsService(
+			fakeIntegrationsStore{},
+			config.AIConf{},
+			config.BarcodeAPIConf{},
+		),
+	}
+	return NewControllerV1(svc, nil, nil, &config.Config{})
+}
+
+func keywordSearchRequest(keyword string) *http.Request {
+	return httptest.NewRequest(http.MethodGet, "/v1/products/search-from-keyword?keyword="+url.QueryEscape(keyword), nil)
+}
+
+func upcitemdbSearchItemsJSON(n int) string {
+	items := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		items = append(items, fmt.Sprintf(`{
+			"title": "Product %d",
+			"brand": "Brand %d",
+			"model": "M-%d",
+			"description": "Description %d",
+			"images": []
+		}`, i, i, i, i))
+	}
+	return `{"code":"OK","total":` + fmt.Sprint(n) + `,"offset":0,"items":[` + strings.Join(items, ",") + `]}`
+}
+
+func TestHandleProductSearchFromKeyword_Success(t *testing.T) {
+	var gotPath, gotKeyword string
+	withUPCItemDBServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotKeyword = r.URL.Query().Get("s")
+		_, _ = w.Write([]byte(`{"code":"OK","total":2,"offset":0,"items":[
+			{"title":"DeWalt 20V Drill","brand":"DeWalt","model":"DCD771","description":"Cordless drill.","images":["https://127.0.0.1/img.jpg"]},
+			{"title":"DeWalt Impact Driver","brand":"DeWalt","model":"DCF885","description":"Impact driver.","images":[]}
+		]}`))
+	})
+	ctrl := testKeywordSearchController()
+
+	rec := httptest.NewRecorder()
+	err := ctrl.HandleProductSearchFromKeyword()(rec, keywordSearchRequest("dewalt drill"))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	assert.Equal(t, "/prod/trial/search", gotPath)
+	assert.Equal(t, "dewalt drill", gotKeyword)
+
+	var products []repo.BarcodeProduct
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &products))
+	require.Len(t, products, 2)
+
+	p := products[0]
+	assert.Equal(t, "upcitemdb.com", p.SearchEngineName)
+	assert.Empty(t, p.Barcode, "keyword search has no scanned barcode")
+	assert.Equal(t, "DeWalt 20V Drill", p.Item.Name)
+	assert.Equal(t, "Cordless drill.", p.Item.Description)
+	assert.Equal(t, "DeWalt", p.Manufacturer)
+	assert.Equal(t, "DCD771", p.ModelNumber)
+	assert.Equal(t, "https://127.0.0.1/img.jpg", p.ImageURL)
+	// The hardened image fetcher must have refused the loopback destination,
+	// proving keyword results flow through the same guarded path as barcode
+	// results rather than a naive fetch.
+	assert.Empty(t, p.ImageBase64)
+
+	assert.Equal(t, "DCF885", products[1].ModelNumber)
+	assert.Empty(t, products[1].ImageURL)
+}
+
+func TestHandleProductSearchFromKeyword_CapsResults(t *testing.T) {
+	withUPCItemDBServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(upcitemdbSearchItemsJSON(15)))
+	})
+	ctrl := testKeywordSearchController()
+
+	rec := httptest.NewRecorder()
+	err := ctrl.HandleProductSearchFromKeyword()(rec, keywordSearchRequest("prolific keyword"))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var products []repo.BarcodeProduct
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &products))
+	assert.Len(t, products, maxKeywordSearchResults)
+}
+
+func TestHandleProductSearchFromKeyword_EmptyKeyword400(t *testing.T) {
+	// Provider must never be called; a hit would fail the test via a bogus
+	// non-JSON body making the handler 502 instead of 400.
+	withUPCItemDBServer(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Error("provider must not be called for an empty keyword")
+	})
+	ctrl := testKeywordSearchController()
+
+	for name, target := range map[string]string{
+		"missing":    "/v1/products/search-from-keyword",
+		"whitespace": "/v1/products/search-from-keyword?keyword=%20%20",
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			err := ctrl.HandleProductSearchFromKeyword()(rec, httptest.NewRequest(http.MethodGet, target, nil))
+			require.Error(t, err)
+
+			var reqErr *validate.RequestError
+			require.ErrorAs(t, err, &reqErr)
+			assert.Equal(t, http.StatusBadRequest, reqErr.Status)
+		})
+	}
+}
+
+func TestHandleProductSearchFromKeyword_ProviderError502(t *testing.T) {
+	withUPCItemDBServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	ctrl := testKeywordSearchController()
+
+	rec := httptest.NewRecorder()
+	err := ctrl.HandleProductSearchFromKeyword()(rec, keywordSearchRequest("dewalt drill"))
+	require.Error(t, err)
+
+	var reqErr *validate.RequestError
+	require.ErrorAs(t, err, &reqErr)
+	assert.Equal(t, http.StatusBadGateway, reqErr.Status, "provider failure must be distinguishable from empty results")
+}
+
+func TestHandleProductSearchFromKeyword_OversizedBody502(t *testing.T) {
+	withUPCItemDBServer(t, func(w http.ResponseWriter, r *http.Request) {
+		// One byte past the bounded-body limit; content is irrelevant because
+		// the reader must reject before unmarshaling.
+		_, _ = w.Write([]byte(strings.Repeat("a", int(maxBarcodeAPIResponseBytes)+1)))
+	})
+	ctrl := testKeywordSearchController()
+
+	rec := httptest.NewRecorder()
+	err := ctrl.HandleProductSearchFromKeyword()(rec, keywordSearchRequest("dewalt drill"))
+	require.Error(t, err)
+
+	var reqErr *validate.RequestError
+	require.ErrorAs(t, err, &reqErr)
+	assert.Equal(t, http.StatusBadGateway, reqErr.Status)
+}
+
+func TestHandleProductSearchFromKeyword_NoResults204(t *testing.T) {
+	withUPCItemDBServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"code":"OK","total":0,"offset":0,"items":[]}`))
+	})
+	ctrl := testKeywordSearchController()
+
+	rec := httptest.NewRecorder()
+	err := ctrl.HandleProductSearchFromKeyword()(rec, keywordSearchRequest("nothing matches this"))
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusNoContent, rec.Code)
 }

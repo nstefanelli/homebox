@@ -19,6 +19,8 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/sysadminsmedia/homebox/backend/internal/core/services"
 	"github.com/sysadminsmedia/homebox/backend/internal/data/repo"
+	"github.com/sysadminsmedia/homebox/backend/internal/sys/config"
+	"github.com/sysadminsmedia/homebox/backend/internal/sys/validate"
 	"github.com/sysadminsmedia/homebox/backend/internal/web/adapters"
 )
 
@@ -28,7 +30,12 @@ const (
 	maxBarcodeAPIResponseBytes  = int64(4 << 20)
 	maxProductImageBytes        = int64(8 << 20)
 	maxProductImageRedirectHops = 10
+	maxKeywordSearchResults     = 10
 )
+
+// upcitemdbBaseURL is a package variable (not a const) so handler tests can
+// point both the barcode lookup and the keyword search at a mock HTTP server.
+var upcitemdbBaseURL = "https://api.upcitemdb.com"
 
 type imageResolver func(context.Context, string) ([]net.IP, error)
 type imageDialer func(context.Context, string, string) (net.Conn, error)
@@ -193,11 +200,14 @@ type BARCODESPIDER_COMResponse struct {
 	} `json:"Stores"`
 }
 
-func lookupUPCItemDB(iEan string) ([]repo.BarcodeProduct, error) {
+// fetchUPCItemDB performs a GET against a upcitemdb.com endpoint with the
+// shared timeout and bounded-body hardening, and decodes the response. Both
+// the barcode lookup and the keyword search flow through here.
+func fetchUPCItemDB(rawURL string) (result UPCITEMDBResponse, err error) {
 	client := &http.Client{Timeout: barcodeHTTPTimeoutSec * time.Second}
-	resp, err := client.Get("https://api.upcitemdb.com/prod/trial/lookup?upc=" + url.QueryEscape(iEan))
+	resp, err := client.Get(rawURL)
 	if err != nil {
-		return nil, err
+		return UPCITEMDBResponse{}, err
 	}
 
 	defer func() {
@@ -205,26 +215,32 @@ func lookupUPCItemDB(iEan string) ([]repo.BarcodeProduct, error) {
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API returned status code: %d", resp.StatusCode)
+		return UPCITEMDBResponse{}, fmt.Errorf("API returned status code: %d", resp.StatusCode)
 	}
 
 	body, err := readBoundedHTTPBody(resp.Body, resp.ContentLength, maxBarcodeAPIResponseBytes)
 	if err != nil {
-		return nil, err
+		return UPCITEMDBResponse{}, err
 	}
 
-	var result UPCITEMDBResponse
 	if err := json.Unmarshal(body, &result); err != nil {
 		log.Error().Msg("Can not unmarshal JSON from upcitemdb.com")
-		return nil, err
+		return UPCITEMDBResponse{}, err
 	}
 
+	return result, nil
+}
+
+// mapUPCItemDBItems converts a upcitemdb.com items[] payload into the shared
+// BarcodeProduct shape. barcode is "" for keyword searches, where no barcode
+// was scanned.
+func mapUPCItemDBItems(result UPCITEMDBResponse, barcode string) []repo.BarcodeProduct {
 	var res []repo.BarcodeProduct
 
 	for _, it := range result.Items {
 		var p repo.BarcodeProduct
 		p.SearchEngineName = "upcitemdb.com"
-		p.Barcode = iEan
+		p.Barcode = barcode
 
 		p.Item.Description = it.Description
 		p.Item.Name = it.Title
@@ -237,7 +253,23 @@ func lookupUPCItemDB(iEan string) ([]repo.BarcodeProduct, error) {
 		res = append(res, p)
 	}
 
-	return res, nil
+	return res
+}
+
+func lookupUPCItemDB(iEan string) ([]repo.BarcodeProduct, error) {
+	result, err := fetchUPCItemDB(upcitemdbBaseURL + "/prod/trial/lookup?upc=" + url.QueryEscape(iEan))
+	if err != nil {
+		return nil, err
+	}
+	return mapUPCItemDBItems(result, iEan), nil
+}
+
+func searchUPCItemDBByKeyword(keyword string) ([]repo.BarcodeProduct, error) {
+	result, err := fetchUPCItemDB(upcitemdbBaseURL + "/prod/trial/search?s=" + url.QueryEscape(keyword))
+	if err != nil {
+		return nil, err
+	}
+	return mapUPCItemDBItems(result, ""), nil
 }
 
 func lookupBarcodespider(tokenAPI string, iEan string) ([]repo.BarcodeProduct, error) {
@@ -679,21 +711,111 @@ func (ctrl *V1Controller) HandleProductSearchFromBarcode() errchain.HandlerFunc 
 			products = append(products, ps3...)
 		}
 
-		// Retrieve images if possible
-		for i := range products {
-			p := &products[i]
+		attachProductImages(r.Context(), products)
 
-			if len(p.ImageURL) == 0 {
-				continue
-			}
-
-			base64Img, err := fetchImageBase64(r.Context(), p.ImageURL)
-			if err != nil {
-				log.Warn().Str("image_url", redactExternalURLForTrace(p.ImageURL)).Err(err).Msg("cannot fetch product image")
-				continue
-			}
-			p.ImageBase64 = base64Img
+		if len(products) != 0 {
+			return server.JSON(w, http.StatusOK, products)
 		}
+
+		return server.JSON(w, http.StatusNoContent, nil)
+	}
+}
+
+// attachProductImages resolves each product's ImageURL through the hardened
+// image fetcher (public-HTTPS-only, size cap, redirect guard) and stores the
+// result as a base64 data URI. Failures are logged and skipped so a bad image
+// never sinks the whole result set.
+func attachProductImages(ctx context.Context, products []repo.BarcodeProduct) {
+	for i := range products {
+		p := &products[i]
+
+		if len(p.ImageURL) == 0 {
+			continue
+		}
+
+		base64Img, err := fetchImageBase64(ctx, p.ImageURL)
+		if err != nil {
+			log.Warn().Str("image_url", redactExternalURLForTrace(p.ImageURL)).Err(err).Msg("cannot fetch product image")
+			continue
+		}
+		p.ImageBase64 = base64Img
+	}
+}
+
+// keywordSearchProvider is one entry in the keyword lookup chain. Only
+// upcitemdb.com offers a comparable free keyword search today; additional
+// providers chain here the same way the barcode providers do in
+// HandleProductSearchFromBarcode (append another entry consuming conf).
+type keywordSearchProvider struct {
+	name   string
+	search func(keyword string) ([]repo.BarcodeProduct, error)
+}
+
+func keywordSearchProviders(_ config.BarcodeAPIConf) []keywordSearchProvider {
+	return []keywordSearchProvider{
+		{name: "upcitemdb.com", search: searchUPCItemDBByKeyword},
+	}
+}
+
+// HandleProductSearchFromKeyword godoc
+//
+//	@Summary	Search Products by Keyword
+//	@Tags		Items
+//	@Produce	json
+//	@Param		keyword	query		string	true	"keyword to search products for"
+//	@Success	200		{object}	[]repo.BarcodeProduct
+//	@Router		/v1/products/search-from-keyword [GET]
+//	@Security	Bearer
+func (ctrl *V1Controller) HandleProductSearchFromKeyword() errchain.HandlerFunc {
+	type query struct {
+		Keyword string `schema:"keyword" validate:"max=200"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) error {
+		q, err := adapters.DecodeQuery[query](r)
+		if err != nil {
+			return err
+		}
+
+		keyword := strings.TrimSpace(q.Keyword)
+		if keyword == "" {
+			return validate.NewRequestError(errors.New("keyword is required"), http.StatusBadRequest)
+		}
+
+		ctx := services.NewContext(r.Context())
+		conf, err := ctrl.svc.Integrations.EffectiveBarcode(ctx, ctx.GID)
+		if err != nil {
+			return err
+		}
+
+		log.Info().Msg("Processing keyword product search")
+
+		var products []repo.BarcodeProduct
+		var providerErrs []error
+
+		for _, provider := range keywordSearchProviders(conf) {
+			ps, err := provider.search(keyword)
+			if err != nil {
+				log.Error().Msg("Can not retrieve products from " + provider.name + ": " + err.Error())
+				providerErrs = append(providerErrs, err)
+				continue
+			}
+			products = append(products, ps...)
+
+			if len(products) >= maxKeywordSearchResults {
+				products = products[:maxKeywordSearchResults]
+				break
+			}
+		}
+
+		// Distinguishable failure: when every provider errored and nothing was
+		// found, the frontend must be able to tell "search is broken" (502)
+		// apart from "no matches" (204).
+		if len(products) == 0 && len(providerErrs) > 0 {
+			return validate.NewRequestError(errors.New("keyword search provider error"), http.StatusBadGateway)
+		}
+
+		attachProductImages(r.Context(), products)
 
 		if len(products) != 0 {
 			return server.JSON(w, http.StatusOK, products)

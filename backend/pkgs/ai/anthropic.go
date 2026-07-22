@@ -88,21 +88,37 @@ func (p *anthropicProvider) AnalyzeContents(ctx context.Context, imageBytes []by
 	return parseAnalyzeResults(text)
 }
 
+func (p *anthropicProvider) IdentifyKeyword(ctx context.Context, keyword string) (AnalyzeResult, error) {
+	text, err := p.send(ctx, systemPromptKeyword, []map[string]any{
+		{"type": "text", "text": keywordUserPrompt(keyword)},
+	}, analyzeResultSchema)
+	if err != nil {
+		return AnalyzeResult{}, err
+	}
+	return parseAnalyzeResult(text)
+}
+
 // message sends one image+text turn and returns the first text block.
 func (p *anthropicProvider) message(ctx context.Context, imageBytes []byte, mimeType, system, user string, schema map[string]any) (string, error) {
+	return p.send(ctx, system, []map[string]any{
+		{"type": "image", "source": map[string]string{
+			"type": "base64", "media_type": mimeType,
+			"data": base64.StdEncoding.EncodeToString(imageBytes),
+		}},
+		{"type": "text", "text": user},
+	}, schema)
+}
+
+// send sends one user turn with the given content blocks and returns the
+// first text block of the reply.
+func (p *anthropicProvider) send(ctx context.Context, system string, content []map[string]any, schema map[string]any) (string, error) {
 	body, err := json.Marshal(map[string]any{
 		"model":      p.model,
 		"max_tokens": 1024,
 		"system":     system,
 		"messages": []map[string]any{{
-			"role": "user",
-			jsonFieldContent: []map[string]any{
-				{"type": "image", "source": map[string]string{
-					"type": "base64", "media_type": mimeType,
-					"data": base64.StdEncoding.EncodeToString(imageBytes),
-				}},
-				{"type": "text", "text": user},
-			},
+			"role":           "user",
+			jsonFieldContent: content,
 		}},
 		"output_config": map[string]any{
 			"format": map[string]any{"type": "json_schema", "schema": schema},
