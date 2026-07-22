@@ -135,7 +135,7 @@
   const aiLoading = ref(false);
   const results = ref<BarcodeProduct[] | null>(null);
   const aiCandidate = ref<ProductLookupPick | null>(null);
-  const errorKind = ref<"provider" | "ai" | "ai_unavailable" | null>(null);
+  const errorKind = ref<"provider" | "rate_limited" | "ai" | "ai_unavailable" | null>(null);
 
   let abort: AbortController | null = null;
   let requestSequence = 0;
@@ -164,13 +164,15 @@
       aiConfigured.value &&
       !aiCandidate.value &&
       !aiLoading.value &&
-      (results.value !== null || errorKind.value === "provider")
+      (results.value !== null || errorKind.value === "provider" || errorKind.value === "rate_limited")
   );
 
   const errorMessage = computed(() => {
     switch (errorKind.value) {
       case "provider":
         return t("components.entity.product_lookup.error_provider");
+      case "rate_limited":
+        return t("components.entity.product_lookup.error_rate_limited");
       case "ai_unavailable":
         return t("components.entity.product_lookup.error_ai_unavailable");
       case "ai":
@@ -234,6 +236,12 @@
     try {
       const result = await api.products.searchFromKeyword(kw, controller.signal);
       if (controller.signal.aborted || sequence !== requestSequence) {
+        return;
+      }
+      if (result.status === 429) {
+        // The provider's burst limit (upcitemdb's trial tier trips after
+        // ~8 requests) — retryable after a wait, unlike a provider outage.
+        errorKind.value = "rate_limited";
         return;
       }
       if (result.error) {

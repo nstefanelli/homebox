@@ -463,6 +463,22 @@ func TestHandleProductSearchFromKeyword_ProviderError502(t *testing.T) {
 	assert.Equal(t, http.StatusBadGateway, reqErr.Status, "provider failure must be distinguishable from empty results")
 }
 
+func TestHandleProductSearchFromKeyword_RateLimited429(t *testing.T) {
+	withUPCItemDBServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	})
+	ctrl := testKeywordSearchController()
+
+	rec := httptest.NewRecorder()
+	err := ctrl.HandleProductSearchFromKeyword()(rec, keywordSearchRequest("dewalt drill"))
+	require.Error(t, err)
+
+	var reqErr *validate.RequestError
+	require.ErrorAs(t, err, &reqErr)
+	assert.Equal(t, http.StatusTooManyRequests, reqErr.Status,
+		"provider rate limiting must be distinguishable from other provider failures")
+}
+
 func TestHandleProductSearchFromKeyword_OversizedBody502(t *testing.T) {
 	withUPCItemDBServer(t, func(w http.ResponseWriter, r *http.Request) {
 		// One byte past the bounded-body limit; content is irrelevant because

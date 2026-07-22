@@ -257,6 +257,7 @@
                 "ask_ai": "Ask AI instead",
                 "ai_loading": "Asking AI…",
                 "error_provider": "Product search failed — the lookup provider couldn't be reached. Try again in a moment.",
+                "error_rate_limited": "The product database is rate-limited right now — wait a minute and retry.",
                 "error_ai": "The AI lookup failed — try again or enter the details manually.",
                 "error_ai_unavailable": "AI isn't configured for this collection."
             }
@@ -338,6 +339,11 @@
                 "action": "Enrich from lookup",
                 "title": "Enrich “{name}”",
                 "nothing_to_apply": "The selected product has nothing new to apply to this item.",
+                "skip_reason": {
+                    "proposed_empty": "the product doesn't provide a value",
+                    "identical": "already matches this item",
+                    "photo_unavailable": "the photo couldn't be fetched this time — trying the lookup again may work"
+                },
                 "empty_value": "(empty)",
                 "photo_label": "Product photo",
                 "photo_primary": "Will be added as the primary photo",

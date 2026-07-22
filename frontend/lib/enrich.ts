@@ -34,6 +34,13 @@ export interface EnrichCurrent extends EnrichFields {
 export interface EnrichProposed extends EnrichFields {
   /** Whether the candidate carries a fetchable product image. */
   hasPhoto: boolean;
+  /**
+   * The candidate has an imageURL but no fetched payload (imageBase64): the
+   * server's hardened image fetch legitimately fails on flaky retailer CDNs
+   * and http:// URLs, so this distinguishes "no photo exists" from "a photo
+   * exists but couldn't be fetched this time".
+   */
+  photoUnavailable: boolean;
 }
 
 export type MergeRow =
@@ -70,35 +77,64 @@ export function proposedFromProduct(product: BarcodeProduct): EnrichProposed {
     manufacturer: product.manufacturer || product.item.manufacturer || "",
     modelNumber: product.modelNumber || product.item.modelNumber || "",
     hasPhoto: !!product.imageURL && !!product.imageBase64,
+    photoUnavailable: !!product.imageURL && !product.imageBase64,
   };
+}
+
+/** Why a field produced no merge row. */
+export type SkipReason =
+  /** The candidate proposes no value for this field (photo: no image at all). */
+  | "proposed_empty"
+  /** The proposed value already matches the item (after trim). */
+  | "identical"
+  /** An imageURL exists but the server couldn't fetch the payload this time. */
+  | "photo_unavailable";
+
+export interface SkippedField {
+  field: EnrichTextField | "photo";
+  reason: SkipReason;
+}
+
+export interface MergePlan {
+  rows: MergeRow[];
+  /**
+   * Fields that produced no row, with why — lets the dialog's empty state
+   * explain "nothing new to apply" per field instead of leaving the user
+   * guessing. Every field lands in exactly one of rows/skipped.
+   */
+  skipped: SkippedField[];
 }
 
 /**
  * Builds the per-field merge rows shown by the enrichment dialog.
  *
  * Defaults:
- * - text field with no proposed value          -> row omitted
- * - text field where proposed equals current   -> row omitted (nothing to change)
+ * - text field with no proposed value          -> skipped (proposed_empty)
+ * - text field where proposed equals current   -> skipped (identical)
  * - empty current, proposed present            -> row present, pre-checked
  * - non-empty current, differing proposed      -> row present, unchecked (overwrite is opt-in)
  * - photo proposed, item has none              -> row present, pre-checked, attach as primary
  * - photo proposed, item already has photos    -> row present, unchecked, attach as non-primary
- * - no photo proposed                          -> photo row omitted
+ * - imageURL set but fetch failed              -> skipped (photo_unavailable)
+ * - no image on the candidate at all           -> skipped (proposed_empty)
  *
- * Values are compared and returned trimmed; row order is name, manufacturer,
- * modelNumber, description, photo.
+ * Values are compared and returned trimmed; row and skip order is name,
+ * manufacturer, modelNumber, description, photo.
  */
-export function computeMergePlan(current: EnrichCurrent, proposed: EnrichProposed): MergeRow[] {
+export function computeMergePlan(current: EnrichCurrent, proposed: EnrichProposed): MergePlan {
   const rows: MergeRow[] = [];
+  const skipped: SkippedField[] = [];
 
   for (const field of ENRICH_TEXT_FIELDS) {
     const proposedValue = (proposed[field] ?? "").trim();
     if (!proposedValue) {
+      skipped.push({ field, reason: "proposed_empty" });
       continue;
     }
 
     const currentValue = (current[field] ?? "").trim();
     if (proposedValue === currentValue) {
+      skipped.push({ field, reason: "identical" });
       continue;
     }
 
@@ -119,7 +155,9 @@ export function computeMergePlan(current: EnrichCurrent, proposed: EnrichPropose
       checked: !current.hasPhoto,
       primary: !current.hasPhoto,
     });
+  } else {
+    skipped.push({ field: "photo", reason: proposed.photoUnavailable ? "photo_unavailable" : "proposed_empty" });
   }
 
-  return rows;
+  return { rows, skipped };
 }

@@ -9,8 +9,9 @@ export class ProductAPI extends BaseAPI {
   /**
    * Keyword product search (provider-backed, capped server-side). Returns
    * 200 + BarcodeProduct[] on hits, 204 (empty body) when nothing matched,
-   * and an error status (502) when every provider failed — callers must
-   * treat 204 as "no results", not as a failure.
+   * 429 when the provider is rate-limiting (retryable after a wait), and
+   * 502 when every provider failed — callers must treat 204 as "no
+   * results", not as a failure.
    */
   searchFromKeyword(keyword: string, signal?: AbortSignal) {
     return this.http.get<BarcodeProduct[]>({ url: route(`/products/search-from-keyword`, { keyword }), signal });

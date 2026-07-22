@@ -37,6 +37,13 @@ const (
 // point both the barcode lookup and the keyword search at a mock HTTP server.
 var upcitemdbBaseURL = "https://api.upcitemdb.com"
 
+// errProviderRateLimited marks a provider 429 so the keyword handler can
+// surface "wait and retry" to the client instead of a generic provider
+// failure. upcitemdb's trial tier trips this after a small request burst
+// (~8 requests, even well spaced), so it is a routine condition, not an
+// outage.
+var errProviderRateLimited = errors.New("provider rate limited")
+
 type imageResolver func(context.Context, string) ([]net.IP, error)
 type imageDialer func(context.Context, string, string) (net.Conn, error)
 
@@ -214,6 +221,9 @@ func fetchUPCItemDB(rawURL string) (result UPCITEMDBResponse, err error) {
 		err = errors.Join(err, resp.Body.Close())
 	}()
 
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return UPCITEMDBResponse{}, fmt.Errorf("%w: API returned status code: %d", errProviderRateLimited, resp.StatusCode)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return UPCITEMDBResponse{}, fmt.Errorf("API returned status code: %d", resp.StatusCode)
 	}
@@ -808,10 +818,17 @@ func (ctrl *V1Controller) HandleProductSearchFromKeyword() errchain.HandlerFunc 
 			}
 		}
 
-		// Distinguishable failure: when every provider errored and nothing was
+		// Distinguishable failures: when every provider errored and nothing was
 		// found, the frontend must be able to tell "search is broken" (502)
-		// apart from "no matches" (204).
+		// apart from "no matches" (204) — and rate limiting (429) apart from
+		// both, since waiting and retrying will fix it. Any rate-limited
+		// provider makes the whole search retryable, so 429 wins over 502.
 		if len(products) == 0 && len(providerErrs) > 0 {
+			for _, providerErr := range providerErrs {
+				if errors.Is(providerErr, errProviderRateLimited) {
+					return validate.NewRequestError(errors.New("keyword search provider rate limited"), http.StatusTooManyRequests)
+				}
+			}
 			return validate.NewRequestError(errors.New("keyword search provider error"), http.StatusBadGateway)
 		}
 

@@ -12,9 +12,17 @@
         {{ $t("components.entity.create_modal.ai_badge") }}
       </Badge>
 
-      <p v-if="rows.length === 0" class="text-sm text-muted-foreground">
-        {{ $t("components.item.enrich.nothing_to_apply") }}
-      </p>
+      <div v-if="rows.length === 0" class="flex flex-col gap-2">
+        <p class="text-sm text-muted-foreground">
+          {{ $t("components.item.enrich.nothing_to_apply") }}
+        </p>
+        <ul class="flex flex-col gap-1">
+          <li v-for="skip in skipped" :key="skip.field" class="text-sm text-muted-foreground">
+            <span class="font-medium text-foreground">{{ fieldLabel(skip.field) }}</span>
+            — {{ skipReasonLabel(skip.reason) }}
+          </li>
+        </ul>
+      </div>
 
       <div v-else class="flex max-h-[55vh] flex-col gap-2 overflow-y-auto">
         <label v-for="row in rows" :key="row.field" class="flex cursor-pointer items-start gap-3 rounded-lg border p-3">
@@ -80,7 +88,13 @@
   import type { BarcodeProduct, EntityOut } from "~~/lib/api/types/data-contracts";
   import { AttachmentTypes } from "~~/lib/api/types/non-generated";
   import { dataURLtoFile } from "~/components/Form/photo-uploader";
-  import { computeMergePlan, proposedFromProduct, type MergeRow } from "~~/lib/enrich";
+  import {
+    computeMergePlan,
+    proposedFromProduct,
+    type MergeRow,
+    type SkipReason,
+    type SkippedField,
+  } from "~~/lib/enrich";
 
   /**
    * Per-field merge preview for "Enrich from lookup": one row per field
@@ -109,6 +123,7 @@
   const api = useUserApi();
 
   const rows = ref<MergeRow[]>([]);
+  const skipped = ref<SkippedField[]>([]);
   const applying = ref(false);
 
   const checkedRows = computed(() => rows.value.filter(r => r.checked));
@@ -117,7 +132,7 @@
     () => props.open,
     open => {
       if (open) {
-        rows.value = computeMergePlan(
+        const plan = computeMergePlan(
           {
             name: props.item.name ?? "",
             manufacturer: props.item.manufacturer ?? "",
@@ -127,6 +142,8 @@
           },
           proposedFromProduct(props.product)
         );
+        rows.value = plan.rows;
+        skipped.value = plan.skipped;
       }
     },
     // The dialog can mount with `open` already true (first pick after a page
@@ -155,6 +172,17 @@
         return t("items.description");
       case "photo":
         return t("components.item.enrich.photo_label");
+    }
+  }
+
+  function skipReasonLabel(reason: SkipReason): string {
+    switch (reason) {
+      case "proposed_empty":
+        return t("components.item.enrich.skip_reason.proposed_empty");
+      case "identical":
+        return t("components.item.enrich.skip_reason.identical");
+      case "photo_unavailable":
+        return t("components.item.enrich.skip_reason.photo_unavailable");
     }
   }
 
